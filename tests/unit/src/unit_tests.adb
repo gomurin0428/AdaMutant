@@ -102,6 +102,18 @@ procedure Unit_Tests is
               & "|LogicalOperator X and then Y and then Z->"
               & "((X and then Y) or else Z)",
               "short circuit chain is parenthesised");
+      Expect ("package P is procedure Q (X : Integer := 1; B : Boolean := "
+              & "not True); function F (S : String := """") return T; end P;",
+              "", "parameter defaults of completed subprograms are kept");
+      Expect ("package P is procedure Q (B : Boolean := True) is null; "
+              & "function F (X : Integer := 0) return Integer is (X); end P;",
+              "BooleanLiteral True->False|NumericLiteral 0->1",
+              "parameter defaults of self-completing profiles are mutated");
+      Expect ("package body P is procedure Q (X : Integer := 1) is begin "
+              & "Y := X + 2; end Q; end P;",
+              "StatementDeletion Y := X + 2;->null;|ArithmeticOperator +->-"
+              & "|NumericLiteral 2->3",
+              "body statements after a default are still mutated");
       Expect ("package P is B : Boolean := F (A or B, (C or D) or E); end P;",
               "LogicalOperator or->and"
               & "|LogicalOperator or->and"

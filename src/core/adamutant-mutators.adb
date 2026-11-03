@@ -189,9 +189,11 @@ package body AdaMutant.Mutators is
          In_Aspect  : array (1 .. N) of Boolean := [others => False];
          Seg_Skip   : array (1 .. N) of Boolean := [others => False];
          Seg_Pragma : array (1 .. N) of Boolean := [others => False];
+         In_Default : array (1 .. N) of Boolean := [others => False];
 
          function Skipped (K : Positive) return Boolean is
            (Seg_Skip (Seg_Start (K)) or else Seg_Pragma (Seg_Start (K))
+            or else In_Default (K)
             or else (not Options.Mutate_Contracts and then In_Aspect (K)));
 
          procedure Add
@@ -376,6 +378,76 @@ package body AdaMutant.Mutators is
                     or else (Is_Kw (K, "for") and then Has_Use)
                     or else Has_At;
                   Seg_Pragma (K) := Is_Kw (K, "pragma");
+               end;
+            end if;
+         end loop;
+
+         --  Pass 2b: default expressions of formal parameters.  A
+         --  subprogram declaration and its body must repeat the same
+         --  defaults (full conformance), so changing one side never
+         --  compiles.  Profiles that need no completion (is null, is
+         --  abstract, expression functions, generic formal defaults <>)
+         --  stay mutable.
+         for K in 1 .. N loop
+            if Is_Kw (K, "procedure") or else Is_Kw (K, "function")
+              or else Is_Kw (K, "entry")
+            then
+               declare
+                  J : Positive := K + 1;
+               begin
+                  while J < N
+                    and then (S (J).Kind in Identifier | String_Literal
+                              or else Is_Del (J, "."))
+                  loop
+                     J := J + 1;
+                  end loop;
+                  if J > K + 1 and then J < N and then Is_Del (J, "(") then
+                     declare
+                        D     : constant Natural := Depth (J);
+                        Close : Positive := J + 1;
+                        After : Positive;
+                     begin
+                        while Close < N
+                          and then not (Is_Del (Close, ")")
+                                        and then Depth (Close) = D + 1)
+                        loop
+                           Close := Close + 1;
+                        end loop;
+                        After := Close + 1;
+                        while After < N and then Depth (After) >= D
+                          and then not (Depth (After) = D
+                                        and then (Is_Kw (After, "is")
+                                                  or else Is_Del (After, ";")
+                                                  or else Is_Kw (After, "with")
+                                                  or else Is_Kw (After, "do")))
+                        loop
+                           After := After + 1;
+                        end loop;
+                        if not (Is_Kw (After, "is") and then After < N
+                                and then (Is_Kw (After + 1, "null")
+                                          or else Is_Kw (After + 1, "abstract")
+                                          or else Is_Del (After + 1, "(")
+                                          or else Is_Del (After + 1, "<>")))
+                        then
+                           declare
+                              Mark : Boolean := False;
+                           begin
+                              for I in J + 1 .. Close - 1 loop
+                                 if Depth (I) = D + 1 then
+                                    if Is_Del (I, ":=") then
+                                       Mark := True;
+                                    elsif Is_Del (I, ";") then
+                                       Mark := False;
+                                    end if;
+                                 end if;
+                                 if Mark then
+                                    In_Default (I) := True;
+                                 end if;
+                              end loop;
+                           end;
+                        end if;
+                     end;
+                  end if;
                end;
             end if;
          end loop;
