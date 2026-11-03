@@ -1,0 +1,20 @@
+name: CI
+
+# Manual only: run from the Actions tab.
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: alire-project/setup-alire@v4
+      - name: Install GNAT, GPRbuild and GNATprove
+        run: |
+          alr -n toolchain --select gnat_native gprbuild
+          alr -n get gnatprove
+          echo "$(dirname $(find ~/.local/share/alire -name gnat -path '*/bin/*' -type f | head -1))" >> $GITHUB_PATH
+          echo "$(dirname $(find ~/.local/share/alire -name gprbuild -path '*/bin/*' -type f | head -1))" >> $GITHUB_PATH
+          echo "$(find $PWD -maxdepth 3 -name bin -path '*gnatprove*' | head -1)" >> $GITHUB_PATH
+      - run: make test

@@ -1,0 +1,20 @@
+with "adamutant_core.gpr";
+
+project AdaMutant is
+
+   for Source_Dirs use ("src/cli");
+   for Object_Dir use "obj/cli";
+   for Exec_Dir use "bin";
+   for Main use ("adamutant_main.adb");
+
+   package Builder is
+      for Executable ("adamutant_main.adb") use "adamutant";
+   end Builder;
+
+   package Compiler renames AdaMutant_Core.Compiler;
+
+   package Binder is
+      for Default_Switches ("Ada") use ("-Es");
+   end Binder;
+
+end AdaMutant;

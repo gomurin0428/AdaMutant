@@ -1,0 +1,7 @@
+# No test suite: mutants are killed only when GNATprove can no longer prove
+# the contracts.
+mutate = ["src/**/*.adb"]
+build = "gprbuild -p -q -c -P counters.gpr"
+prove = "gnatprove -P counters.gpr --level=1 --report=fail --checks-as-errors=on -j1"
+concurrency = 2
+sandbox_exclude = [".git", "obj"]
