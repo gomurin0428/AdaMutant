@@ -79,7 +79,7 @@ break = 0
 | NumericLiteral | `0`→`1`, `1`→`0`, `n`→`n+1`, 実数 → `0.0` |
 | StringLiteral | `"abc"`→`""`, `""`→`"AdaMutant was here!"` |
 
-`with`/`use` 節、`pragma`、表現節（`for X'Size use ...`）、`digits`/`delta` は変異させません。サブプログラムの仮引数の既定値も、宣言と本体で一致していないとコンパイルできない（完全準拠）ため変異させません（`is null`、`is abstract`、式関数、`is <>` の既定値は変異させます）。アスペクト（`Pre`, `Post`, `Type_Invariant` など）は `mutate_contracts = true` のときだけ変異させます。
+`with`/`use` 節、`pragma`、表現節（`for X'Size use ...`）、`digits`/`delta` は変異させません。サブプログラムの仮引数の既定値も、宣言と本体で一致していないとコンパイルできない（完全準拠）ため変異させません（`is null`、`is abstract`、式関数、ジェネリック仮サブプログラムの既定値は変異させます）。アスペクト（`Pre`, `Post`, `Type_Invariant` など）は `mutate_contracts = true` のときだけ変異させます。
 
 ### コメントで無効化
 

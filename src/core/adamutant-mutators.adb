@@ -373,7 +373,11 @@ package body AdaMutant.Mutators is
                      J := J + 1;
                   end loop;
                   Seg_Skip (K) :=
-                    Is_Kw (K, "with") or else Is_Kw (K, "use")
+                    (Is_Kw (K, "with")
+                     and then not (Is_Kw (K + 1, "procedure")
+                                   or else Is_Kw (K + 1, "function")
+                                   or else Is_Kw (K + 1, "package")))
+                    or else Is_Kw (K, "use")
                     or else (Is_Kw (K, "limited") and then Is_Kw (K + 1, "with"))
                     or else (Is_Kw (K, "for") and then Has_Use)
                     or else Has_At;
@@ -386,11 +390,12 @@ package body AdaMutant.Mutators is
          --  subprogram declaration and its body must repeat the same
          --  defaults (full conformance), so changing one side never
          --  compiles.  Profiles that need no completion (is null, is
-         --  abstract, expression functions, generic formal defaults <>)
+         --  abstract, expression functions, generic formal subprograms)
          --  stay mutable.
          for K in 1 .. N loop
-            if Is_Kw (K, "procedure") or else Is_Kw (K, "function")
-              or else Is_Kw (K, "entry")
+            if (Is_Kw (K, "procedure") or else Is_Kw (K, "function")
+                or else Is_Kw (K, "entry"))
+              and then not Is_Kw (K - 1, "with")
             then
                declare
                   J : Positive := K + 1;
@@ -617,6 +622,7 @@ package body AdaMutant.Mutators is
                      if Seg_Start (K) = K and then Depth (K) = 0
                        and then not In_Aspect (K)
                        and then not Is_Del (K + 1, "'")
+                       and then not Is_Kw (K - 1, "is")
                      then
                         declare
                            J : Positive := K + 1;

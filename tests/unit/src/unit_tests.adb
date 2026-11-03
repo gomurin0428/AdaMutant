@@ -109,6 +109,10 @@ procedure Unit_Tests is
               & "function F (X : Integer := 0) return Integer is (X); end P;",
               "BooleanLiteral True->False|NumericLiteral 0->1",
               "parameter defaults of self-completing profiles are mutated");
+      Expect ("generic with procedure Q (X : Integer := 1) is R; "
+              & "package P is end P;",
+              "NumericLiteral 1->0",
+              "parameter defaults of generic formal subprograms are mutated");
       Expect ("package body P is procedure Q (X : Integer := 1) is begin "
               & "Y := X + 2; end Q; end P;",
               "StatementDeletion Y := X + 2;->null;|ArithmeticOperator +->-"
