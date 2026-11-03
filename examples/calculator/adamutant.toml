@@ -1,6 +1,6 @@
 mutate = ["src/**/*.adb", "src/**/*.ads"]
 build = "gprbuild -p -q -P calculator_tests.gpr"
-test = "bin/test_calculator"
+test = '"bin/test_calculator"'
 concurrency = 2
 sandbox_exclude = [".git", "obj", "bin"]
 
