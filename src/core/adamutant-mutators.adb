@@ -380,13 +380,13 @@ package body AdaMutant.Mutators is
             for K in 1 .. N loop
                Depth (K) := D;
                Seg_Start (K) := Start;
+               In_Aspect (K) := Aspect;
                if Is_Del (K, "(") or else Is_Del (K, "[") then
                   D := D + 1;
                elsif Is_Del (K, ")") or else Is_Del (K, "]") then
                   D := (if D > 0 then D - 1 else 0);
                elsif D = 0 then
                   if Aspect then
-                     In_Aspect (K) := True;
                      if Is_Del (K, ";") or else Is_Kw (K, "is") then
                         Aspect := False;
                         Start := K + 1;
