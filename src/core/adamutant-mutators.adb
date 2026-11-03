@@ -112,6 +112,8 @@ package body AdaMutant.Mutators is
             if S (K).Kind = Identifier and then Lower (Txt (K)) = "ghost"
               and then Depth (K) = 0
               and then (Is_Kw (K - 1, "with") or else Is_Del (K - 1, ","))
+              and then not (Is_Del (K + 1, "=>") and then K + 2 <= N
+                            and then Lower (Txt (K + 2)) = "false")
             then
                declare
                   W       : Natural := K - 1;
@@ -162,6 +164,17 @@ package body AdaMutant.Mutators is
                                                      | String_Literal
                         then
                            Names.Include (Lower (Txt (Name_At)));
+                           if Name_At = First then
+                              --  "A, B : T with Ghost" declares every name.
+                              declare
+                                 I : Positive := First + 2;
+                              begin
+                                 while I < K and then Is_Del (I - 1, ",") loop
+                                    Names.Include (Lower (Txt (I)));
+                                    I := I + 2;
+                                 end loop;
+                              end;
+                           end if;
                            Ranges.Append
                              (Byte_Range'(S (First).First, S (Last).Last));
                         end if;
@@ -700,15 +713,31 @@ package body AdaMutant.Mutators is
                                      or else Is_Kw (J + 1, "separate")
                                      or else Is_Kw (J + 1, "new"))
                      then
-                        while J < N
-                          and then not (Is_Kw (J, "end")
-                                        and then Lower (Txt (J + 1))
-                                                 = Lower (Txt (K + 1))
-                                        and then Is_Del (J + 2, ";"))
-                        loop
-                           J := J + 1;
-                        end loop;
-                        Mark (K, Natural'Min (J + 2, N));
+                        --  The body ends at the "end" of its own "begin";
+                        --  "end if", "end loop" and the like close other
+                        --  constructs.
+                        declare
+                           Level : Natural := 0;
+                        begin
+                           while J < N loop
+                              J := J + 1;
+                              if Is_Kw (J, "begin") or else Is_Kw (J, "do") then
+                                 Level := Level + 1;
+                              elsif Is_Kw (J, "end")
+                                and then not (Is_Kw (J + 1, "if")
+                                              or else Is_Kw (J + 1, "loop")
+                                              or else Is_Kw (J + 1, "case")
+                                              or else Is_Kw (J + 1, "record")
+                                              or else Is_Kw (J + 1, "select")
+                                              or else Is_Kw (J + 1, "return"))
+                                and then Level > 0
+                              then
+                                 Level := Level - 1;
+                                 exit when Level = 0;
+                              end if;
+                           end loop;
+                        end;
+                        Mark (K, Semicolon (J));
                      else
                         Mark (K, Semicolon (J));
                      end if;

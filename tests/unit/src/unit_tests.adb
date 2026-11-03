@@ -240,6 +240,12 @@ procedure Unit_Tests is
               & "|ArithmeticOperator +->-|NumericLiteral 1->0",
               "ghost code with mutate_contracts",
               (Mutate_Contracts => True, others => <>));
+      Expect ("package body P is procedure G with Ghost; "
+              & "procedure G is begin if A then null; end if; end; "
+              & "A, B : Integer with Ghost; C : Integer with Ghost => False; "
+              & "procedure Q is begin B := 1; C := 2; end Q; end P;",
+              "StatementDeletion C := 2;->null;|NumericLiteral 2->3",
+              "unnamed ghost body end, ghost object lists, Ghost => False");
       Expect ("package P is pragma Assert (X > 0); end P;", "",
               "pragmas are skipped even with mutate_contracts",
               (Mutate_Contracts => True, others => <>));
