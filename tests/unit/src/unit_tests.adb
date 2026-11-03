@@ -13,6 +13,7 @@ with AdaMutant.Positions;
 with AdaMutant.Processes;
 
 with AdaMutant.Reports;
+with AdaMutant.Runner;
 
 procedure Unit_Tests is
 
@@ -230,6 +231,15 @@ procedure Unit_Tests is
    procedure Test_Files is
       use AdaMutant.Files;
    begin
+      Check (AdaMutant.Runner.Build_Error
+               ("a.adb:1:1: warning: w" & ASCII.CR & ASCII.LF
+                & "a.adb:2:3: error: bad" & ASCII.CR & ASCII.LF
+                & "gprbuild: *** compilation phase failed")
+             = "a.adb:2:3: error: bad", "build error line");
+      Check (AdaMutant.Runner.Build_Error ("x.adb:4:5: error: last")
+             = "x.adb:4:5: error: last", "build error on last line");
+      Check (AdaMutant.Runner.Build_Error ("gprbuild: failed" & ASCII.LF)
+             = "", "no build error line");
       Check (Glob_Match ("src/**/*.adb", "src/a.adb"), "glob ** empty");
       Check (Glob_Match ("src/**/*.adb", "src/x/y/a.adb"), "glob ** deep");
       Check (not Glob_Match ("src/*.adb", "src/x/a.adb"), "glob * no slash");
