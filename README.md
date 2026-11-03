@@ -70,7 +70,7 @@ break = 0
 |---|---|
 | ArithmeticOperator | `+`↔`-`, `*`↔`/`, `mod`↔`rem`, `**`→`*`, `&` は対象外 |
 | EqualityOperator | `<`→`<=`,`>=`、`=`↔`/=` など |
-| LogicalOperator | `and`↔`or`, `and then`↔`or else`, `xor`→`or` |
+| LogicalOperator | `and`↔`or`, `and then`↔`or else`, `xor`→`or`。`A and then B and then C` のような連鎖では `(A or else B) and then C` のように括弧を補う |
 | UnaryOperator | `not X`→`X`, `-X`↔`+X`, `abs X`→`X` |
 | BooleanLiteral | `True`↔`False` |
 | MembershipOperator | `in`↔`not in` |

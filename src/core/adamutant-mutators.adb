@@ -195,12 +195,16 @@ package body AdaMutant.Mutators is
             or else (not Options.Mutate_Contracts and then In_Aspect (K)));
 
          procedure Add
-           (Kind : Mutator_Kind; From, To : Positive; Replacement : String)
+           (Kind        : Mutator_Kind;
+            From, To    : Positive;
+            Replacement : String;
+            Anchor      : Natural := 0)
          is
-            Ignored : Boolean := Disabled (From) (Kind);
-            Line    : constant Positive := S (From).Line;
+            A       : constant Positive := (if Anchor = 0 then From else Anchor);
+            Ignored : Boolean := Disabled (A) (Kind);
+            Line    : constant Positive := S (A).Line;
          begin
-            if not Options.Enabled (Kind) or else Skipped (From) then
+            if not Options.Enabled (Kind) or else Skipped (A) then
                return;
             end if;
             if Next_Line.Contains (Line) and then Next_Line (Line) (Kind) then
@@ -218,6 +222,92 @@ package body AdaMutant.Mutators is
            (if Model = To_Upper (Model) then To_Upper (Word)
             elsif Model = To_Lower (Model) then To_Lower (Word)
             else Word);
+
+         --  Tokens that end an expression at their own nesting depth.
+         function Is_Boundary (J : Positive) return Boolean is
+           (Is_Del (J, ",") or else Is_Del (J, ";") or else Is_Del (J, "=>")
+            or else Is_Del (J, ":=") or else Is_Del (J, "|")
+            or else Is_Del (J, ")") or else Is_Del (J, "]")
+            or else Is_Del (J, "<<") or else Is_Del (J, ">>")
+            or else (S (J).Kind = Reserved_Word
+                     and then not
+                       (Is_Kw (J, "and") or else Is_Kw (J, "or")
+                        or else Is_Kw (J, "xor") or else Is_Kw (J, "not")
+                        or else Is_Kw (J, "in") or else Is_Kw (J, "mod")
+                        or else Is_Kw (J, "rem") or else Is_Kw (J, "abs")
+                        or else Is_Kw (J, "null") or else Is_Kw (J, "new")
+                        or else Is_Kw (J, "all")
+                        or else (Is_Kw (J, "then") and then Is_Kw (J - 1, "and"))
+                        or else (Is_Kw (J, "else") and then Is_Kw (J - 1, "or")))));
+
+         --  Ada does not allow different logical operators side by side
+         --  without parentheses, so in a chain such as "A and then B and then
+         --  C" the operands around the mutated operator are parenthesised:
+         --  "(A or else B) and then C", "((A and then B) or else C)".
+         procedure Add_Logical
+           (K : Positive; Width : Positive; New_Op : String)
+         is
+            D : constant Natural := Depth (K);
+            L : Positive := K;
+            R : Natural := K + Width - 1;
+
+            function Inside (J : Positive) return Boolean is
+              (Depth (J) > D
+               or else (Depth (J) = D and then not Is_Boundary (J)));
+
+            function Op_Width (J : Positive) return Natural is
+              (if (Is_Kw (J, "and") and then Is_Kw (J + 1, "then"))
+                 or else (Is_Kw (J, "or") and then Is_Kw (J + 1, "else"))
+               then 2
+               elsif Is_Kw (J, "and") or else Is_Kw (J, "or")
+                 or else Is_Kw (J, "xor")
+               then 1
+               else 0);
+
+            Before, After : Natural := 0;
+            Next          : Natural;
+         begin
+            while L > 1 and then Inside (L - 1) loop
+               L := L - 1;
+            end loop;
+            while R < N and then Inside (R + 1) loop
+               R := R + 1;
+            end loop;
+            declare
+               J : Positive := L;
+            begin
+               while J <= R loop
+                  if Depth (J) = D and then Op_Width (J) > 0 then
+                     if J < K then
+                        Before := Before + 1;
+                     elsif J > K and then After = 0 then
+                        After := J;
+                     end if;
+                     J := J + Op_Width (J);
+                  else
+                     J := J + 1;
+                  end if;
+               end loop;
+            end;
+            Next := (if After = 0 then R + 1 else After);
+            if (Before = 0 and then After = 0) or else L >= K
+              or else Next <= K + Width
+            then
+               Add (Logical_Operator, K, K + Width - 1, New_Op);
+               return;
+            end if;
+            declare
+               Left  : constant String :=
+                 Source (S (L).First .. S (K - 1).Last);
+               Right : constant String :=
+                 Source (S (K + Width).First .. S (Next - 1).Last);
+            begin
+               Add (Logical_Operator, L, Next - 1,
+                    "(" & (if Before > 0 then "(" & Left & ")" else Left)
+                    & " " & New_Op & " " & Right & ")",
+                    Anchor => K);
+            end;
+         end Add_Logical;
       begin
          --  Pass 1: nesting depth, segments (statements, declarations,
          --  alternatives) and aspect specifications.
@@ -339,8 +429,7 @@ package body AdaMutant.Mutators is
 
                      elsif Lw = "and" then
                         if Is_Kw (K + 1, "then") then
-                           Add (Logical_Operator, K, K + 1,
-                                Same_Case (Txt (K), "or else"));
+                           Add_Logical (K, 2, Same_Case (Txt (K), "or else"));
                         elsif not (Is_Kw (Seg_Start (K), "new")
                                    or else Is_Kw (Seg_Start (K), "interface")
                                    or else Is_Kw (Seg_Start (K), "limited")
@@ -348,20 +437,18 @@ package body AdaMutant.Mutators is
                                    or else Is_Kw (Seg_Start (K), "task")
                                    or else Is_Kw (Seg_Start (K), "protected"))
                         then
-                           Add (Logical_Operator, K, K, Same_Case (Txt (K), "or"));
+                           Add_Logical (K, 1, Same_Case (Txt (K), "or"));
                         end if;
 
                      elsif Lw = "or" and then not Is_Del (K - 1, ";") then
                         if Is_Kw (K + 1, "else") then
-                           Add (Logical_Operator, K, K + 1,
-                                Same_Case (Txt (K), "and then"));
+                           Add_Logical (K, 2, Same_Case (Txt (K), "and then"));
                         else
-                           Add (Logical_Operator, K, K,
-                                Same_Case (Txt (K), "and"));
+                           Add_Logical (K, 1, Same_Case (Txt (K), "and"));
                         end if;
 
                      elsif Lw = "xor" then
-                        Add (Logical_Operator, K, K, Same_Case (Txt (K), "or"));
+                        Add_Logical (K, 1, Same_Case (Txt (K), "or"));
 
                      elsif Lw = "not" then
                         if Is_Kw (K + 1, "in") then
