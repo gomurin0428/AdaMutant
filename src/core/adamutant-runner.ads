@@ -21,10 +21,13 @@ package AdaMutant.Runner is
       Progress     : access procedure
         (Done, Total : Natural;
          M           : AdaMutant.Results.Mutant;
-         File        : String) := null);
+         File        : String) := null;
+      Warn         : access procedure (Message : String) := null);
    --  Builds and tests the unmodified project, then every pending mutant,
    --  in copies of the project under <root>/.adamutant/sandbox.  Raises
    --  Run_Error when the unmodified project does not build or its tests or
-   --  proof fail.
+   --  proof fail.  Pending mutants of files that no GNAT ALI file produced
+   --  by the unmodified build depends on get the No_Coverage status and
+   --  are reported to Warn, unless a prove command is configured.
 
 end AdaMutant.Runner;
