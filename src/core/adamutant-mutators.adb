@@ -211,9 +211,14 @@ package body AdaMutant.Mutators is
                return False;
             end if;
             for J in First .. K - 1 loop
-               if Is_Del (J, ":=") then
+               if Is_Del (J, ":=") or else Is_Kw (J, "renames") then
                   return False;
-               elsif Is_Del (J, ":") and then Depth (J) = 0 then
+               elsif Is_Del (J, ":") and then Depth (J) = 0
+                 and then not (Is_Kw (J + 1, "for") or else Is_Kw (J + 1, "while")
+                               or else Is_Kw (J + 1, "loop")
+                               or else Is_Kw (J + 1, "declare")
+                               or else Is_Kw (J + 1, "begin"))
+               then
                   Colon := True;
                end if;
             end loop;
@@ -651,6 +656,8 @@ package body AdaMutant.Mutators is
                        and then not In_Aspect (K)
                        and then not Is_Del (K + 1, "'")
                        and then not Is_Kw (K - 1, "is")
+                       and then not (Is_Kw (K - 1, "loop")
+                                     and then Is_Kw (K - 2, "end"))
                      then
                         declare
                            J : Positive := K + 1;

@@ -113,6 +113,12 @@ procedure Unit_Tests is
               "NumericLiteral 1->0|NumericLiteral 6->7|NumericLiteral 1->0"
               & "|NumericLiteral 2->3",
               "bounds in expressions and loops are mutated");
+      Expect ("package body P is procedure Q is "
+              & "S : String renames B (1 .. 4); begin "
+              & "L : for I in 2 .. 3 loop null; end loop L; end Q; end P;",
+              "NumericLiteral 1->0|NumericLiteral 4->5|NumericLiteral 2->3"
+              & "|NumericLiteral 3->4",
+              "bounds of renamed slices and labelled loops are mutated");
       Expect ("package body P is procedure Q is begin "
               & "Y := A mod B; Z := A rem B; end Q; end P;",
               "ArithmeticOperator mod->*|ArithmeticOperator rem->*",
