@@ -25,7 +25,8 @@ int adamutant_run (const char *command, const char *directory,
   SIZE_T attr_size = 0;
   HANDLE inherit[2];
   char *cmdline, *env, *penv;
-  size_t env_len, extra_len;
+  size_t env_len, extra_len, name_len, kept;
+  char *entry;
   DWORD wait, code = 0;
   ULONGLONG start;
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
@@ -40,17 +41,25 @@ int adamutant_run (const char *command, const char *directory,
   nul = CreateFileA ("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                      &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
-  /* Environment block: the current environment plus EXTRA_ENV.  */
+  /* Environment block: the current environment without any variable named
+     like EXTRA_ENV, then EXTRA_ENV.  Names are case-insensitive here.  */
   penv = GetEnvironmentStringsA ();
   for (env_len = 0; penv[env_len] != '\0' || penv[env_len + 1] != '\0';
        env_len++)
     ;
   env_len += 1;
   extra_len = strlen (extra_env);
+  name_len = strcspn (extra_env, "=") + 1;
   env = malloc (env_len + extra_len + 2);
-  memcpy (env, penv, env_len);
-  memcpy (env + env_len, extra_env, extra_len + 1);
-  env[env_len + extra_len + 1] = '\0';
+  kept = 0;
+  for (entry = penv; *entry != '\0'; entry += strlen (entry) + 1)
+    if (_strnicmp (entry, extra_env, name_len) != 0)
+      {
+        memcpy (env + kept, entry, strlen (entry) + 1);
+        kept += strlen (entry) + 1;
+      }
+  memcpy (env + kept, extra_env, extra_len + 1);
+  env[kept + extra_len + 1] = '\0';
   FreeEnvironmentStringsA (penv);
 
   cmdline = malloc (strlen (command) + 32);
@@ -147,7 +156,8 @@ int adamutant_run (const char *command, const char *directory,
                    const char *log_path, const char *extra_env,
                    int timeout_ms, int *timed_out, int *elapsed_ms)
 {
-  int log, nul, status = 0, count = 0, i;
+  int log, nul, status = 0, count = 0, i, kept;
+  size_t name_len;
   char **envp;
   char *argv[4];
   pid_t pid, r;
@@ -167,10 +177,12 @@ int adamutant_run (const char *command, const char *directory,
   while (environ[count] != NULL)
     count++;
   envp = malloc ((count + 2) * sizeof (char *));
-  for (i = 0; i < count; i++)
-    envp[i] = environ[i];
-  envp[count] = (char *) extra_env;
-  envp[count + 1] = NULL;
+  name_len = strcspn (extra_env, "=") + 1;
+  for (i = 0, kept = 0; i < count; i++)
+    if (strncmp (environ[i], extra_env, name_len) != 0)
+      envp[kept++] = environ[i];
+  envp[kept] = (char *) extra_env;
+  envp[kept + 1] = NULL;
   argv[0] = "/bin/sh";
   argv[1] = "-c";
   argv[2] = (char *) command;

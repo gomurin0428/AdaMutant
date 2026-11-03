@@ -191,9 +191,8 @@ package body AdaMutant.Mutators is
          Seg_Pragma : array (1 .. N) of Boolean := [others => False];
 
          function Skipped (K : Positive) return Boolean is
-           (Seg_Skip (Seg_Start (K))
-            or else (not Options.Mutate_Contracts
-                     and then (In_Aspect (K) or else Seg_Pragma (Seg_Start (K)))));
+           (Seg_Skip (Seg_Start (K)) or else Seg_Pragma (Seg_Start (K))
+            or else (not Options.Mutate_Contracts and then In_Aspect (K)));
 
          procedure Add
            (Kind : Mutator_Kind; From, To : Positive; Replacement : String)

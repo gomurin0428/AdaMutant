@@ -194,7 +194,7 @@ package body AdaMutant.Files is
          begin
             Create_Path (Containing_Directory (Target));
             Copy_File (Join (From, Rel), Target,
-                       "mode=overwrite,preserve=timestamps");
+                       "mode=overwrite,preserve=all_attributes");
          end;
       end loop;
    exception

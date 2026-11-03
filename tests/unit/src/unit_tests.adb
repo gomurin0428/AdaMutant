@@ -6,7 +6,11 @@ with AdaMutant.Config;
 with AdaMutant.Files;
 with AdaMutant.Lexer;
 with AdaMutant.Mutators; use AdaMutant.Mutators;
+with Ada.Directories;
+with Ada.Environment_Variables;
 with AdaMutant.Positions;
+with AdaMutant.Processes;
+
 with AdaMutant.Reports;
 
 procedure Unit_Tests is
@@ -138,6 +142,9 @@ procedure Unit_Tests is
               "EqualityOperator >->>=|EqualityOperator >-><=|NumericLiteral 0->1",
               "aspects with mutate_contracts",
               (Mutate_Contracts => True, others => <>));
+      Expect ("package P is pragma Assert (X > 0); end P;", "",
+              "pragmas are skipped even with mutate_contracts",
+              (Mutate_Contracts => True, others => <>));
       Expect ("package P is type T is new Parent and Iface with null record;"
               & " end P;",
               "", "interface list and");
@@ -203,6 +210,35 @@ procedure Unit_Tests is
       Check (not Glob_Match ("*.adb", "a.ads"), "glob extension");
       Check (Join ("a", "b/c") = "a/b/c", "join");
    end Test_Files;
+
+   --  POSIX only: uses /bin/sh commands.
+   procedure Test_Processes is
+      use AdaMutant.Files;
+      use AdaMutant.Processes;
+      Tmp  : constant String := Ada.Directories.Current_Directory & "/obj/proc";
+      Log  : constant String := Tmp & "/log.txt";
+      None : String_Vectors.Vector;
+      R    : Run_Result;
+   begin
+      if Ada.Directories.Exists (Tmp) then
+         Ada.Directories.Delete_Tree (Tmp);
+      end if;
+      Ada.Directories.Create_Path (Tmp & "/a");
+      Write (Tmp & "/a/t.sh", "#!/bin/sh" & LF & "exit 0" & LF);
+      R := Run ("chmod +x t.sh", Tmp & "/a", Log, 0, 10.0);
+      Check (R.Exit_Code = 0, "chmod");
+      Copy_Tree (Tmp & "/a", Tmp & "/b", None);
+      R := Run ("./t.sh", Tmp & "/b", Log, 0, 10.0);
+      Check (R.Exit_Code = 0, "Copy_Tree keeps the executable bit");
+
+      Ada.Environment_Variables.Set ("ADAMUTANT_MUTANT_ID", "42");
+      R := Run ("test ""$ADAMUTANT_MUTANT_ID"" = 7", Tmp, Log, 7, 10.0);
+      Check (R.Exit_Code = 0, "mutant id overrides the parent environment");
+      Ada.Environment_Variables.Clear ("ADAMUTANT_MUTANT_ID");
+
+      R := Run ("sleep 5", Tmp, Log, 0, 0.3);
+      Check (R.Timed_Out, "timeout");
+   end Test_Processes;
 
    procedure Test_Positions is
       use AdaMutant.Positions;
@@ -285,6 +321,7 @@ begin
    Test_Directives;
    Test_Apply;
    Test_Files;
+   Test_Processes;
    Test_Positions;
    Test_Config;
    Test_Json;
