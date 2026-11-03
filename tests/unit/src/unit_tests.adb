@@ -7,6 +7,7 @@ with AdaMutant.Files;
 with AdaMutant.Lexer;
 with AdaMutant.Mutators; use AdaMutant.Mutators;
 with Ada.Directories;
+with GNAT.OS_Lib;
 with Ada.Environment_Variables;
 with AdaMutant.Positions;
 with AdaMutant.Processes;
@@ -321,7 +322,9 @@ begin
    Test_Directives;
    Test_Apply;
    Test_Files;
-   Test_Processes;
+   if GNAT.OS_Lib.Directory_Separator = '/' then
+      Test_Processes;
+   end if;
    Test_Positions;
    Test_Config;
    Test_Json;
