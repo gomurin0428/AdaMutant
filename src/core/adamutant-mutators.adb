@@ -499,10 +499,10 @@ package body AdaMutant.Mutators is
                      end if;
 
                   when Reserved_Word =>
+                     --  mod and rem differ only for operands of opposite
+                     --  signs, so swapping them is nearly always equivalent.
                      if (Lw = "mod" or else Lw = "rem") and then Binary then
-                        Add (Arithmetic_Operator, K, K,
-                             Same_Case (Txt (K),
-                                        (if Lw = "mod" then "rem" else "mod")));
+                        Add (Arithmetic_Operator, K, K, "*");
 
                      elsif Lw = "and" then
                         if Is_Kw (K + 1, "then") then
