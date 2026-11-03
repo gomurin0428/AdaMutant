@@ -97,6 +97,16 @@ procedure Unit_Tests is
               "exponent and literals");
       Expect ("package P is B : Boolean := X and then Y; end P;",
               "LogicalOperator and then->or else", "short circuit");
+      Expect ("package P is B : Boolean := X and then Y and then Z; end P;",
+              "LogicalOperator X and then Y->(X or else Y)"
+              & "|LogicalOperator X and then Y and then Z->"
+              & "((X and then Y) or else Z)",
+              "short circuit chain is parenthesised");
+      Expect ("package P is B : Boolean := F (A or B, (C or D) or E); end P;",
+              "LogicalOperator or->and"
+              & "|LogicalOperator or->and"
+              & "|LogicalOperator or->and",
+              "chain only spans operators at the same depth");
       Expect ("package P is B : Boolean := X not in 1 .. 3; end P;",
               "MembershipOperator not in->in|NumericLiteral 1->0|NumericLiteral 3->4",
               "not in");
