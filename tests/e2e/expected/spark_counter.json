@@ -1,0 +1,10 @@
+{
+ "src/counters.adb:10:10 ConditionalExpression False": "Killed",
+ "src/counters.adb:10:10 ConditionalExpression True": "Killed",
+ "src/counters.adb:10:12 ArithmeticOperator -": "Killed",
+ "src/counters.adb:10:16 EqualityOperator <=": "Killed",
+ "src/counters.adb:10:16 EqualityOperator >=": "Survived",
+ "src/counters.adb:13:19 ArithmeticOperator -": "Killed",
+ "src/counters.adb:5:16 ArithmeticOperator -": "Killed",
+ "src/counters.adb:5:18 NumericLiteral 0": "Killed"
+}

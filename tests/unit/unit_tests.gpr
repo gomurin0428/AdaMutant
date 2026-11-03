@@ -1,0 +1,12 @@
+with "../../adamutant_core.gpr";
+
+project Unit_Tests is
+
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj";
+   for Exec_Dir use "bin";
+   for Main use ("unit_tests.adb");
+
+   package Compiler renames AdaMutant_Core.Compiler;
+
+end Unit_Tests;
