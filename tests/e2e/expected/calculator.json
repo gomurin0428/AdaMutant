@@ -35,7 +35,7 @@
  "src/calculator.adb:43:10 StatementDeletion null;": "Killed",
  "src/calculator.adb:43:25 ArithmeticOperator -": "Killed",
  "src/calculator.adb:5:16 ArithmeticOperator -": "Killed",
- "src/calculator.ads:9:56 ArithmeticOperator rem": "Survived",
+ "src/calculator.ads:9:56 ArithmeticOperator *": "Killed",
  "src/calculator.ads:9:60 NumericLiteral 3": "Killed",
  "src/calculator.ads:9:62 EqualityOperator /=": "Killed",
  "src/calculator.ads:9:64 NumericLiteral 1": "Killed",

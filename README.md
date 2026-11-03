@@ -68,7 +68,7 @@ break = 0
 
 | 名前 | 例 |
 |---|---|
-| ArithmeticOperator | `+`↔`-`, `*`↔`/`, `mod`↔`rem`, `**`→`*`, `&` は対象外 |
+| ArithmeticOperator | `+`↔`-`, `*`↔`/`, `mod`,`rem`→`*`（`mod`↔`rem` は符号が異なるときしか差が出ず、ほぼ等価ミュータントになるため）, `**`→`*`, `&` は対象外 |
 | EqualityOperator | `<`→`<=`,`>=`、`=`↔`/=` など |
 | LogicalOperator | `and`↔`or`, `and then`↔`or else`, `xor`→`or`。`A and then B and then C` のような連鎖では `(A or else B) and then C` のように括弧を補う |
 | UnaryOperator | `not X`→`X`, `-X`↔`+X`, `abs X`→`X` |

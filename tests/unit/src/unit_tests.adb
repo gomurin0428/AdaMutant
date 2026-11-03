@@ -103,6 +103,10 @@ procedure Unit_Tests is
               & "|LogicalOperator X and then Y and then Z->"
               & "((X and then Y) or else Z)",
               "short circuit chain is parenthesised");
+      Expect ("package body P is procedure Q is begin "
+              & "Y := A mod B; Z := A rem B; end Q; end P;",
+              "ArithmeticOperator mod->*|ArithmeticOperator rem->*",
+              "mod and rem become multiplication");
       Expect ("package P is procedure Q (X : Integer := 1; B : Boolean := "
               & "not True); function F (S : String := """") return T; end P;",
               "", "parameter defaults of completed subprograms are kept");
