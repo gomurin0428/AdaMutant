@@ -6,6 +6,7 @@ example stays untouched. Expected statuses live in tests/e2e/expected/.
 Run with --update to rewrite them after a reviewed behaviour change.
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -13,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-EXE = ROOT / "bin" / "adamutant"
+EXE = ROOT / "bin" / ("adamutant.exe" if os.name == "nt" else "adamutant")
 EXPECTED = Path(__file__).resolve().parent / "expected"
 EXAMPLES = {
     "calculator": {"exit": 0, "min_timeout": 1},
@@ -75,6 +76,16 @@ def run_example(name, spec, update):
     return errors
 
 
+def leftover_processes(name):
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}.exe", "/FO", "CSV", "/NH"],
+                             stdout=subprocess.PIPE, text=True).stdout
+        return [line.split(",")[1].strip('"') for line in out.splitlines()
+                if line.lower().startswith(f'"{name}.exe"')]
+    return subprocess.run(["pgrep", "-f", name],
+                          stdout=subprocess.PIPE, text=True).stdout.split()
+
+
 def main():
     update = "--update" in sys.argv
     if not EXE.exists():
@@ -86,8 +97,7 @@ def main():
         for e in errors:
             print("  " + e)
         failed = failed or bool(errors)
-    leftovers = subprocess.run(["pgrep", "-f", "test_calculator"],
-                               stdout=subprocess.PIPE, text=True).stdout.split()
+    leftovers = leftover_processes("test_calculator")
     if leftovers:
         print("FAIL leftover test processes: " + " ".join(leftovers))
         failed = True
