@@ -286,10 +286,6 @@ package body AdaMutant.Mutators is
             L : Positive := K;
             R : Natural := K + Width - 1;
 
-            function Inside (J : Positive) return Boolean is
-              (Depth (J) > D
-               or else (Depth (J) = D and then not Is_Boundary (J)));
-
             function Op_Width (J : Positive) return Natural is
               (if (Is_Kw (J, "and") and then Is_Kw (J + 1, "then"))
                  or else (Is_Kw (J, "or") and then Is_Kw (J + 1, "else"))
@@ -298,6 +294,36 @@ package body AdaMutant.Mutators is
                  or else Is_Kw (J, "xor")
                then 1
                else 0);
+
+            function Membership_Bar (J : Positive) return Boolean;
+            --  J is a "|" between the choices of a membership test
+            --  ("X in 1 | 3"), which belongs to the operand.
+
+            function Membership_Bar (J : Positive) return Boolean is
+               I : Natural := J - 1;
+            begin
+               if not Is_Del (J, "|") then
+                  return False;
+               end if;
+               while I >= 1
+                 and then (Depth (I) > D
+                           or else (Depth (I) = D and then Op_Width (I) = 0
+                                    and then (Is_Del (I, "|")
+                                              or else not Is_Boundary (I))))
+               loop
+                  if Depth (I) = D and then Is_Kw (I, "in") then
+                     return True;
+                  end if;
+                  I := I - 1;
+               end loop;
+               return False;
+            end Membership_Bar;
+
+            function Inside (J : Positive) return Boolean is
+              (Depth (J) > D
+               or else (Depth (J) = D
+                        and then (not Is_Boundary (J)
+                                  or else Membership_Bar (J))));
 
             Before, After : Natural := 0;
             Next          : Natural;
