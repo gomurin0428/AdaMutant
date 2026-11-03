@@ -184,6 +184,20 @@ package body AdaMutant.Runner is
          function Failure return String is (To_String (Problem));
       end Queue;
 
+      Prove_Ended : array (1 .. Positive'Max (1, S.Concurrency)) of Time :=
+        [others => Started];
+
+      --  GNATprove skips its proof phase when the files it regenerates get
+      --  the same time stamp as the previous run's results.  Time stamps
+      --  have whole-second (two-second on FAT) resolution, so start the next
+      --  proof two seconds after the second in which the previous one ended.
+      procedure Wait_For_New_Stamp (Last : Time) is
+         Whole : constant Duration :=
+           Duration (Long_Float'Floor (Long_Float (Seconds (Last))));
+      begin
+         delay until Last - (Seconds (Last) - Whole) + 2.0;
+      end Wait_For_New_Stamp;
+
       procedure Test_Mutant (Slot : Positive; M : in out Mutant) is
          Dir      : constant String := Slot_Dir (Slot);
          Rel      : constant String := To_String (R.Files (M.File).Path);
@@ -228,10 +242,12 @@ package body AdaMutant.Runner is
             end;
          end if;
          if M.Status = Pending and then Has_Prove then
+            Wait_For_New_Stamp (Prove_Ended (Slot));
             declare
                P : constant Run_Result :=
                  Step ("prove", To_String (S.Prove), Prove_TO);
             begin
+               Prove_Ended (Slot) := Clock;
                if P.Timed_Out then
                   M.Status := Timeout;
                   M.Killed_By := Proof;
@@ -329,6 +345,7 @@ package body AdaMutant.Runner is
          end if;
          if Has_Prove then
             Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed);
+            Prove_Ended := [others => Clock];
             Prove_TO :=
               Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
          end if;
