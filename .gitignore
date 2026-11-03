@@ -1,0 +1,9 @@
+/bin/
+/lib/
+/obj/
+tests/unit/bin/
+tests/unit/obj/
+examples/*/obj/
+examples/*/bin/
+.adamutant/
+__pycache__/
