@@ -91,6 +91,29 @@ package body AdaMutant.Runner is
       return S (S'First + 1 .. S'Last);
    end Image;
 
+   function Build_Error (Log : String) return String is
+      First : Positive := Log'First;
+   begin
+      for K in Log'Range loop
+         if Log (K) = ASCII.LF or else K = Log'Last then
+            declare
+               Last : Natural := (if Log (K) = ASCII.LF then K - 1 else K);
+            begin
+               if Last >= First and then Log (Last) = ASCII.CR then
+                  Last := Last - 1;
+               end if;
+               if Index (To_Unbounded_String (Log (First .. Last)),
+                         ": error: ") > 0
+               then
+                  return Log (First .. Last);
+               end if;
+            end;
+            First := K + 1;
+         end if;
+      end loop;
+      return "";
+   end Build_Error;
+
    function Base_Name (Path : String) return String is
    begin
       for K in reverse Path'Range loop
@@ -276,11 +299,20 @@ package body AdaMutant.Runner is
             B : constant Run_Result :=
               Step ("build", To_String (S.Build), Build_TO);
          begin
-            if B.Timed_Out or else B.Exit_Code /= 0 then
+            if B.Timed_Out then
                M.Status := Compile_Error;
-               M.Status_Reason := To_Unbounded_String
-                 (if B.Timed_Out then "build timed out"
-                  else "build failed with exit status" & B.Exit_Code'Image);
+               M.Status_Reason := To_Unbounded_String ("build timed out");
+            elsif B.Exit_Code /= 0 then
+               M.Status := Compile_Error;
+               declare
+                  E : constant String :=
+                    Build_Error (Read (Log_Base & "-build.log"));
+               begin
+                  M.Status_Reason := To_Unbounded_String
+                    (if E = "" then
+                        "build failed with exit status" & B.Exit_Code'Image
+                     else "build failed: " & E);
+               end;
             end if;
          end;
          if M.Status = Pending and then Has_Test then

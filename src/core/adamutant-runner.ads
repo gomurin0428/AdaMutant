@@ -15,6 +15,10 @@ package AdaMutant.Runner is
    --  list of globs, when it is not empty).  Mutants covered by adamutant
    --  directives get the Ignored status, the others Pending.
 
+   function Build_Error (Log : String) return String;
+   --  The first compiler error in the text of a build log (a GNAT line
+   --  "file:line:col: error: message"), or "" when there is none.
+
    procedure Execute
      (R            : in out AdaMutant.Results.Report;
       Keep_Sandbox : Boolean;
