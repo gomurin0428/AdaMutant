@@ -28,6 +28,6 @@ package AdaMutant.Runner is
    --  Run_Error when the unmodified project does not build or its tests or
    --  proof fail.  Pending mutants of files that no GNAT ALI file produced
    --  by the unmodified build depends on get the No_Coverage status and
-   --  are reported to Warn.
+   --  are reported to Warn, unless a prove command is configured.
 
 end AdaMutant.Runner;

@@ -413,10 +413,12 @@ package body AdaMutant.Runner is
 
       --  A mutated file that no compilation of the build depends on can
       --  never be detected; skip its mutants instead of reporting them as
-      --  survivors.  Without any GNAT ALI file there is nothing to go by.
+      --  survivors.  Without any GNAT ALI file there is nothing to go by,
+      --  and a prove command may analyse sources outside the build.
       declare
          Compiled : constant String_Vectors.Vector :=
-           Compiled_Sources (Slot_Dir (1));
+           (if Has_Prove then String_Vectors.Empty_Vector
+            else Compiled_Sources (Slot_Dir (1)));
       begin
          if not Compiled.Is_Empty then
             for F in R.Files.First_Index .. R.Files.Last_Index loop
