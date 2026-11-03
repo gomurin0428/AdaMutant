@@ -103,6 +103,22 @@ procedure Unit_Tests is
               & "|LogicalOperator X and then Y and then Z->"
               & "((X and then Y) or else Z)",
               "short circuit chain is parenthesised");
+      Expect ("package P is subtype S is Integer range 1 .. 4; "
+              & "type A is array (1 .. 3) of S; "
+              & "C : S range 2 .. 3; end P;",
+              "", "bounds of declared subtypes are not mutated");
+      Expect ("package body P is procedure Q is "
+              & "B : String (1 .. 6) := (1 .. 6 => 'x'); begin "
+              & "for I in 1 .. 2 loop null; end loop; end Q; end P;",
+              "NumericLiteral 1->0|NumericLiteral 6->7|NumericLiteral 1->0"
+              & "|NumericLiteral 2->3",
+              "bounds in expressions and loops are mutated");
+      Expect ("package body P is procedure Q is "
+              & "S : String renames B (1 .. 4); begin "
+              & "L : for I in 2 .. 3 loop null; end loop L; end Q; end P;",
+              "NumericLiteral 1->0|NumericLiteral 4->5|NumericLiteral 2->3"
+              & "|NumericLiteral 3->4",
+              "bounds of renamed slices and labelled loops are mutated");
       Expect ("package body P is procedure Q is begin "
               & "Y := A mod B; Z := A rem B; end Q; end P;",
               "ArithmeticOperator mod->*|ArithmeticOperator rem->*",
@@ -163,8 +179,9 @@ procedure Unit_Tests is
       Expect ("with Ada.Text_IO; use Ada.Text_IO;" & LF
               & "package P is pragma Pure (P); end P;",
               "", "context clauses and pragmas");
-      Expect ("package P is type T is range 0 .. 255; for T'Size use 8; end P;",
-              "NumericLiteral 0->1|NumericLiteral 255->256",
+      Expect ("package P is type T is range 0 .. 255; for T'Size use 8; "
+              & "X : constant T := 3; end P;",
+              "NumericLiteral 3->4",
               "representation clause");
       Expect ("package P is function F (X : Integer) return Integer"
               & " with Pre => X > 0; end P;",

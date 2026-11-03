@@ -196,6 +196,39 @@ package body AdaMutant.Mutators is
             or else In_Default (K)
             or else (not Options.Mutate_Contracts and then In_Aspect (K)));
 
+         function Is_Declared_Bound (K : Positive) return Boolean;
+         --  K is a bound of a range in the subtype of an object, component,
+         --  type or subtype declaration ("X : String (1 .. 6)",
+         --  "subtype S is Integer range 1 .. 4"). Changing such a bound
+         --  either leaves values out of the subtype (a compile error) or
+         --  only widens it (an equivalent mutant).
+
+         function Is_Declared_Bound (K : Positive) return Boolean is
+            First : constant Positive := Seg_Start (K);
+            Colon : Boolean := False;
+         begin
+            if not (Is_Del (K - 1, "..") or else Is_Del (K + 1, "..")) then
+               return False;
+            end if;
+            for J in First .. K - 1 loop
+               if Is_Del (J, ":=") or else Is_Kw (J, "renames") then
+                  return False;
+               elsif Is_Del (J, ":") and then Depth (J) = 0
+                 and then not (Is_Kw (J + 1, "for") or else Is_Kw (J + 1, "while")
+                               or else Is_Kw (J + 1, "loop")
+                               or else Is_Kw (J + 1, "declare")
+                               or else Is_Kw (J + 1, "begin"))
+               then
+                  Colon := True;
+               end if;
+            end loop;
+            return Colon
+              or else (First > 2 and then Is_Kw (First - 1, "is")
+                       and then (Is_Kw (Seg_Start (First - 1), "type")
+                                 or else Is_Kw (Seg_Start (First - 1),
+                                                "subtype")));
+         end Is_Declared_Bound;
+
          procedure Add
            (Kind        : Mutator_Kind;
             From, To    : Positive;
@@ -623,6 +656,8 @@ package body AdaMutant.Mutators is
                        and then not In_Aspect (K)
                        and then not Is_Del (K + 1, "'")
                        and then not Is_Kw (K - 1, "is")
+                       and then not (Is_Kw (K - 1, "loop")
+                                     and then Is_Kw (K - 2, "end"))
                      then
                         declare
                            J : Positive := K + 1;
@@ -667,6 +702,8 @@ package body AdaMutant.Mutators is
                         if Is_Del (K - 1, "(") and then Is_Del (K - 3, "'") then
                            null;
                         elsif Is_Kw (K - 1, "digits") or else Is_Kw (K - 1, "delta") then
+                           null;
+                        elsif Is_Declared_Bound (K) then
                            null;
                         elsif Digits_Only and then Len <= 18 then
                            declare
