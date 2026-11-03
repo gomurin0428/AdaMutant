@@ -40,11 +40,23 @@ package body AdaMutant.Runner is
            and then (Only.Is_Empty or else Matches_Any (Only, Path))
          then
             declare
-               Source : constant String := Read (Join (Root, Path));
-               Found  : Mutation_Vectors.Vector;
+               Source  : constant String := Read (Join (Root, Path));
+               Spec    : constant String :=
+                 (if Path'Length > 4
+                    and then Ada.Characters.Handling.To_Lower
+                      (Path (Path'Last - 3 .. Path'Last)) = ".adb"
+                  then Path (Path'First .. Path'Last - 1) & "s" else "");
+               Options : Scan_Options := Settings.Scan;
+               Found   : Mutation_Vectors.Vector;
             begin
                begin
-                  Found := Find (Source, Settings.Scan);
+                  if not Options.Mutate_Contracts and then Spec /= ""
+                    and then Ada.Directories.Exists (Join (Root, Spec))
+                  then
+                     Options.Ghost_Names.Union
+                       (Ghost_Names (Read (Join (Root, Spec))));
+                  end if;
+                  Found := Find (Source, Options);
                exception
                   when E : AdaMutant.Lexer.Lexical_Error
                     | AdaMutant.Mutators.Directive_Error =>
