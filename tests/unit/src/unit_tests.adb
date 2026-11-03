@@ -121,6 +121,10 @@ procedure Unit_Tests is
               & "((X and then Y) or else Z)"
               & "|NumericLiteral 1->0|NumericLiteral 0->1",
               "other choice bars still end a logical chain");
+      Expect ("package P is procedure Q (X : in out Integer) with "
+              & "Pre => (X > 0 and then X < 9), "
+              & "Post => X > 1 and then (if X = 2 then X'Old = 1); end P;",
+              "", "parenthesised parts of aspects are not mutated");
       Expect ("package P is subtype S is Integer range 1 .. 4; "
               & "type A is array (1 .. 3) of S; "
               & "C : S range 2 .. 3; end P;",
