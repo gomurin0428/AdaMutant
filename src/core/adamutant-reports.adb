@@ -219,6 +219,7 @@ package body AdaMutant.Reports is
                    & Pad (Image (C (Killed)), 7) & " |"
                    & Pad (Image (C (Timeout)), 8) & " |"
                    & Pad (Image (C (Survived)), 9) & " |"
+                   & Pad (Image (C (No_Coverage)), 7) & " |"
                    & Pad (Image (C (Compile_Error)), 8) & " |"
                    & Pad (Image (C (Ignored)), 8));
       end Row;
@@ -245,9 +246,9 @@ package body AdaMutant.Reports is
 
       Ada.Text_IO.New_Line;
       Ada.Text_IO.Put_Line (Pad ("File", Name_Width, False)
-                & " | Score % | Killed | Timeout | Survived |"
+                & " | Score % | Killed | Timeout | Survived | No cov |"
                 & " Compile | Ignored");
-      Ada.Text_IO.Put_Line ([1 .. Name_Width + 66 => '-']);
+      Ada.Text_IO.Put_Line ([1 .. Name_Width + 69 => '-']);
       Row ("All files", All_Counts);
       for F in R.Files.First_Index .. R.Files.Last_Index loop
          Row (To_String (R.Files (F).Path), AdaMutant.Results.Count (R, F));

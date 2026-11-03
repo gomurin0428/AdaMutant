@@ -17,7 +17,14 @@ ROOT = Path(__file__).resolve().parents[2]
 EXE = ROOT / "bin" / ("adamutant.exe" if os.name == "nt" else "adamutant")
 EXPECTED = Path(__file__).resolve().parent / "expected"
 EXAMPLES = {
-    "calculator": {"exit": 0, "min_timeout": 1},
+    "calculator": {
+        "exit": 0, "min_timeout": 1,
+        # A source that the build never compiles: its mutants are NoCoverage.
+        "extra": {"src/unused.adb":
+                  "function Unused (X : Integer) return Integer is\n"
+                  "begin\n   return X + 1;\nend Unused;\n"},
+        "output": "warning: src/unused.adb is not compiled by the build command",
+    },
     "spark_counter": {"exit": 0, "killed_by": "proof"},
 }
 
@@ -38,11 +45,15 @@ def run_example(name, spec, update):
         work = Path(tmp) / name
         shutil.copytree(ROOT / "examples" / name, work,
                         ignore=shutil.ignore_patterns(".adamutant", "obj", "bin", "lib"))
+        for rel, text in spec.get("extra", {}).items():
+            (work / rel).write_text(text)
         before = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if proc.returncode != spec["exit"]:
             errors.append(f"exit status {proc.returncode}, expected {spec['exit']}\n{proc.stdout}")
+        if spec.get("output", "") not in proc.stdout:
+            errors.append(f"output lacks {spec['output']!r}\n{proc.stdout}")
         for p, data in before.items():
             if p.read_bytes() != data:
                 errors.append(f"{p.relative_to(work)} was modified by the run")

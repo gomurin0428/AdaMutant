@@ -1,4 +1,5 @@
 with Ada.Calendar; use Ada.Calendar;
+with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
@@ -90,13 +91,72 @@ package body AdaMutant.Runner is
       return S (S'First + 1 .. S'Last);
    end Image;
 
+   function Base_Name (Path : String) return String is
+   begin
+      for K in reverse Path'Range loop
+         if Path (K) = '/' or else Path (K) = '\' then
+            return Ada.Characters.Handling.To_Lower (Path (K + 1 .. Path'Last));
+         end if;
+      end loop;
+      return Ada.Characters.Handling.To_Lower (Path);
+   end Base_Name;
+
+   function Compiled_Sources (Dir : String) return String_Vectors.Vector is
+      Result : String_Vectors.Vector;
+   begin
+      for Path of Find_Files (Dir, String_Vectors.Empty_Vector) loop
+         if Path'Length > 4
+           and then Ada.Characters.Handling.To_Lower
+             (Path (Path'Last - 3 .. Path'Last)) = ".ali"
+         then
+            declare
+               Text  : constant String := Read (Join (Dir, Path));
+               First : Positive := Text'First;
+               Last  : Natural;
+            begin
+               while First <= Text'Last loop
+                  Last := First;
+                  while Last <= Text'Last and then Text (Last) /= ASCII.LF loop
+                     Last := Last + 1;
+                  end loop;
+                  if Last - First > 2 and then Text (First) = 'D'
+                    and then Text (First + 1) = ' '
+                  then
+                     declare
+                        E : Positive := First + 2;
+                     begin
+                        while E < Last and then Text (E) /= ' '
+                          and then Text (E) /= ASCII.HT
+                          and then Text (E) /= ASCII.CR
+                        loop
+                           E := E + 1;
+                        end loop;
+                        declare
+                           Name : constant String :=
+                             Base_Name (Text (First + 2 .. E - 1));
+                        begin
+                           if not Result.Contains (Name) then
+                              Result.Append (Name);
+                           end if;
+                        end;
+                     end;
+                  end if;
+                  First := Last + 1;
+               end loop;
+            end;
+         end if;
+      end loop;
+      return Result;
+   end Compiled_Sources;
+
    procedure Execute
      (R            : in out Report;
       Keep_Sandbox : Boolean;
       Progress     : access procedure
         (Done, Total : Natural;
          M           : AdaMutant.Results.Mutant;
-         File        : String) := null)
+         File        : String) := null;
+      Warn         : access procedure (Message : String) := null)
    is
       S        : Configuration renames R.Settings;
       Root     : constant String := To_String (S.Root);
@@ -348,6 +408,39 @@ package body AdaMutant.Runner is
             Prove_Ended := [others => Clock];
             Prove_TO :=
               Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+         end if;
+      end;
+
+      --  A mutated file that no compilation of the build depends on can
+      --  never be detected; skip its mutants instead of reporting them as
+      --  survivors.  Without any GNAT ALI file there is nothing to go by.
+      declare
+         Compiled : constant String_Vectors.Vector :=
+           Compiled_Sources (Slot_Dir (1));
+      begin
+         if not Compiled.Is_Empty then
+            for F in R.Files.First_Index .. R.Files.Last_Index loop
+               declare
+                  Path    : constant String := To_String (R.Files (F).Path);
+                  Skipped : Natural := 0;
+               begin
+                  if not Compiled.Contains (Base_Name (Path)) then
+                     for M of Work_Items.all loop
+                        if M.File = F and then M.Status = Pending then
+                           M.Status := No_Coverage;
+                           M.Status_Reason := To_Unbounded_String
+                             ("the build command does not compile " & Path);
+                           Skipped := Skipped + 1;
+                        end if;
+                     end loop;
+                     Pending_Count := Pending_Count - Skipped;
+                     if Skipped > 0 and then Warn /= null then
+                        Warn (Path & " is not compiled by the build command;"
+                              & Skipped'Image & " mutants marked NoCoverage");
+                     end if;
+                  end if;
+               end;
+            end loop;
          end if;
       end;
 

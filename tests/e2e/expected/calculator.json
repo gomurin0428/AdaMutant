@@ -38,5 +38,7 @@
  "src/calculator.ads:9:56 ArithmeticOperator rem": "Survived",
  "src/calculator.ads:9:60 NumericLiteral 3": "Killed",
  "src/calculator.ads:9:62 EqualityOperator /=": "Killed",
- "src/calculator.ads:9:64 NumericLiteral 1": "Killed"
+ "src/calculator.ads:9:64 NumericLiteral 1": "Killed",
+ "src/unused.adb:3:13 ArithmeticOperator -": "NoCoverage",
+ "src/unused.adb:3:15 NumericLiteral 0": "NoCoverage"
 }
