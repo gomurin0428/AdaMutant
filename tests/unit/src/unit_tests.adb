@@ -103,6 +103,24 @@ procedure Unit_Tests is
               & "|LogicalOperator X and then Y and then Z->"
               & "((X and then Y) or else Z)",
               "short circuit chain is parenthesised");
+      Expect ("package body P is procedure Q is begin "
+              & "if A or else B or else C not in 1 | 3 then null; end if; "
+              & "end Q; end P;",
+              "ConditionalExpression A or else B or else C not in 1 | 3->True"
+              & "|ConditionalExpression A or else B or else C not in 1 | 3->False"
+              & "|LogicalOperator A or else B->(A and then B)"
+              & "|LogicalOperator A or else B or else C not in 1 | 3->"
+              & "((A or else B) and then C not in 1 | 3)"
+              & "|MembershipOperator not in->in|NumericLiteral 1->0"
+              & "|NumericLiteral 3->4",
+              "membership choices stay in the operand of a logical chain");
+      Expect ("package P is C : constant T := "
+              & "(X and then Y and then Z | W => 1, others => 0); end P;",
+              "LogicalOperator X and then Y->(X or else Y)"
+              & "|LogicalOperator X and then Y and then Z->"
+              & "((X and then Y) or else Z)"
+              & "|NumericLiteral 1->0|NumericLiteral 0->1",
+              "other choice bars still end a logical chain");
       Expect ("package P is subtype S is Integer range 1 .. 4; "
               & "type A is array (1 .. 3) of S; "
               & "C : S range 2 .. 3; end P;",
