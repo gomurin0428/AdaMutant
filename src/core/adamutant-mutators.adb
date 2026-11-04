@@ -57,6 +57,143 @@ package body AdaMutant.Mutators is
       new String'("rem"), new String'("**"), new String'("abs"),
       new String'("not")];
 
+   type Byte_Range is record
+      First, Last : Natural := 0;
+   end record;
+
+   package Range_Vectors is new Ada.Containers.Vectors (Positive, Byte_Range);
+
+   --  Finds the declarations of Source that carry the Ghost aspect: adds
+   --  their names to Names and their extents (from the declaration start
+   --  to its ";") to Ranges.
+   procedure Scan_Ghost
+     (Source : String;
+      Names  : in out Name_Sets.Set;
+      Ranges : in out Range_Vectors.Vector)
+   is
+      All_Tokens : constant Token_Vectors.Vector := Tokenize (Source);
+      type Token_Array is array (Positive range <>) of Token;
+      S : Token_Array (1 .. Natural (All_Tokens.Length));
+      N : Natural := 0;
+   begin
+      for T of All_Tokens loop
+         if T.Kind /= Comment then
+            N := N + 1;
+            S (N) := T;
+         end if;
+      end loop;
+      declare
+         Depth : array (1 .. N) of Natural := [others => 0];
+         D     : Natural := 0;
+
+         function Txt (K : Positive) return String is
+           (Source (S (K).First .. S (K).Last));
+
+         function Is_Kw (K : Integer; W : String) return Boolean is
+           (K in 1 .. N and then S (K).Kind = Reserved_Word
+            and then Lower (Txt (K)) = W);
+
+         function Is_Del (K : Integer; W : String) return Boolean is
+           (K in 1 .. N and then S (K).Kind = Delimiter and then Txt (K) = W);
+
+         function At_Top (K : Integer; W : String) return Boolean is
+           (K in 1 .. N and then Depth (K) = 0
+            and then (Is_Kw (K, W) or else Is_Del (K, W)));
+      begin
+         for K in 1 .. N loop
+            Depth (K) := D;
+            if Is_Del (K, "(") or else Is_Del (K, "[") then
+               D := D + 1;
+            elsif Is_Del (K, ")") or else Is_Del (K, "]") then
+               D := (if D > 0 then D - 1 else 0);
+            end if;
+         end loop;
+         for K in 1 .. N loop
+            if S (K).Kind = Identifier and then Lower (Txt (K)) = "ghost"
+              and then Depth (K) = 0
+              and then (Is_Kw (K - 1, "with") or else Is_Del (K - 1, ","))
+              and then not (Is_Del (K + 1, "=>") and then K + 2 <= N
+                            and then Lower (Txt (K + 2)) = "false")
+            then
+               declare
+                  W       : Natural := K - 1;
+                  J       : Natural;
+                  First   : Natural := 0;
+                  Last    : Positive := K;
+               begin
+                  while W >= 1 and then not At_Top (W, "with")
+                    and then not At_Top (W, ";")
+                  loop
+                     W := W - 1;
+                  end loop;
+                  if W >= 1 and then Is_Kw (W, "with") then
+                     J := W - 1;
+                     while J >= 1 loop
+                        exit when At_Top (J, ";") or else At_Top (J, "begin")
+                          or else At_Top (J, "declare")
+                          or else At_Top (J, "private")
+                          or else At_Top (J, "generic")
+                          or else At_Top (J, "package")
+                          or else (At_Top (J, "is")
+                                   and then not Is_Del (J + 1, "("));
+                        if At_Top (J, "procedure") or else At_Top (J, "function")
+                          or else At_Top (J, "type")
+                          or else At_Top (J, "subtype")
+                        then
+                           First := J;
+                           exit;
+                        end if;
+                        J := J - 1;
+                     end loop;
+                     if First = 0 and then not At_Top (J, "package") then
+                        First := J + 1;
+                     end if;
+                     while Last < N and then not At_Top (Last, ";") loop
+                        Last := Last + 1;
+                     end loop;
+                     declare
+                        Name_At : constant Positive :=
+                          (if Is_Kw (First, "procedure")
+                             or else Is_Kw (First, "function")
+                             or else Is_Kw (First, "type")
+                             or else Is_Kw (First, "subtype")
+                           then First + 1 else First);
+                     begin
+                        if First > 0 and then Name_At < K
+                          and then S (Name_At).Kind in Identifier
+                                                     | String_Literal
+                        then
+                           Names.Include (Lower (Txt (Name_At)));
+                           if Name_At = First then
+                              --  "A, B : T with Ghost" declares every name.
+                              declare
+                                 I : Positive := First + 2;
+                              begin
+                                 while I < K and then Is_Del (I - 1, ",") loop
+                                    Names.Include (Lower (Txt (I)));
+                                    I := I + 2;
+                                 end loop;
+                              end;
+                           end if;
+                           Ranges.Append
+                             (Byte_Range'(S (First).First, S (Last).Last));
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end;
+   end Scan_Ghost;
+
+   function Ghost_Names (Source : String) return Name_Sets.Set is
+      Names  : Name_Sets.Set;
+      Ranges : Range_Vectors.Vector;
+   begin
+      Scan_Ghost (Source, Names, Ranges);
+      return Names;
+   end Ghost_Names;
+
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector
    is
@@ -190,11 +327,13 @@ package body AdaMutant.Mutators is
          Seg_Skip   : array (1 .. N) of Boolean := [others => False];
          Seg_Pragma : array (1 .. N) of Boolean := [others => False];
          In_Default : array (1 .. N) of Boolean := [others => False];
+         In_Ghost   : array (1 .. N) of Boolean := [others => False];
 
          function Skipped (K : Positive) return Boolean is
            (Seg_Skip (Seg_Start (K)) or else Seg_Pragma (Seg_Start (K))
             or else In_Default (K)
-            or else (not Options.Mutate_Contracts and then In_Aspect (K)));
+            or else (not Options.Mutate_Contracts
+                     and then (In_Aspect (K) or else In_Ghost (K))));
 
          function Is_Declared_Bound (K : Positive) return Boolean;
          --  K is a bound of a range in the subtype of an object, component,
@@ -515,6 +654,117 @@ package body AdaMutant.Mutators is
                end;
             end if;
          end loop;
+
+         --  Pass 2c: ghost code (declarations and bodies of ghost entities
+         --  and statements calling or assigning them).  It only exists for
+         --  proof, so like contracts it is mutated only with
+         --  mutate_contracts.
+         declare
+            Names  : Name_Sets.Set := Options.Ghost_Names;
+            Ranges : Range_Vectors.Vector;
+
+            function Ghost (K : Positive) return Boolean is
+              (K <= N and then S (K).Kind in Identifier | String_Literal
+               and then Names.Contains (Lower (Txt (K))));
+
+            function Semicolon (From : Positive) return Positive is
+               J : Positive := From;
+            begin
+               while J < N and then not (Depth (J) = 0 and then Is_Del (J, ";"))
+               loop
+                  J := J + 1;
+               end loop;
+               return J;
+            end Semicolon;
+
+            procedure Mark (From, To : Positive) is
+            begin
+               for I in From .. To loop
+                  In_Ghost (I) := True;
+               end loop;
+            end Mark;
+         begin
+            Scan_Ghost (Source, Names, Ranges);
+            for R of Ranges loop
+               for I in 1 .. N loop
+                  if S (I).First in R.First .. R.Last then
+                     In_Ghost (I) := True;
+                  end if;
+               end loop;
+            end loop;
+            for K in 1 .. N loop
+               if (Is_Kw (K, "procedure") or else Is_Kw (K, "function"))
+                 and then Depth (K) = 0 and then not Is_Kw (K - 1, "with")
+                 and then Ghost (K + 1)
+               then
+                  declare
+                     J : Positive := K + 1;
+                  begin
+                     while J < N and then not (Depth (J) = 0
+                                               and then (Is_Kw (J, "is")
+                                                         or else Is_Del (J, ";")))
+                     loop
+                        J := J + 1;
+                     end loop;
+                     if Is_Kw (J, "is")
+                       and then not (Is_Del (J + 1, "(")
+                                     or else Is_Kw (J + 1, "null")
+                                     or else Is_Kw (J + 1, "abstract")
+                                     or else Is_Kw (J + 1, "separate")
+                                     or else Is_Kw (J + 1, "new"))
+                     then
+                        --  The body ends at the "end" of its own "begin";
+                        --  "end if", "end loop" and the like close other
+                        --  constructs.
+                        declare
+                           Level : Natural := 0;
+                        begin
+                           while J < N loop
+                              J := J + 1;
+                              if Is_Kw (J, "begin") or else Is_Kw (J, "do") then
+                                 Level := Level + 1;
+                              elsif Is_Kw (J, "end")
+                                and then not (Is_Kw (J + 1, "if")
+                                              or else Is_Kw (J + 1, "loop")
+                                              or else Is_Kw (J + 1, "case")
+                                              or else Is_Kw (J + 1, "record")
+                                              or else Is_Kw (J + 1, "select")
+                                              or else Is_Kw (J + 1, "return"))
+                                and then Level > 0
+                              then
+                                 Level := Level - 1;
+                                 exit when Level = 0;
+                              end if;
+                           end loop;
+                        end;
+                        Mark (K, Semicolon (J));
+                     else
+                        Mark (K, Semicolon (J));
+                     end if;
+                  end;
+               elsif Seg_Start (K) = K and then S (K).Kind = Identifier then
+                  declare
+                     J    : Positive := K;
+                     Name : Positive := K;
+                  begin
+                     while J < N and then (S (J).Kind = Identifier
+                                           or else Is_Del (J, "."))
+                     loop
+                        if S (J).Kind = Identifier then
+                           Name := J;
+                        end if;
+                        J := J + 1;
+                     end loop;
+                     if Ghost (Name)
+                       and then (Is_Del (J, "(") or else Is_Del (J, ";")
+                                 or else Is_Del (J, ":="))
+                     then
+                        Mark (K, Semicolon (K));
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end;
 
          --  Pass 3: mutations.
          for K in 1 .. N loop

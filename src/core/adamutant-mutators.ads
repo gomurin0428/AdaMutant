@@ -1,3 +1,4 @@
+with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
@@ -26,10 +27,19 @@ package AdaMutant.Mutators is
    function Parse (Text : String; Kind : out Mutator_Kind) return Boolean;
    --  Accepts the report name or the Ada identifier, case-insensitively.
 
+   package Name_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+
    type Scan_Options is record
       Enabled          : Mutator_Set := All_Mutators;
       Mutate_Contracts : Boolean := False;
+      --  Lower-case names of ghost entities declared outside the scanned
+      --  source (usually in its spec).
+      Ghost_Names      : Name_Sets.Set;
    end record;
+
+   function Ghost_Names (Source : String) return Name_Sets.Set;
+   --  Lower-case names of the subprograms, objects and types that Source
+   --  declares with the Ghost aspect.
 
    type Mutation is record
       Kind        : Mutator_Kind := Arithmetic_Operator;

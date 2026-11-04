@@ -79,7 +79,7 @@ break = 0
 | NumericLiteral | `0`→`1`, `1`→`0`, `n`→`n+1`, 実数 → `0.0`（宣言した部分型の範囲の上下限 `String (1 .. 6)` などは対象外） |
 | StringLiteral | `"abc"`→`""`, `""`→`"AdaMutant was here!"` |
 
-`with`/`use` 節、`pragma`、表現節（`for X'Size use ...`）、`digits`/`delta` は変異させません。サブプログラムの仮引数の既定値も、宣言と本体で一致していないとコンパイルできない（完全準拠）ため変異させません（`is null`、`is abstract`、式関数、ジェネリック仮サブプログラムの既定値は変異させます）。アスペクト（`Pre`, `Post`, `Type_Invariant` など）は `mutate_contracts = true` のときだけ変異させます。
+`with`/`use` 節、`pragma`、表現節（`for X'Size use ...`）、`digits`/`delta` は変異させません。サブプログラムの仮引数の既定値も、宣言と本体で一致していないとコンパイルできない（完全準拠）ため変異させません（`is null`、`is abstract`、式関数、ジェネリック仮サブプログラムの既定値は変異させます）。アスペクト（`Pre`, `Post`, `Type_Invariant` など）とゴーストコード（`Ghost` アスペクト付きで宣言されたサブプログラム・オブジェクト・型の宣言と本体、およびそれらを呼び出す・代入する文）は `mutate_contracts = true` のときだけ変異させます。ゴーストの名前は変異対象の `.adb` と、同じ名前の `.ads` から集めます。
 
 ### コメントで無効化
 

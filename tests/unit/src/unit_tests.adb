@@ -213,6 +213,39 @@ procedure Unit_Tests is
               "EqualityOperator >->>=|EqualityOperator >-><=|NumericLiteral 0->1",
               "aspects with mutate_contracts",
               (Mutate_Contracts => True, others => <>));
+      Expect ("package body P is "
+              & "function G (X : Integer) return Integer is (X + 1) with Ghost; "
+              & "procedure L (X : Integer) with Ghost; "
+              & "procedure L (X : Integer) is begin X := X - 1; end L; "
+              & "procedure Q (X : in out Integer) is begin "
+              & "L (X * 2); S.M (X * 3); X := X + 1; end Q; end P;",
+              "StatementDeletion X := X + 1;->null;|ArithmeticOperator +->-"
+              & "|NumericLiteral 1->0",
+              "ghost code is not mutated by default",
+              (Ghost_Names => Ghost_Names
+                 ("package S is procedure M (X : Integer) with Ghost; end S;"),
+               others => <>));
+      Expect ("package body P is "
+              & "function G (X : Integer) return Integer is (X + 1) with Ghost; "
+              & "procedure L (X : Integer) with Ghost; "
+              & "procedure L (X : Integer) is begin X := X - 1; end L; "
+              & "procedure Q (X : in out Integer) is begin "
+              & "L (X * 2); S.M (X * 3); X := X + 1; end Q; end P;",
+              "ArithmeticOperator +->-|NumericLiteral 1->0"
+              & "|StatementDeletion X := X - 1;->null;|ArithmeticOperator -->+"
+              & "|NumericLiteral 1->0|StatementDeletion L (X * 2);->null;"
+              & "|ArithmeticOperator *->/|NumericLiteral 2->3"
+              & "|StatementDeletion S.M (X * 3);->null;|ArithmeticOperator *->/"
+              & "|NumericLiteral 3->4|StatementDeletion X := X + 1;->null;"
+              & "|ArithmeticOperator +->-|NumericLiteral 1->0",
+              "ghost code with mutate_contracts",
+              (Mutate_Contracts => True, others => <>));
+      Expect ("package body P is procedure G with Ghost; "
+              & "procedure G is begin if A then null; end if; end; "
+              & "A, B : Integer with Ghost; C : Integer with Ghost => False; "
+              & "procedure Q is begin B := 1; C := 2; end Q; end P;",
+              "StatementDeletion C := 2;->null;|NumericLiteral 2->3",
+              "unnamed ghost body end, ghost object lists, Ghost => False");
       Expect ("package P is pragma Assert (X > 0); end P;", "",
               "pragmas are skipped even with mutate_contracts",
               (Mutate_Contracts => True, others => <>));
