@@ -14,6 +14,34 @@ package body AdaMutant.Reports is
    function Image (N : Integer) return String is
      (Ada.Strings.Fixed.Trim (N'Image, Ada.Strings.Both));
 
+   function One_Line (S : String) return String is
+      function Blank (C : Character) return Boolean is
+        (C = ' ' or else C = ASCII.HT);
+      function Break (C : Character) return Boolean is
+        (C = ASCII.LF or else C = ASCII.CR);
+      Result : Unbounded_String;
+      K      : Natural := S'First;
+   begin
+      while K <= S'Last loop
+         if Break (S (K)) then
+            while Length (Result) > 0
+              and then Blank (Element (Result, Length (Result)))
+            loop
+               Delete (Result, Length (Result), Length (Result));
+            end loop;
+            while K <= S'Last and then (Blank (S (K)) or else Break (S (K)))
+            loop
+               K := K + 1;
+            end loop;
+            Append (Result, ' ');
+         else
+            Append (Result, S (K));
+            K := K + 1;
+         end if;
+      end loop;
+      return To_String (Result);
+   end One_Line;
+
    function Json_String (S : String) return String is
       R : Unbounded_String := To_Unbounded_String ("""");
       K : Natural := S'First;
@@ -238,8 +266,10 @@ package body AdaMutant.Reports is
                          & Image (M.Start_Pos.Line) & ":"
                          & Image (M.Start_Pos.Column) & " "
                          & AdaMutant.Mutators.Name (M.Mutation.Kind));
-               Ada.Text_IO.Put_Line ("    - " & To_String (M.Original));
-               Ada.Text_IO.Put_Line ("    + " & To_String (M.Mutation.Replacement));
+               Ada.Text_IO.Put_Line
+                 ("    - " & One_Line (To_String (M.Original)));
+               Ada.Text_IO.Put_Line
+                 ("    + " & One_Line (To_String (M.Mutation.Replacement)));
             end if;
          end loop;
       end if;

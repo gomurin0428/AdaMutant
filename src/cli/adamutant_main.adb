@@ -123,8 +123,10 @@ procedure AdaMutant_Main is
                    & Image (M.Start_Pos.Line) & ":"
                    & Image (M.Start_Pos.Column) & " "
                    & AdaMutant.Mutators.Name (M.Mutation.Kind) & " "
-                   & To_String (M.Original) & " -> "
-                   & To_String (M.Mutation.Replacement)
+                   & AdaMutant.Reports.One_Line (To_String (M.Original))
+                   & " -> "
+                   & AdaMutant.Reports.One_Line
+                       (To_String (M.Mutation.Replacement))
                    & (if M.Status = Ignored then " (ignored)" else ""));
       end loop;
       Put_Line (Image (Natural (R.Mutants.Length)) & " mutants in"
