@@ -38,6 +38,23 @@ EXAMPLES = {
                   "    bytearray(1 << 30)\n"
                   "sys.exit(subprocess.call([os.path.join('bin', 'test_calculator')]))\n"},
     },
+    # The test takes one second per test running at the same time, so with
+    # a baseline measured alone the parallel mutant runs would time out.
+    "concurrent_baseline": {
+        "exit": 0, "example": "calculator", "min_timeout": 1,
+        "config": "timeout_ms = 0\n"
+                  "test = '{python} contended_test.py'\n",
+        "extra": {"contended_test.py":
+                  "import os, subprocess, sys, time\n"
+                  "d = os.path.join('..', 'running')\n"
+                  "os.makedirs(d, exist_ok=True)\n"
+                  "me = os.path.join(d, str(os.getpid()))\n"
+                  "open(me, 'w').close()\n"
+                  "time.sleep(0.5)\n"
+                  "time.sleep(len(os.listdir(d)))\n"
+                  "os.remove(me)\n"
+                  "sys.exit(subprocess.call([os.path.join('bin', 'test_calculator')]))\n"},
+    },
 }
 
 

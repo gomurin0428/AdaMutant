@@ -243,27 +243,65 @@ package body AdaMutant.Runner is
 
       procedure Baseline_Step
         (Name, Command : String; Timeout : Duration; Elapsed : out Duration;
-         Memory_Limit_Mb : Natural := 0)
+         Memory_Limit_Mb : Natural := 0; Slots : Positive := 1)
       is
-         Log : constant String := Join (Logs, "baseline-" & Name & ".log");
-         Res : constant Run_Result :=
-           Run (Command, Slot_Dir (1), Log, 0, Timeout, Memory_Limit_Mb);
+         --  The step runs in sandboxes 1 .. Slots at once, as the workers
+         --  will run mutants, so Elapsed (the slowest run) includes the
+         --  slowdown of running in parallel.
+         function Log (Slot : Positive) return String is
+           (Join (Logs, "baseline-" & Name
+                  & (if Slot = 1 then "" else "-" & Image (Slot)) & ".log"));
+
+         Results : array (1 .. Slots) of Run_Result;
+         Errors  : array (1 .. Slots) of Unbounded_String;
       begin
-         Elapsed := Res.Elapsed;
-         if Res.Timed_Out then
-            raise Run_Error with
-              "the " & Name & " command of the unmodified project timed out"
-              & " ('" & Command & "', log " & Log & ")";
-         elsif Res.Exit_Code /= 0 then
-            raise Run_Error with
-              "the " & Name & " command fails on the unmodified project"
-              & " (exit status" & Res.Exit_Code'Image & ", '" & Command
-              & "', log " & Log
-              & (if Memory_Limit_Mb > 0
-                 then ", test_memory_limit_mb =" & Memory_Limit_Mb'Image
-                 else "")
-              & ")" & ASCII.LF & Tail (Log, 20);
-         end if;
+         declare
+            task type Runner is
+               entry Start (Slot : Positive);
+            end Runner;
+
+            task body Runner is
+               Mine : Positive;
+            begin
+               accept Start (Slot : Positive) do
+                  Mine := Slot;
+               end Start;
+               Results (Mine) :=
+                 Run (Command, Slot_Dir (Mine), Log (Mine), 0, Timeout,
+                      Memory_Limit_Mb);
+            exception
+               when E : others =>
+                  Errors (Mine) := To_Unbounded_String
+                    (Ada.Exceptions.Exception_Message (E));
+            end Runner;
+
+            Runners : array (1 .. Slots) of Runner;
+         begin
+            for K in Runners'Range loop
+               Runners (K).Start (K);
+            end loop;
+         end;
+
+         Elapsed := 0.0;
+         for K in Results'Range loop
+            if Length (Errors (K)) > 0 then
+               raise Spawn_Error with To_String (Errors (K));
+            elsif Results (K).Timed_Out then
+               raise Run_Error with
+                 "the " & Name & " command of the unmodified project timed out"
+                 & " ('" & Command & "', log " & Log (K) & ")";
+            elsif Results (K).Exit_Code /= 0 then
+               raise Run_Error with
+                 "the " & Name & " command fails on the unmodified project"
+                 & " (exit status" & Results (K).Exit_Code'Image & ", '"
+                 & Command & "', log " & Log (K)
+                 & (if Memory_Limit_Mb > 0
+                    then ", test_memory_limit_mb =" & Memory_Limit_Mb'Image
+                    else "")
+                 & ")" & ASCII.LF & Tail (Log (K), 20);
+            end if;
+            Elapsed := Duration'Max (Elapsed, Results (K).Elapsed);
+         end loop;
       end Baseline_Step;
 
       protected Queue is
@@ -474,17 +512,6 @@ package body AdaMutant.Runner is
          Elapsed : Duration;
       begin
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
-         if Has_Test then
-            Baseline_Step ("test", To_String (S.Test), 0.0, Elapsed,
-                           S.Test_Memory_Limit_Mb);
-            Test_TO := Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
-         end if;
-         if Has_Prove then
-            Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed);
-            Prove_Ended := [others => Clock];
-            Prove_TO :=
-              Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
-         end if;
       end;
 
       --  A mutated file that no compilation of the build depends on can
@@ -526,6 +553,23 @@ package body AdaMutant.Runner is
       for Slot in 2 .. Slots loop
          Copy_Tree (Slot_Dir (1), Slot_Dir (Slot), String_Vectors.Empty_Vector);
       end loop;
+
+      declare
+         Elapsed : Duration;
+      begin
+         if Has_Test then
+            Baseline_Step ("test", To_String (S.Test), 0.0, Elapsed,
+                           S.Test_Memory_Limit_Mb, Slots);
+            Test_TO := Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+         end if;
+         if Has_Prove then
+            Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed,
+                           Slots => Slots);
+            Prove_Ended := [others => Clock];
+            Prove_TO :=
+              Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+         end if;
+      end;
 
       if Pending_Count > 0 then
          declare
