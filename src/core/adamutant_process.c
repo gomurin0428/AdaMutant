@@ -33,6 +33,7 @@ int adamutant_run (const char *command, const char *directory,
   DWORD wait, code = 0;
   ULONGLONG start;
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  BOOL job_ok = TRUE;
 
   *timed_out = 0;
   *elapsed_ms = 0;
@@ -93,14 +94,18 @@ int adamutant_run (const char *command, const char *directory,
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
   if (memory_limit > 0)
     {
+      if ((unsigned long long) memory_limit > (unsigned long long) (SIZE_T) -1)
+        job_ok = FALSE;
       limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
       limits.ProcessMemoryLimit = (SIZE_T) memory_limit;
     }
-  SetInformationJobObject (job, JobObjectExtendedLimitInformation, &limits,
-                           sizeof (limits));
+  if (!SetInformationJobObject (job, JobObjectExtendedLimitInformation,
+                                &limits, sizeof (limits))
+      && memory_limit > 0)
+    job_ok = FALSE;
 
   start = GetTickCount64 ();
-  if (!CreateProcessA (NULL, cmdline, NULL, NULL, TRUE,
+  if (!job_ok || !CreateProcessA (NULL, cmdline, NULL, NULL, TRUE,
                        CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT
                        | CREATE_NO_WINDOW,
                        env, directory, &si.StartupInfo, &pi))
@@ -214,8 +219,14 @@ int adamutant_run (const char *command, const char *directory,
       if (memory_limit > 0)
         {
           struct rlimit rl;
-          rl.rlim_cur = (rlim_t) memory_limit;
-          rl.rlim_max = (rlim_t) memory_limit;
+          if (getrlimit (RLIMIT_AS, &rl) != 0)
+            _exit (127);
+          /* An inherited hard limit cannot be raised; a lower one wins.  */
+          if (rl.rlim_max == RLIM_INFINITY
+              || (rlim_t) memory_limit < rl.rlim_max)
+            rl.rlim_cur = (rlim_t) memory_limit;
+          else
+            rl.rlim_cur = rl.rlim_max;
           if (setrlimit (RLIMIT_AS, &rl) != 0)
             _exit (127);
         }

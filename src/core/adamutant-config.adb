@@ -243,7 +243,9 @@ package body AdaMutant.Config is
          elsif Full = "build_timeout_ms" then
             C.Build_Timeout_Ms := Integer_Value;
          elsif Full = "test_memory_limit_mb" then
-            C.Test_Memory_Limit_Mb := Integer_Value;
+            C.Test_Memory_Limit_Mb :=
+              Integer_Value
+                (if Standard'Address_Size = 32 then 4095 else Natural'Last);
          elsif Full = "mutators" then
             Mutators_List := Array_Value;
             Have_Mutators := True;

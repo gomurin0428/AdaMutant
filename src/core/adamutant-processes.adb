@@ -45,7 +45,11 @@ package body AdaMutant.Processes is
       if Code = Spawn_Failed then
          raise Spawn_Error with
            "cannot run '" & Command & "' in " & Directory
-           & " (log file " & Log_File & ")";
+           & " (log file " & Log_File
+           & (if Memory_Limit_Mb > 0
+              then ", memory limit" & Memory_Limit_Mb'Image & " MB"
+              else "")
+           & ")";
       end if;
       return (Exit_Code => Integer (Code),
               Timed_Out => T_Out /= 0,
