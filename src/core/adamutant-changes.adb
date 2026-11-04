@@ -44,6 +44,52 @@ package body AdaMutant.Changes is
      (S'Length >= Prefix'Length
       and then S (S'First .. S'First + Prefix'Length - 1) = Prefix);
 
+   --  A path as git prints it: either verbatim or a C-style quoted string.
+   function Unquote (Path : String) return String is
+      R : Unbounded_String;
+      K : Positive;
+   begin
+      if Path'Length < 2 or else Path (Path'First) /= '"'
+        or else Path (Path'Last) /= '"'
+      then
+         return Path;
+      end if;
+      K := Path'First + 1;
+      while K < Path'Last loop
+         if Path (K) = '\' and then K + 1 < Path'Last then
+            K := K + 1;
+            case Path (K) is
+               when 'a' => Append (R, ASCII.BEL);
+               when 'b' => Append (R, ASCII.BS);
+               when 'f' => Append (R, ASCII.FF);
+               when 'n' => Append (R, ASCII.LF);
+               when 'r' => Append (R, ASCII.CR);
+               when 't' => Append (R, ASCII.HT);
+               when 'v' => Append (R, ASCII.VT);
+               when '0' .. '3' =>
+                  if K + 2 < Path'Last
+                    and then Path (K + 1) in '0' .. '7'
+                    and then Path (K + 2) in '0' .. '7'
+                  then
+                     Append (R, Character'Val
+                       ((Character'Pos (Path (K)) - Character'Pos ('0')) * 64
+                        + (Character'Pos (Path (K + 1))
+                           - Character'Pos ('0')) * 8
+                        + Character'Pos (Path (K + 2)) - Character'Pos ('0')));
+                     K := K + 2;
+                  else
+                     Append (R, Path (K));
+                  end if;
+               when others => Append (R, Path (K));
+            end case;
+         else
+            Append (R, Path (K));
+         end if;
+         K := K + 1;
+      end loop;
+      return To_String (R);
+   end Unquote;
+
    function Parse_Diff (Diff : String) return Change_Maps.Map is
       Result   : Change_Maps.Map;
       Current  : Unbounded_String;
@@ -105,14 +151,7 @@ package body AdaMutant.Changes is
                Path : constant String := L (L'First + 4 .. L'Last);
             begin
                In_File := Path /= "/dev/null";
-               if Path'Length >= 2 and then Path (Path'First) = '"'
-                 and then Path (Path'Last) = '"'
-               then
-                  Current := To_Unbounded_String
-                    (Path (Path'First + 1 .. Path'Last - 1));
-               else
-                  Current := To_Unbounded_String (Path);
-               end if;
+               Current := To_Unbounded_String (Unquote (Path));
             end;
          elsif Starts_With (L, "diff ") then
             In_File := False;
@@ -162,12 +201,24 @@ package body AdaMutant.Changes is
       Base   : Natural := 0;
       Result : Change_Maps.Map;
 
-      procedure Untracked (Path : String) is
+      --  NUL-separated paths, as "git ls-files -z" prints them.
+      procedure Add_Untracked (List : String) is
+         First : Positive := List'First;
       begin
-         if Path /= "" then
-            Add (Result, Path, (1, Positive'Last));
-         end if;
-      end Untracked;
+         for K in List'Range loop
+            if List (K) = ASCII.NUL or else K = List'Last then
+               declare
+                  Last : constant Natural :=
+                    (if List (K) = ASCII.NUL then K - 1 else K);
+               begin
+                  if Last >= First then
+                     Add (Result, List (First .. Last), (1, Positive'Last));
+                  end if;
+               end;
+               First := K + 1;
+            end if;
+         end loop;
+      end Add_Untracked;
    begin
       if Ref = "" or else Ref (Ref'First) = '-' then
          raise Change_Error with "invalid revision '" & Ref & "'";
@@ -199,8 +250,7 @@ package body AdaMutant.Changes is
                  & " --relative " & Out_Text (Out_Text'First .. Base - 1)
                  & " --"));
       end;
-      For_Each_Line (Git ("ls-files --others --exclude-standard"),
-                     Untracked'Access);
+      Add_Untracked (Git ("ls-files -z --others --exclude-standard"));
       return Result;
    end Changed_Since;
 

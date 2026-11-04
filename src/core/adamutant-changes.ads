@@ -18,7 +18,8 @@ package AdaMutant.Changes is
 
    function Parse_Diff (Diff : String) return Change_Maps.Map;
    --  The added and modified lines of the new side of a unified diff made
-   --  with --no-prefix (as "git diff -U0 --no-prefix" writes it).  Deleted
+   --  with --no-prefix (as "git diff -U0 --no-prefix" writes it), with
+   --  C-style quoted paths decoded.  Deleted
    --  files and pure deletions add nothing.
 
    function Touches

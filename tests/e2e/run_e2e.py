@@ -167,6 +167,19 @@ def check_since():
             errors.append(f"untracked file not mutated: {pending}")
         if "src/calculator.ads" in proc.stdout:
             errors.append("an unchanged file was scanned")
+        run = subprocess.run([str(EXE), "run", "--since", "main"], cwd=work,
+                             text=True, capture_output=True)
+        report = work / ".adamutant" / "reports" / "mutation-report.json"
+        if not report.exists():
+            errors.append(f"run --since wrote no report: {run.stdout}{run.stderr}")
+        else:
+            got = statuses(json.loads(report.read_text()))
+            ran = sorted({k.split()[0].rsplit(":", 1)[0] for k, v in got.items()
+                          if v != "Ignored"})
+            if ran != pending:
+                errors.append(f"run --since ran {ran}, expected {pending}")
+            if "Pending" in got.values():
+                errors.append("run --since left pending mutants")
         bad = subprocess.run([str(EXE), "list", "--since", "no-such-ref"],
                              cwd=work, text=True, capture_output=True)
         if bad.returncode != 1 or "--since" not in bad.stderr:

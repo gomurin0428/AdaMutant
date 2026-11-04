@@ -408,11 +408,18 @@ procedure Unit_Tests is
         & "@@ -1 +1,2 @@" & LF
         & "-x" & LF
         & "+y" & LF
-        & "+z";
+        & "+z" & LF
+        & "--- ""src/q\""\\\303\251.adb""" & LF
+        & "+++ ""src/q\""\\\303\251.adb""" & LF
+        & "@@ -1 +1 @@" & LF
+        & "-x" & LF
+        & "+y";
       M : constant Change_Maps.Map := Parse_Diff (Diff);
    begin
-      Check (Natural (M.Length) = 2 and then M.Contains ("src/a.adb")
-             and then M.Contains ("src/b c.adb"),
+      Check (Natural (M.Length) = 3 and then M.Contains ("src/a.adb")
+             and then M.Contains ("src/b c.adb")
+             and then M.Contains ("src/q""\" & Character'Val (16#C3#)
+                                  & Character'Val (16#A9#) & ".adb"),
              "diff files: changed ones, not deleted ones, quotes removed",
              M.Length'Image);
       Check (Touches (M, "src/a.adb", 3, 3)
