@@ -3,7 +3,9 @@
  *  Runs a shell command in a directory, redirects stdout and stderr to a log
  *  file, enforces a timeout and kills the whole process tree afterwards
  *  (process group on POSIX, job object on Windows), so test runners that
- *  start helper processes cannot leak them or keep a sandbox busy.  */
+ *  start helper processes cannot leak them or keep a sandbox busy.  A
+ *  non-zero memory limit caps the address space (POSIX) or the committed
+ *  memory (Windows) of each process of the tree.  */
 
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +18,8 @@ enum { ADAMUTANT_SPAWN_FAILED = -1000 };
 
 int adamutant_run (const char *command, const char *directory,
                    const char *log_path, const char *extra_env,
-                   int timeout_ms, int *timed_out, int *elapsed_ms)
+                   int timeout_ms, long long memory_limit,
+                   int *timed_out, int *elapsed_ms)
 {
   SECURITY_ATTRIBUTES sa = { sizeof (sa), NULL, TRUE };
   HANDLE log, nul, job;
@@ -88,6 +91,11 @@ int adamutant_run (const char *command, const char *directory,
   job = CreateJobObjectA (NULL, NULL);
   ZeroMemory (&limits, sizeof (limits));
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (memory_limit > 0)
+    {
+      limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+      limits.ProcessMemoryLimit = (SIZE_T) memory_limit;
+    }
   SetInformationJobObject (job, JobObjectExtendedLimitInformation, &limits,
                            sizeof (limits));
 
@@ -138,6 +146,7 @@ int adamutant_run (const char *command, const char *directory,
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -154,7 +163,8 @@ static long long now_ms (void)
 
 int adamutant_run (const char *command, const char *directory,
                    const char *log_path, const char *extra_env,
-                   int timeout_ms, int *timed_out, int *elapsed_ms)
+                   int timeout_ms, long long memory_limit,
+                   int *timed_out, int *elapsed_ms)
 {
   int log, nul, status = 0, count = 0, i, kept;
   size_t name_len;
@@ -201,6 +211,14 @@ int adamutant_run (const char *command, const char *directory,
   if (pid == 0)
     {
       setpgid (0, 0);
+      if (memory_limit > 0)
+        {
+          struct rlimit rl;
+          rl.rlim_cur = (rlim_t) memory_limit;
+          rl.rlim_max = (rlim_t) memory_limit;
+          if (setrlimit (RLIMIT_AS, &rl) != 0)
+            _exit (127);
+        }
       if (chdir (directory) != 0)
         _exit (127);
       if (nul >= 0)

@@ -8,6 +8,7 @@ package body AdaMutant.Processes is
    function C_Run
      (Command, Directory, Log_Path, Extra_Env : chars_ptr;
       Timeout_Ms : int;
+      Memory_Limit : Long_Long_Integer;
       Timed_Out  : access int;
       Elapsed_Ms : access int) return int
      with Import, Convention => C, External_Name => "adamutant_run";
@@ -17,7 +18,8 @@ package body AdaMutant.Processes is
       Directory : String;
       Log_File  : String;
       Mutant_Id : Natural;
-      Timeout   : Duration) return Run_Result
+      Timeout   : Duration;
+      Memory_Limit_Mb : Natural := 0) return Run_Result
    is
       Id_Image : constant String := Mutant_Id'Image;
       C_Cmd    : chars_ptr := New_String (Command);
@@ -34,6 +36,7 @@ package body AdaMutant.Processes is
       Code     : int;
    begin
       Code := C_Run (C_Cmd, C_Dir, C_Log, C_Env, Ms,
+                     Long_Long_Integer (Memory_Limit_Mb) * 1024 * 1024,
                      T_Out'Access, Elapsed'Access);
       Free (C_Cmd);
       Free (C_Dir);

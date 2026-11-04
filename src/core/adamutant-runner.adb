@@ -217,11 +217,12 @@ package body AdaMutant.Runner is
         (Join (Sandbox, Image (Slot)));
 
       procedure Baseline_Step
-        (Name, Command : String; Timeout : Duration; Elapsed : out Duration)
+        (Name, Command : String; Timeout : Duration; Elapsed : out Duration;
+         Memory_Limit_Mb : Natural := 0)
       is
          Log : constant String := Join (Logs, "baseline-" & Name & ".log");
          Res : constant Run_Result :=
-           Run (Command, Slot_Dir (1), Log, 0, Timeout);
+           Run (Command, Slot_Dir (1), Log, 0, Timeout, Memory_Limit_Mb);
       begin
          Elapsed := Res.Elapsed;
          if Res.Timed_Out then
@@ -232,7 +233,11 @@ package body AdaMutant.Runner is
             raise Run_Error with
               "the " & Name & " command fails on the unmodified project"
               & " (exit status" & Res.Exit_Code'Image & ", '" & Command
-              & "', log " & Log & ")" & ASCII.LF & Tail (Log, 20);
+              & "', log " & Log
+              & (if Memory_Limit_Mb > 0
+                 then ", test_memory_limit_mb =" & Memory_Limit_Mb'Image
+                 else "")
+              & ")" & ASCII.LF & Tail (Log, 20);
          end if;
       end Baseline_Step;
 
@@ -304,7 +309,8 @@ package body AdaMutant.Runner is
 
          function Step (Name, Command : String; Timeout : Duration)
            return Run_Result is
-           (Run (Command, Dir, Log_Base & "-" & Name & ".log", M.Id, Timeout));
+           (Run (Command, Dir, Log_Base & "-" & Name & ".log", M.Id, Timeout,
+                 (if Name = "test" then S.Test_Memory_Limit_Mb else 0)));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          declare
@@ -444,7 +450,8 @@ package body AdaMutant.Runner is
       begin
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
          if Has_Test then
-            Baseline_Step ("test", To_String (S.Test), 0.0, Elapsed);
+            Baseline_Step ("test", To_String (S.Test), 0.0, Elapsed,
+                           S.Test_Memory_Limit_Mb);
             Test_TO := Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
          end if;
          if Has_Prove then

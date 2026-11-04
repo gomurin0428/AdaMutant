@@ -14,10 +14,13 @@ package AdaMutant.Processes is
       Directory : String;
       Log_File  : String;
       Mutant_Id : Natural;
-      Timeout   : Duration) return Run_Result;
+      Timeout   : Duration;
+      Memory_Limit_Mb : Natural := 0) return Run_Result;
    --  Runs Command with the platform shell (/bin/sh -c, or cmd.exe /c on
    --  Windows) in Directory, with stdout and stderr written to Log_File and
    --  ADAMUTANT_MUTANT_ID set to Mutant_Id.  A Timeout of 0.0 means none.
+   --  A Memory_Limit_Mb other than 0 caps the memory of each process; an
+   --  allocation beyond it fails (Storage_Error in Ada programs).
    --  The whole process tree is killed when the command ends or times out.
 
 end AdaMutant.Processes;

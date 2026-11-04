@@ -242,6 +242,8 @@ package body AdaMutant.Config is
             C.Timeout_Ms := Integer_Value;
          elsif Full = "build_timeout_ms" then
             C.Build_Timeout_Ms := Integer_Value;
+         elsif Full = "test_memory_limit_mb" then
+            C.Test_Memory_Limit_Mb := Integer_Value;
          elsif Full = "mutators" then
             Mutators_List := Array_Value;
             Have_Mutators := True;
@@ -392,6 +394,7 @@ package body AdaMutant.Config is
       & "# concurrency = 4" & LF
       & "timeout_factor = 1.5" & LF
       & "timeout_ms = 5000" & LF
+      & "# test_memory_limit_mb = 2048" & LF
       & "# mutators = [""ArithmeticOperator"", ""EqualityOperator""]" & LF
       & "# exclude_mutators = [""StringLiteral""]" & LF
       & "mutate_contracts = false" & LF
