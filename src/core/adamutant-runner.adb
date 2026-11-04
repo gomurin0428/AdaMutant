@@ -335,7 +335,7 @@ package body AdaMutant.Runner is
          function Step (Name, Command : String; Timeout : Duration)
            return Run_Result is
            (Run (Command, Dir, Log_Base & "-" & Name & ".log", M.Id, Timeout,
-                 (if Name = "test" then S.Test_Memory_Limit_Mb else 0)));
+                 (if Name = "test" then S.Test_Memory_Limit_Mb else 0), Rel));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          declare

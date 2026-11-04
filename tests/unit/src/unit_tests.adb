@@ -364,6 +364,18 @@ procedure Unit_Tests is
       Check (R.Exit_Code = 0, "mutant id overrides the parent environment");
       Ada.Environment_Variables.Clear ("ADAMUTANT_MUTANT_ID");
 
+      Ada.Environment_Variables.Set ("ADAMUTANT_MUTANT_FILE", "old.adb");
+      R := Run ("test ""$ADAMUTANT_MUTANT_ID:$ADAMUTANT_MUTANT_FILE"""
+                & " = ""7:src/a b.adb""",
+                Tmp, Log, 7, 10.0, Mutant_File => "src/a b.adb");
+      Check (R.Exit_Code = 0, "mutant file and id are both set");
+      R := Run ("test ""$ADAMUTANT_MUTANT_FILE"" = 'src/a" & ASCII.LF & "b.adb'",
+                Tmp, Log, 7, 10.0, Mutant_File => "src/a" & ASCII.LF & "b.adb");
+      Check (R.Exit_Code = 0, "a line feed in the mutant file is kept");
+      R := Run ("test -z ""$ADAMUTANT_MUTANT_FILE""", Tmp, Log, 0, 10.0);
+      Check (R.Exit_Code = 0, "no mutant file empties the variable");
+      Ada.Environment_Variables.Clear ("ADAMUTANT_MUTANT_FILE");
+
       R := Run ("sleep 5", Tmp, Log, 0, 0.3);
       Check (R.Timed_Out, "timeout");
    end Test_Processes;

@@ -12,9 +12,38 @@
 
 enum { ADAMUTANT_SPAWN_FAILED = -1000 };
 
+/* EXTRA_ENV is a block of NUL-terminated NAME=VALUE entries ended by an
+   empty entry (so values may hold any character but NUL); tell whether
+   ENTRY of the current environment is overridden by one of them.  */
+static int overridden (const char *entry, const char *extra_env,
+                       int (*same) (const char *, const char *, size_t))
+{
+  const char *p;
+  size_t name_len;
+
+  for (p = extra_env; *p != '\0'; p += strlen (p) + 1)
+    {
+      name_len = strcspn (p, "=");
+      if (p[name_len] == '=' && same (entry, p, name_len + 1) == 0)
+        return 1;
+    }
+  return 0;
+}
+
+
 #ifdef _WIN32
 
 #include <windows.h>
+
+/* Size of the EXTRA_ENV block without its final empty entry.  */
+static size_t block_length (const char *extra_env)
+{
+  const char *p = extra_env;
+
+  while (*p != '\0')
+    p += strlen (p) + 1;
+  return (size_t) (p - extra_env);
+}
 
 int adamutant_run (const char *command, const char *directory,
                    const char *log_path, const char *extra_env,
@@ -28,7 +57,7 @@ int adamutant_run (const char *command, const char *directory,
   SIZE_T attr_size = 0;
   HANDLE inherit[2];
   char *cmdline, *env, *penv;
-  size_t env_len, extra_len, name_len, kept;
+  size_t env_len, extra_len, kept;
   char *entry;
   DWORD wait, code = 0;
   ULONGLONG start;
@@ -45,25 +74,24 @@ int adamutant_run (const char *command, const char *directory,
   nul = CreateFileA ("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                      &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
-  /* Environment block: the current environment without any variable named
-     like EXTRA_ENV, then EXTRA_ENV.  Names are case-insensitive here.  */
+  /* Environment block: the current environment without the variables
+     EXTRA_ENV sets, then those of EXTRA_ENV.  Names are case-insensitive
+     here.  */
   penv = GetEnvironmentStringsA ();
   for (env_len = 0; penv[env_len] != '\0' || penv[env_len + 1] != '\0';
        env_len++)
     ;
   env_len += 1;
-  extra_len = strlen (extra_env);
-  name_len = strcspn (extra_env, "=") + 1;
-  env = malloc (env_len + extra_len + 2);
+  extra_len = block_length (extra_env);
+  env = malloc (env_len + extra_len + 1);
   kept = 0;
   for (entry = penv; *entry != '\0'; entry += strlen (entry) + 1)
-    if (_strnicmp (entry, extra_env, name_len) != 0)
+    if (!overridden (entry, extra_env, _strnicmp))
       {
         memcpy (env + kept, entry, strlen (entry) + 1);
         kept += strlen (entry) + 1;
       }
   memcpy (env + kept, extra_env, extra_len + 1);
-  env[kept + extra_len + 1] = '\0';
   FreeEnvironmentStringsA (penv);
 
   cmdline = malloc (strlen (command) + 32);
@@ -171,9 +199,9 @@ int adamutant_run (const char *command, const char *directory,
                    int timeout_ms, long long memory_limit,
                    int *timed_out, int *elapsed_ms)
 {
-  int log, nul, status = 0, count = 0, i, kept;
-  size_t name_len;
+  int log, nul, status = 0, count = 0, extra_count = 0, i, kept;
   char **envp;
+  const char *p;
   char *argv[4];
   pid_t pid, r;
   long long start;
@@ -191,13 +219,15 @@ int adamutant_run (const char *command, const char *directory,
      calls async-signal-safe functions (the parent runs Ada tasks).  */
   while (environ[count] != NULL)
     count++;
-  envp = malloc ((count + 2) * sizeof (char *));
-  name_len = strcspn (extra_env, "=") + 1;
+  for (p = extra_env; *p != '\0'; p += strlen (p) + 1)
+    extra_count++;
+  envp = malloc ((count + extra_count + 1) * sizeof (char *));
   for (i = 0, kept = 0; i < count; i++)
-    if (strncmp (environ[i], extra_env, name_len) != 0)
+    if (!overridden (environ[i], extra_env, strncmp))
       envp[kept++] = environ[i];
-  envp[kept] = (char *) extra_env;
-  envp[kept + 1] = NULL;
+  for (p = extra_env; *p != '\0'; p += strlen (p) + 1)
+    envp[kept++] = (char *) p;
+  envp[kept] = NULL;
   argv[0] = "/bin/sh";
   argv[1] = "-c";
   argv[2] = (char *) command;
