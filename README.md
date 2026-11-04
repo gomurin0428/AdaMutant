@@ -30,6 +30,7 @@ adamutant init                 # adamutant.toml のひな形を作る
 adamutant list                 # 作られるミュータントの一覧（実行はしない）
 adamutant run                  # 実行してレポートを出す
 adamutant run --mutate 'src/parser*.adb' --concurrency 4
+adamutant run --since origin/main   # PR で変更した行だけ
 ```
 
 | オプション | 意味 |
@@ -37,7 +38,10 @@ adamutant run --mutate 'src/parser*.adb' --concurrency 4
 | `--config FILE` | 設定ファイル（既定 `adamutant.toml`）。プロジェクトルートは設定ファイルのあるディレクトリ |
 | `--mutate GLOB` | 対象ファイルをさらに絞る（複数指定可） |
 | `--concurrency N` | 並列サンドボックス数 |
+| `--since REF` | git のリビジョン REF と HEAD のマージベースから変更された行だけを変異させる（下記） |
 | `--keep-sandbox` | 終了後も `.adamutant/sandbox` を残す（調査用） |
+
+`--since` は Stryker.NET の `--since` と同じく PR の CI 向けです。`git merge-base REF HEAD` からの差分（コミット済み・未コミットの両方）と、無視されていない未追跡ファイルを対象にします。変更のないファイルは読み込まず、変更のあるファイルでも変更行にかからないミュータントは `Ignored`（理由 `unchanged since REF`）になるので、スコアは変更行のミュータントだけで計算されます。仕様（`.ads`）だけを変えた場合でも本体のミュータントは対象になりません。CI では履歴が必要なので、GitHub Actions なら `actions/checkout` に `fetch-depth: 0` を指定してください。
 
 終了コード: 0 = 成功、1 = エラー（設定ミス、元のプロジェクトのビルド・テスト失敗など）、2 = スコアが `break` しきい値未満。
 
