@@ -6,7 +6,8 @@ package body AdaMutant.Processes is
    Spawn_Failed : constant := -1000;
 
    function C_Run
-     (Command, Directory, Log_Path, Extra_Env : chars_ptr;
+     (Command, Directory, Log_Path : chars_ptr;
+      Extra_Env  : char_array;
       Timeout_Ms : int;
       Memory_Limit : Long_Long_Integer;
       Timed_Out  : access int;
@@ -26,9 +27,10 @@ package body AdaMutant.Processes is
       C_Cmd    : chars_ptr := New_String (Command);
       C_Dir    : chars_ptr := New_String (Directory);
       C_Log    : chars_ptr := New_String (Log_File);
-      C_Env    : chars_ptr := New_String
+      --  NUL-terminated entries ended by an empty one (To_C adds its NUL)
+      C_Env    : constant char_array := To_C
         ("ADAMUTANT_MUTANT_ID=" & Id_Image (Id_Image'First + 1 .. Id_Image'Last)
-         & ASCII.LF & "ADAMUTANT_MUTANT_FILE=" & Mutant_File);
+         & ASCII.NUL & "ADAMUTANT_MUTANT_FILE=" & Mutant_File & ASCII.NUL);
       T_Out    : aliased int := 0;
       Elapsed  : aliased int := 0;
       Ms       : constant int :=
@@ -43,7 +45,6 @@ package body AdaMutant.Processes is
       Free (C_Cmd);
       Free (C_Dir);
       Free (C_Log);
-      Free (C_Env);
       if Code = Spawn_Failed then
          raise Spawn_Error with
            "cannot run '" & Command & "' in " & Directory
