@@ -53,7 +53,9 @@ package body AdaMutant.Mutators is
             return False;
          end if;
          for C of S loop
-            if Big (Digit (C)) >= Base or else V > (Big'Last - 15) / Base then
+            if Big (Digit (C)) >= Base
+              or else V > (Big'Last - Big (Digit (C))) / Base
+            then
                return False;
             end if;
             V := V * Base + Big (Digit (C));
