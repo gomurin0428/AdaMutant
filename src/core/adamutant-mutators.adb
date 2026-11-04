@@ -31,6 +31,119 @@ package body AdaMutant.Mutators is
       return R (1 .. Last);
    end Squash;
 
+   function Numeric_Mutation (Text : String) return String is
+      subtype Big is Long_Long_Integer;
+      Clean   : constant String := Squash (Text);
+      Open    : Natural := 0;
+      Close   : Natural := 0;
+      Mark    : Natural := 0;
+      Is_Real : Boolean := False;
+      Upper   : Boolean := True;
+
+      function Digit (C : Character) return Natural is
+        (case C is
+            when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
+            when 'a' .. 'f' => Character'Pos (C) - Character'Pos ('a') + 10,
+            when others     => 16);
+
+      function Value (S : String; Base : Big; V : out Big) return Boolean is
+      begin
+         V := 0;
+         if S'Length = 0 then
+            return False;
+         end if;
+         for C of S loop
+            if Big (Digit (C)) >= Base or else V > (Big'Last - 15) / Base then
+               return False;
+            end if;
+            V := V * Base + Big (Digit (C));
+         end loop;
+         return True;
+      end Value;
+
+      function Image (V : Big; Base : Big) return String is
+         Hex : constant String :=
+           (if Upper then "0123456789ABCDEF" else "0123456789abcdef");
+      begin
+         if V < Base then
+            return [1 => Hex (Hex'First + Natural (V))];
+         end if;
+         return Image (V / Base, Base)
+           & Hex (Hex'First + Natural (V mod Base));
+      end Image;
+   begin
+      for C of Text loop
+         if C in 'a' .. 'f' then
+            Upper := False;
+         end if;
+      end loop;
+      for I in Clean'Range loop
+         case Clean (I) is
+            when '#' =>
+               if Open = 0 then
+                  Open := I;
+               elsif Close = 0 then
+                  Close := I;
+               end if;
+            when '.' =>
+               Is_Real := True;
+            when 'e' =>
+               if Mark = 0 and then (Open = 0 or else Close /= 0) then
+                  Mark := I;
+               end if;
+            when others =>
+               null;
+         end case;
+      end loop;
+      if Open /= 0 and then Close = 0 then
+         return "";
+      end if;
+      declare
+         Mantissa : constant String :=
+           (if Open /= 0 then Clean (Open + 1 .. Close - 1)
+            elsif Mark /= 0 then Clean (Clean'First .. Mark - 1)
+            else Clean);
+         Exponent : constant String :=
+           (if Mark = 0 then ""
+            elsif Mark < Clean'Last and then Clean (Mark + 1) = '+'
+            then Clean (Mark + 2 .. Clean'Last)
+            else Clean (Mark + 1 .. Clean'Last));
+         Base  : Big := 10;
+         Power : Big := 0;
+         V     : Big;
+      begin
+         if Is_Real then
+            return (if (for all C of Mantissa => C in '0' | '.') then "1.0"
+                    else "0.0");
+         end if;
+         if (Open /= 0
+             and then (not Value (Clean (Clean'First .. Open - 1), 10, Base)
+                       or else Base not in 2 .. 16))
+           or else (Exponent /= "" and then not Value (Exponent, 10, Power))
+           or else (Mark /= 0 and then Exponent = "")
+           or else not Value (Mantissa, Base, V)
+         then
+            return "";
+         end if;
+         for I in 1 .. Power loop
+            if V > Big'Last / Base then
+               return "";
+            end if;
+            exit when V = 0;
+            V := V * Base;
+         end loop;
+         V := (if V = 0 then 1 elsif V = 1 then 0
+               elsif V = Big'Last then -1 else V + 1);
+         if V < 0 then
+            return "";
+         elsif Open /= 0 then
+            return Clean (Clean'First .. Open - 1) & "#" & Image (V, Base) & "#";
+         else
+            return Image (V, 10);
+         end if;
+      end;
+   end Numeric_Mutation;
+
    function Parse (Text : String; Kind : out Mutator_Kind) return Boolean is
    begin
       for K in Mutator_Kind loop
@@ -961,45 +1074,16 @@ package body AdaMutant.Mutators is
 
                   when Numeric_Literal =>
                      declare
-                        Digits_Only : constant Boolean :=
-                          (for all C of Lw => C in '0' .. '9' | '_');
-                        Plain_Real  : constant Boolean :=
-                          not Digits_Only
-                          and then (for all C of Lw => C in '0' .. '9' | '_' | '.');
-                        Clean       : String (1 .. Lw'Length);
-                        Len         : Natural := 0;
+                        R : constant String := Numeric_Mutation (Txt (K));
                      begin
-                        for C of Lw loop
-                           if C /= '_' then
-                              Len := Len + 1;
-                              Clean (Len) := C;
-                           end if;
-                        end loop;
                         if Is_Del (K - 1, "(") and then Is_Del (K - 3, "'") then
                            null;
                         elsif Is_Kw (K - 1, "digits") or else Is_Kw (K - 1, "delta") then
                            null;
                         elsif Is_Declared_Bound (K) then
                            null;
-                        elsif Digits_Only and then Len <= 18 then
-                           declare
-                              V : constant Long_Long_Integer :=
-                                Long_Long_Integer'Value (Clean (1 .. Len));
-                              R : constant String :=
-                                (if V = 0 then "1" elsif V = 1 then "0"
-                                 else Long_Long_Integer'Image (V + 1));
-                           begin
-                              Add (Numeric_Literal, K, K,
-                                   Ada.Strings.Fixed.Trim (R, Ada.Strings.Both));
-                           end;
-                        elsif Plain_Real then
-                           declare
-                              Zero : constant Boolean :=
-                                (for all C of Clean (1 .. Len) => C in '0' | '.');
-                           begin
-                              Add (Numeric_Literal, K, K,
-                                   (if Zero then "1.0" else "0.0"));
-                           end;
+                        elsif R /= "" then
+                           Add (Numeric_Literal, K, K, R);
                         end if;
                      end;
 
