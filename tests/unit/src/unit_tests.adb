@@ -177,8 +177,22 @@ procedure Unit_Tests is
       Expect ("package P is S : String := """"; end P;",
               "StringLiteral """"->""AdaMutant was here!""", "empty string literal");
       Expect ("package P is X : Float := 2.5; Y : Float := 1.0E3; Z : Integer := 0; end P;",
-              "NumericLiteral 2.5->0.0|NumericLiteral 0->1",
-              "plain reals and zero; exponent literals are kept");
+              "NumericLiteral 2.5->0.0|NumericLiteral 1.0E3->0.0"
+              & "|NumericLiteral 0->1",
+              "reals and zero");
+      Expect ("package P is A : Integer := 16#FF# + 2#1010# + 16#fe#;"
+              & " B : Integer := 1E6 + 8#7#E1 + 16#0#;"
+              & " C : Integer := 16#FFFF_FFFF_FFFF_FFFF#;"
+              & " D : Long_Long_Integer := 9223372036854775806;"
+              & " E : Long_Long_Integer := 9223372036854775807; end P;",
+              "NumericLiteral 16#FF#->16#100#|ArithmeticOperator +->-"
+              & "|NumericLiteral 2#1010#->2#1011#|ArithmeticOperator +->-"
+              & "|NumericLiteral 16#fe#->16#ff#"
+              & "|NumericLiteral 1E6->1000001|ArithmeticOperator +->-"
+              & "|NumericLiteral 8#7#E1->8#71#|ArithmeticOperator +->-"
+              & "|NumericLiteral 16#0#->16#1#"
+              & "|NumericLiteral 9223372036854775806->9223372036854775807",
+              "based and exponent integer literals");
    end Test_Operators;
 
    procedure Test_Conditions is
