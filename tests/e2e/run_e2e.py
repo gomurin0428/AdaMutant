@@ -26,6 +26,18 @@ EXAMPLES = {
         "output": "warning: src/unused.adb is not compiled by the build command",
     },
     "spark_counter": {"exit": 0, "killed_by": "proof"},
+    # Every mutant's test first allocates 1 GiB, which only the memory limit
+    # makes fail: without the limit some mutants would survive.
+    "memory_limit": {
+        "exit": 0, "example": "calculator",
+        "config": "test_memory_limit_mb = 256\n"
+                  "test = '{python} alloc_then_test.py'\n",
+        "extra": {"alloc_then_test.py":
+                  "import os, subprocess, sys\n"
+                  "if os.environ.get('ADAMUTANT_MUTANT_ID', '0') != '0':\n"
+                  "    bytearray(1 << 30)\n"
+                  "sys.exit(subprocess.call([os.path.join('bin', 'test_calculator')]))\n"},
+    },
 }
 
 
@@ -43,10 +55,17 @@ def run_example(name, spec, update):
     errors = []
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp) / name
-        shutil.copytree(ROOT / "examples" / name, work,
+        shutil.copytree(ROOT / "examples" / spec.get("example", name), work,
                         ignore=shutil.ignore_patterns(".adamutant", "obj", "bin", "lib"))
         for rel, text in spec.get("extra", {}).items():
             (work / rel).write_text(text)
+        if "config" in spec:
+            python = (f'"{sys.executable}"' if " " in sys.executable
+                      else sys.executable).replace("\\", "/")
+            config = work / "adamutant.toml"
+            lines = [line for line in config.read_text().splitlines(True)
+                     if not line.startswith("test =")]
+            config.write_text(spec["config"].format(python=python) + "".join(lines))
         before = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

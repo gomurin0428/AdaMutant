@@ -5,6 +5,7 @@ Ada / SPARK 向けのミューテーションテストツールです。.NET の
 - Ada 2022 までの字句解析器を内蔵（libadalang などの追加依存なし）
 - テストの失敗だけでなく **GNATprove の証明失敗でもミュータントを kill** できる（SPARK 向け）
 - サンドボックスを複数作って並列実行、タイムアウトしたテストはプロセスグループ（Windows はジョブオブジェクト）ごと終了
+- `test_memory_limit_mb` でテストの各プロセスのメモリを制限できます（POSIX は `RLIMIT_AS`、Windows はジョブオブジェクト）。ループ回数などを変えたミュータントが数 GB を確保すると、並列実行中にマシン全体がメモリ不足になり、ラン全体が落ちることがあります。上限を超えた確保は失敗し（Ada では `Storage_Error`）、そのミュータントは Killed になります。変更前のテストも同じ上限で実行するので、上限が小さすぎればその時点でエラーになります
 - レポート: コンソール表、単体で開ける HTML、[mutation-testing-report-schema](https://github.com/stryker-mutator/mutation-testing-elements) v2 の JSON（Stryker のダッシュボードでも読めます）
 
 ## 必要なもの
@@ -51,6 +52,7 @@ prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on"  # 0 以外な�
 concurrency = 4                             # 既定は CPU 数の半分
 timeout_factor = 1.5                        # テスト時間の上限 = 元の時間 * factor + timeout_ms
 timeout_ms = 5000
+test_memory_limit_mb = 2048                 # テスト 1 プロセスあたりのメモリ上限。既定 0 は無制限
 mutators = ["ArithmeticOperator", "EqualityOperator"]  # 省略時はすべて
 mutate_contracts = false                    # true で Pre/Post などのアスペクトも変異
 sandbox_exclude = [".git", "obj", "bin"]    # サンドボックスにコピーしないもの
