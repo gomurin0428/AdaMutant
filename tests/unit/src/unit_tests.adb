@@ -424,6 +424,9 @@ procedure Unit_Tests is
       Check (Json_String ("" & Character'Val (16#C3#) & Character'Val (16#A9#))
              = """" & Character'Val (16#C3#) & Character'Val (16#A9#) & """",
              "json keeps valid UTF-8");
+      Check (One_Line ("A  " & ASCII.CR & LF & "     or else B" & LF
+                       & "  and C  D") = "A or else B and C  D",
+             "one line joins lines, keeps other blanks");
    end Test_Json;
 
 begin

@@ -17,4 +17,8 @@ package AdaMutant.Reports is
    --  S as a quoted JSON string; bytes that are not valid UTF-8 are read
    --  as Latin-1.
 
+   function One_Line (S : String) return String;
+   --  S with each line break and the blanks around it replaced by one
+   --  space, for showing a mutation spanning several lines on one line.
+
 end AdaMutant.Reports;
