@@ -514,6 +514,30 @@ package body AdaMutant.Runner is
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
       end;
 
+      --  Counted before the NoCoverage check, which needs the files the
+      --  baseline test compiles too, so a few sandboxes may stay idle.
+      Slots := Positive'Max (1, Natural'Min (S.Concurrency, Pending_Count));
+      for Slot in 2 .. Slots loop
+         Copy_Tree (Slot_Dir (1), Slot_Dir (Slot), String_Vectors.Empty_Vector);
+      end loop;
+
+      declare
+         Elapsed : Duration;
+      begin
+         if Has_Test then
+            Baseline_Step ("test", To_String (S.Test), 0.0, Elapsed,
+                           S.Test_Memory_Limit_Mb, Slots);
+            Test_TO := Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+         end if;
+         if Has_Prove then
+            Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed,
+                           Slots => Slots);
+            Prove_Ended := [others => Clock];
+            Prove_TO :=
+              Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+         end if;
+      end;
+
       --  A mutated file that no compilation of the build depends on can
       --  never be detected; skip its mutants instead of reporting them as
       --  survivors.  Without any GNAT ALI file there is nothing to go by,
@@ -546,28 +570,6 @@ package body AdaMutant.Runner is
                   end if;
                end;
             end loop;
-         end if;
-      end;
-
-      Slots := Positive'Max (1, Natural'Min (S.Concurrency, Pending_Count));
-      for Slot in 2 .. Slots loop
-         Copy_Tree (Slot_Dir (1), Slot_Dir (Slot), String_Vectors.Empty_Vector);
-      end loop;
-
-      declare
-         Elapsed : Duration;
-      begin
-         if Has_Test then
-            Baseline_Step ("test", To_String (S.Test), 0.0, Elapsed,
-                           S.Test_Memory_Limit_Mb, Slots);
-            Test_TO := Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
-         end if;
-         if Has_Prove then
-            Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed,
-                           Slots => Slots);
-            Prove_Ended := [others => Clock];
-            Prove_TO :=
-              Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
          end if;
       end;
 
