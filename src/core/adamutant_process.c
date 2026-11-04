@@ -12,6 +12,27 @@
 
 enum { ADAMUTANT_SPAWN_FAILED = -1000 };
 
+/* EXTRA_ENV holds NAME=VALUE entries separated by line feeds; tell whether
+   ENTRY of the current environment is overridden by one of them.  */
+static int overridden (const char *entry, const char *extra_env,
+                       int (*same) (const char *, const char *, size_t))
+{
+  const char *p = extra_env;
+  size_t len, name_len;
+
+  while (*p != '\0')
+    {
+      len = strcspn (p, "\n");
+      name_len = strcspn (p, "=\n");
+      if (name_len < len && same (entry, p, name_len + 1) == 0)
+        return 1;
+      p += len;
+      if (*p == '\n')
+        p++;
+    }
+  return 0;
+}
+
 #ifdef _WIN32
 
 #include <windows.h>
@@ -28,7 +49,7 @@ int adamutant_run (const char *command, const char *directory,
   SIZE_T attr_size = 0;
   HANDLE inherit[2];
   char *cmdline, *env, *penv;
-  size_t env_len, extra_len, name_len, kept;
+  size_t env_len, extra_len, kept, i;
   char *entry;
   DWORD wait, code = 0;
   ULONGLONG start;
@@ -45,24 +66,27 @@ int adamutant_run (const char *command, const char *directory,
   nul = CreateFileA ("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                      &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
-  /* Environment block: the current environment without any variable named
-     like EXTRA_ENV, then EXTRA_ENV.  Names are case-insensitive here.  */
+  /* Environment block: the current environment without the variables
+     EXTRA_ENV sets, then those of EXTRA_ENV.  Names are case-insensitive
+     here.  */
   penv = GetEnvironmentStringsA ();
   for (env_len = 0; penv[env_len] != '\0' || penv[env_len + 1] != '\0';
        env_len++)
     ;
   env_len += 1;
   extra_len = strlen (extra_env);
-  name_len = strcspn (extra_env, "=") + 1;
   env = malloc (env_len + extra_len + 2);
   kept = 0;
   for (entry = penv; *entry != '\0'; entry += strlen (entry) + 1)
-    if (_strnicmp (entry, extra_env, name_len) != 0)
+    if (!overridden (entry, extra_env, _strnicmp))
       {
         memcpy (env + kept, entry, strlen (entry) + 1);
         kept += strlen (entry) + 1;
       }
   memcpy (env + kept, extra_env, extra_len + 1);
+  for (i = kept; i < kept + extra_len; i++)
+    if (env[i] == '\n')
+      env[i] = '\0';
   env[kept + extra_len + 1] = '\0';
   FreeEnvironmentStringsA (penv);
 
@@ -171,9 +195,8 @@ int adamutant_run (const char *command, const char *directory,
                    int timeout_ms, long long memory_limit,
                    int *timed_out, int *elapsed_ms)
 {
-  int log, nul, status = 0, count = 0, i, kept;
-  size_t name_len;
-  char **envp;
+  int log, nul, status = 0, count = 0, extra_count = 1, i, kept;
+  char **envp, *extra, *p;
   char *argv[4];
   pid_t pid, r;
   long long start;
@@ -191,13 +214,23 @@ int adamutant_run (const char *command, const char *directory,
      calls async-signal-safe functions (the parent runs Ada tasks).  */
   while (environ[count] != NULL)
     count++;
-  envp = malloc ((count + 2) * sizeof (char *));
-  name_len = strcspn (extra_env, "=") + 1;
+  extra = malloc (strlen (extra_env) + 1);
+  strcpy (extra, extra_env);
+  for (p = extra; *p != '\0'; p++)
+    if (*p == '\n')
+      extra_count++;
+  envp = malloc ((count + extra_count + 1) * sizeof (char *));
   for (i = 0, kept = 0; i < count; i++)
-    if (strncmp (environ[i], extra_env, name_len) != 0)
+    if (!overridden (environ[i], extra_env, strncmp))
       envp[kept++] = environ[i];
-  envp[kept] = (char *) extra_env;
-  envp[kept + 1] = NULL;
+  for (p = extra; *p != '\0'; )
+    {
+      envp[kept++] = p;
+      p += strcspn (p, "\n");
+      if (*p == '\n')
+        *p++ = '\0';
+    }
+  envp[kept] = NULL;
   argv[0] = "/bin/sh";
   argv[1] = "-c";
   argv[2] = (char *) command;
@@ -208,6 +241,7 @@ int adamutant_run (const char *command, const char *directory,
   if (pid < 0)
     {
       free (envp);
+      free (extra);
       close (log);
       if (nul >= 0)
         close (nul);
@@ -241,6 +275,7 @@ int adamutant_run (const char *command, const char *directory,
     }
   setpgid (pid, pid);
   free (envp);
+  free (extra);
   close (log);
   if (nul >= 0)
     close (nul);

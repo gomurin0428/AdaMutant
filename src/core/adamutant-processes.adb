@@ -19,14 +19,16 @@ package body AdaMutant.Processes is
       Log_File  : String;
       Mutant_Id : Natural;
       Timeout   : Duration;
-      Memory_Limit_Mb : Natural := 0) return Run_Result
+      Memory_Limit_Mb : Natural := 0;
+      Mutant_File : String := "") return Run_Result
    is
       Id_Image : constant String := Mutant_Id'Image;
       C_Cmd    : chars_ptr := New_String (Command);
       C_Dir    : chars_ptr := New_String (Directory);
       C_Log    : chars_ptr := New_String (Log_File);
       C_Env    : chars_ptr := New_String
-        ("ADAMUTANT_MUTANT_ID=" & Id_Image (Id_Image'First + 1 .. Id_Image'Last));
+        ("ADAMUTANT_MUTANT_ID=" & Id_Image (Id_Image'First + 1 .. Id_Image'Last)
+         & ASCII.LF & "ADAMUTANT_MUTANT_FILE=" & Mutant_File);
       T_Out    : aliased int := 0;
       Elapsed  : aliased int := 0;
       Ms       : constant int :=
