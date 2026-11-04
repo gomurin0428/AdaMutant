@@ -5,7 +5,7 @@ Ada / SPARK 向けのミューテーションテストツールです。.NET の
 - Ada 2022 までの字句解析器を内蔵（libadalang などの追加依存なし）
 - テストの失敗だけでなく **GNATprove の証明失敗でもミュータントを kill** できる（SPARK 向け）
 - サンドボックスを複数作って並列実行、タイムアウトしたテストはプロセスグループ（Windows はジョブオブジェクト）ごと終了
-- `test_memory_limit_mb` でテストの各プロセスのメモリを制限できます（POSIX は `RLIMIT_AS`、Windows はジョブオブジェクト）。ループ回数などを変えたミュータントが数 GB を確保すると、並列実行中にマシン全体がメモリ不足になり、ラン全体が落ちることがあります。上限を超えた確保は失敗し（Ada では `Storage_Error`）、そのミュータントは Killed になります。変更前のテストも同じ上限で実行するので、上限が小さすぎればその時点でエラーになります
+- `test_memory_limit_mb` でテストの各プロセスのメモリを制限できます（POSIX は `RLIMIT_AS`、Windows はジョブオブジェクト。macOS は `RLIMIT_AS` を受け付けないので、AdaMutant がテストのプロセスの物理メモリ（phys_footprint）を 10 ミリ秒ごとに調べます）。ループ回数などを変えたミュータントが数 GB を確保すると、並列実行中にマシン全体がメモリ不足になり、ラン全体が落ちることがあります。上限を超えた確保は失敗し（Ada では `Storage_Error`）、そのミュータントは Killed になります。macOS では上限を超えた時点でテストのプロセスをまとめて終了し、同じく Killed になります（ログに `adamutant: killed, a process exceeded test_memory_limit_mb` と残ります）。変更前のテストも同じ上限で実行するので、上限が小さすぎればその時点でエラーになります
 - レポート: コンソール表、単体で開ける HTML、[mutation-testing-report-schema](https://github.com/stryker-mutator/mutation-testing-elements) v2 の JSON（Stryker のダッシュボードでも読めます）
 
 ## 必要なもの

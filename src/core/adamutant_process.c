@@ -4,8 +4,9 @@
  *  file, enforces a timeout and kills the whole process tree afterwards
  *  (process group on POSIX, job object on Windows), so test runners that
  *  start helper processes cannot leak them or keep a sandbox busy.  A
- *  non-zero memory limit caps the address space (POSIX) or the committed
- *  memory (Windows) of each process of the tree.  */
+ *  non-zero memory limit caps the address space (POSIX), the physical
+ *  footprint (macOS) or the committed memory (Windows) of each process of
+ *  the tree.  */
 
 #include <stdlib.h>
 #include <string.h>
@@ -187,6 +188,30 @@ int adamutant_run (const char *command, const char *directory,
 
 extern char **environ;
 
+#ifdef __APPLE__
+
+#include <libproc.h>
+
+/* macOS rejects RLIMIT_AS (and RLIMIT_DATA) below the address space that
+   every process reserves at start, so the parent enforces the memory limit
+   instead: whether a process of GROUP has a physical footprint above
+   LIMIT bytes.  */
+static int group_exceeds (pid_t group, long long limit)
+{
+  pid_t pids[256];
+  struct rusage_info_v2 info;
+  int count, i;
+
+  count = proc_listpgrppids (group, pids, (int) sizeof pids);
+  for (i = 0; i < count && i < 256; i++)
+    if (proc_pid_rusage (pids[i], RUSAGE_INFO_V2, (rusage_info_t *) &info) == 0
+        && info.ri_phys_footprint > (unsigned long long) limit)
+      return 1;
+  return 0;
+}
+
+#endif
+
 static long long now_ms (void)
 {
   struct timespec ts;
@@ -246,6 +271,7 @@ int adamutant_run (const char *command, const char *directory,
   if (pid == 0)
     {
       setpgid (0, 0);
+#ifndef __APPLE__
       if (memory_limit > 0)
         {
           struct rlimit rl;
@@ -260,6 +286,7 @@ int adamutant_run (const char *command, const char *directory,
           if (setrlimit (RLIMIT_AS, &rl) != 0)
             _exit (127);
         }
+#endif
       if (chdir (directory) != 0)
         _exit (127);
       if (nul >= 0)
@@ -293,6 +320,24 @@ int adamutant_run (const char *command, const char *directory,
             ;
           break;
         }
+#ifdef __APPLE__
+      if (memory_limit > 0 && group_exceeds (pid, memory_limit))
+        {
+          static const char note[] =
+            "adamutant: killed, a process exceeded test_memory_limit_mb\n";
+          int fd = open (log_path, O_WRONLY | O_APPEND | O_CLOEXEC);
+
+          kill (-pid, SIGKILL);
+          while (waitpid (pid, &status, 0) < 0 && errno == EINTR)
+            ;
+          if (fd >= 0)
+            {
+              (void) write (fd, note, sizeof note - 1);
+              close (fd);
+            }
+          break;
+        }
+#endif
       nanosleep (&tick, NULL);
     }
   *elapsed_ms = (int) (now_ms () - start);
