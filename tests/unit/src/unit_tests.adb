@@ -2,6 +2,7 @@ with Ada.Command_Line;
 with Ada.Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO; use Ada.Text_IO;
+with AdaMutant.Changes;
 with AdaMutant.Config;
 with AdaMutant.Files;
 with AdaMutant.Lexer;
@@ -377,6 +378,61 @@ procedure Unit_Tests is
              P.Line'Image & P.Column'Image);
    end Test_Positions;
 
+   procedure Test_Changes is
+      use AdaMutant.Changes;
+      Diff : constant String :=
+        "diff --git src/a.adb src/a.adb" & LF
+        & "index 1..2 100644" & LF
+        & "--- src/a.adb" & LF
+        & "+++ src/a.adb" & LF
+        & "@@ -3 +3 @@ procedure P is" & LF
+        & "-   X := 1;" & LF
+        & "+   X := 2;" & LF
+        & "@@ -10,2 +10,0 @@" & LF
+        & "---  removed comment" & LF
+        & "-+++ removed" & LF
+        & "@@ -20,0 +19,3 @@" & LF
+        & "+++ added" & LF
+        & "+" & LF
+        & "+   Y := 3;" & ASCII.CR & LF
+        & "diff --git src/gone.adb src/gone.adb" & LF
+        & "deleted file mode 100644" & LF
+        & "--- src/gone.adb" & LF
+        & "+++ /dev/null" & LF
+        & "@@ -1,2 +0,0 @@" & LF
+        & "-a" & LF
+        & "-b" & LF
+        & "diff --git ""src/b c.adb"" ""src/b c.adb""" & LF
+        & "--- ""src/b c.adb""" & LF
+        & "+++ ""src/b c.adb""" & LF
+        & "@@ -1 +1,2 @@" & LF
+        & "-x" & LF
+        & "+y" & LF
+        & "+z" & LF
+        & "--- ""src/q\""\\\303\251.adb""" & LF
+        & "+++ ""src/q\""\\\303\251.adb""" & LF
+        & "@@ -1 +1 @@" & LF
+        & "-x" & LF
+        & "+y";
+      M : constant Change_Maps.Map := Parse_Diff (Diff);
+   begin
+      Check (Natural (M.Length) = 3 and then M.Contains ("src/a.adb")
+             and then M.Contains ("src/b c.adb")
+             and then M.Contains ("src/q""\" & Character'Val (16#C3#)
+                                  & Character'Val (16#A9#) & ".adb"),
+             "diff files: changed ones, not deleted ones, quotes removed",
+             M.Length'Image);
+      Check (Touches (M, "src/a.adb", 3, 3)
+             and then Touches (M, "src/a.adb", 1, 3)
+             and then not Touches (M, "src/a.adb", 4, 18)
+             and then Touches (M, "src/a.adb", 21, 25)
+             and then not Touches (M, "src/a.adb", 22, 25)
+             and then Touches (M, "src/b c.adb", 2, 2)
+             and then not Touches (M, "src/b c.adb", 3, 3)
+             and then not Touches (M, "src/other.adb", 1, 100),
+             "diff lines: modified and added, not removed");
+   end Test_Changes;
+
    procedure Test_Config is
       use AdaMutant.Config;
 
@@ -455,6 +511,7 @@ begin
       Test_Processes;
    end if;
    Test_Positions;
+   Test_Changes;
    Test_Config;
    Test_Json;
    Put_Line (Passed'Image & " passed," & Failed'Image & " failed");

@@ -31,6 +31,8 @@ procedure AdaMutant_Main is
       Put_Line ("  --config FILE       configuration file (default "
                 & AdaMutant.Config.Default_File_Name & ")");
       Put_Line ("  --mutate GLOB       only mutate matching files (repeatable)");
+      Put_Line ("  --since REF         only mutate lines changed since the merge");
+      Put_Line ("                      base of the git revision REF and HEAD");
       Put_Line ("  --concurrency N     number of parallel sandboxes");
       Put_Line ("  --keep-sandbox      keep .adamutant/sandbox after the run");
       Put_Line ("  --help, --version");
@@ -43,6 +45,7 @@ procedure AdaMutant_Main is
    Config_Path  : Unbounded_String :=
      To_Unbounded_String (AdaMutant.Config.Default_File_Name);
    Only         : AdaMutant.Files.String_Vectors.Vector;
+   Since        : Unbounded_String;
    Concurrency  : Natural := 0;
    Keep_Sandbox : Boolean := False;
 
@@ -66,6 +69,11 @@ procedure AdaMutant_Main is
                Config_Path := To_Unbounded_String (Value);
             elsif A = "--mutate" then
                Only.Append (Value);
+            elsif A = "--since" then
+               Since := To_Unbounded_String (Value);
+               if Length (Since) = 0 then
+                  raise Usage_Error with "--since needs a git revision";
+               end if;
             elsif A = "--concurrency" then
                begin
                   Concurrency := Natural'Value (Value);
@@ -115,7 +123,8 @@ procedure AdaMutant_Main is
    end Load;
 
    procedure Do_List is
-      R : constant Report := AdaMutant.Runner.Discover (Load, Only);
+      R : constant Report :=
+        AdaMutant.Runner.Discover (Load, Only, To_String (Since));
    begin
       for M of R.Mutants loop
          Put_Line ("#" & Image (M.Id) & " "
@@ -134,7 +143,7 @@ procedure AdaMutant_Main is
    end Do_List;
 
    procedure Do_Run is
-      R : Report := AdaMutant.Runner.Discover (Load, Only);
+      R : Report := AdaMutant.Runner.Discover (Load, Only, To_String (Since));
       Report_Dir : constant String := AdaMutant.Files.Join
         (To_String (R.Settings.Root), To_String (R.Settings.Report_Dir));
    begin

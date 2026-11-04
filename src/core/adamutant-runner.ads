@@ -9,11 +9,15 @@ package AdaMutant.Runner is
 
    function Discover
      (Settings : AdaMutant.Config.Configuration;
-      Only     : AdaMutant.Files.String_Vectors.Vector)
+      Only     : AdaMutant.Files.String_Vectors.Vector;
+      Since    : String := "")
       return AdaMutant.Results.Report;
    --  Mutants of the files selected by the configuration (and by Only, a
    --  list of globs, when it is not empty).  Mutants covered by adamutant
-   --  directives get the Ignored status, the others Pending.
+   --  directives get the Ignored status, the others Pending.  A Since other
+   --  than "" is a git revision: only files changed since its merge base
+   --  with HEAD are scanned, and their mutants on unchanged lines get the
+   --  Ignored status.  Raises Run_Error when git fails.
 
    function Build_Error (Log : String) return String;
    --  The first compiler error in the text of a build log (a GNAT line

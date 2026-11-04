@@ -116,6 +116,79 @@ def leftover_processes(name):
                           stdout=subprocess.PIPE, text=True).stdout.split()
 
 
+def git(work, *args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                    "-c", "commit.gpgsign=false", *args],
+                   cwd=work, check=True, capture_output=True)
+
+
+def edit_line(path, old, new):
+    path.write_text(path.read_text().replace(old, new, 1))
+
+
+def check_since():
+    """--since REF mutates only lines changed since the merge base."""
+    work = Path(tempfile.mkdtemp(prefix="adamutant-since-"))
+    try:
+        shutil.copytree(ROOT / "examples" / "calculator", work / "p",
+                        ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
+        work = work / "p"
+        src = work / "src" / "calculator.adb"
+        git(work, "init", "-q", "-b", "main")
+        git(work, "add", "-A")
+        git(work, "commit", "-q", "-m", "base")
+        git(work, "checkout", "-q", "-b", "feature")
+        edit_line(src, "return A + B;", "return B + A;")
+        git(work, "commit", "-q", "-am", "feature")
+        git(work, "checkout", "-q", "main")
+        edit_line(src, "if A > B then", "if B < A then")
+        git(work, "commit", "-q", "-am", "main moves on")
+        git(work, "checkout", "-q", "feature")
+        edit_line(src, "if X < Low then", "if Low > X then")
+        (work / "src" / "extra.adb").write_text(
+            "procedure Extra is\n   X : Integer := 0;\nbegin\n   X := X + 1;\nend Extra;\n")
+        (work / ".gitignore").write_text(".adamutant/\nobj/\nbin/\n")
+
+        proc = subprocess.run([str(EXE), "list", "--since", "main"], cwd=work,
+                              text=True, capture_output=True)
+        if proc.returncode != 0:
+            return [f"list --since failed: {proc.stdout}{proc.stderr}"]
+        pending = sorted({line.split()[1].rsplit(":", 1)[0]
+                          for line in proc.stdout.splitlines()
+                          if line.startswith("#") and "(ignored)" not in line})
+        errors = []
+        lines = src.read_text().splitlines()
+        expected = sorted({f"src/calculator.adb:{n + 1}"
+                           for n, text in enumerate(lines)
+                           if "B + A" in text or "Low > X" in text})
+        if [p for p in pending if p.startswith("src/calculator")] != expected:
+            errors.append(f"pending lines {pending}, expected {expected}")
+        if "src/extra.adb:4" not in pending:
+            errors.append(f"untracked file not mutated: {pending}")
+        if "src/calculator.ads" in proc.stdout:
+            errors.append("an unchanged file was scanned")
+        run = subprocess.run([str(EXE), "run", "--since", "main"], cwd=work,
+                             text=True, capture_output=True)
+        report = work / ".adamutant" / "reports" / "mutation-report.json"
+        if not report.exists():
+            errors.append(f"run --since wrote no report: {run.stdout}{run.stderr}")
+        else:
+            got = statuses(json.loads(report.read_text()))
+            ran = sorted({k.split()[0].rsplit(":", 1)[0] for k, v in got.items()
+                          if v != "Ignored"})
+            if ran != pending:
+                errors.append(f"run --since ran {ran}, expected {pending}")
+            if "Pending" in got.values():
+                errors.append("run --since left pending mutants")
+        bad = subprocess.run([str(EXE), "list", "--since", "no-such-ref"],
+                             cwd=work, text=True, capture_output=True)
+        if bad.returncode != 1 or "--since" not in bad.stderr:
+            errors.append(f"bad ref: exit {bad.returncode}, {bad.stderr}")
+        return errors
+    finally:
+        shutil.rmtree(work.parent, ignore_errors=True)
+
+
 def main():
     update = "--update" in sys.argv
     if not EXE.exists():
@@ -127,6 +200,11 @@ def main():
         for e in errors:
             print("  " + e)
         failed = failed or bool(errors)
+    errors = check_since()
+    print(("FAIL " if errors else "ok   ") + "since")
+    for e in errors:
+        print("  " + e)
+    failed = failed or bool(errors)
     leftovers = leftover_processes("test_calculator")
     if leftovers:
         print("FAIL leftover test processes: " + " ".join(leftovers))

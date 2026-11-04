@@ -4,6 +4,7 @@ with Ada.Directories;
 with Ada.Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
+with AdaMutant.Changes;
 with AdaMutant.Lexer;
 with AdaMutant.Mutators; use AdaMutant.Mutators;
 with AdaMutant.Positions;
@@ -16,11 +17,13 @@ package body AdaMutant.Runner is
    use AdaMutant.Results;
 
    function Discover
-     (Settings : Configuration; Only : String_Vectors.Vector) return Report
+     (Settings : Configuration; Only : String_Vectors.Vector;
+      Since    : String := "") return Report
    is
       R     : Report;
       Root  : constant String := To_String (Settings.Root);
       Next  : Positive := 1;
+      Changes : AdaMutant.Changes.Change_Maps.Map;
 
       function Matches_Any (List : String_Vectors.Vector; Path : String)
         return Boolean is
@@ -34,10 +37,20 @@ package body AdaMutant.Runner is
       end Matches_Any;
    begin
       R.Settings := Settings;
+      if Since /= "" then
+         begin
+            Changes := AdaMutant.Changes.Changed_Since (Root, Since);
+         exception
+            when E : AdaMutant.Changes.Change_Error =>
+               raise Run_Error with
+                 "--since: " & Ada.Exceptions.Exception_Message (E);
+         end;
+      end if;
       for Path of Find_Files (Root, Settings.Sandbox_Exclude) loop
          if Matches_Any (Settings.Mutate, Path)
            and then not Matches_Any (Settings.Exclude, Path)
            and then (Only.Is_Empty or else Matches_Any (Only, Path))
+           and then (Since = "" or else Changes.Contains (Path))
          then
             declare
                Source  : constant String := Read (Join (Root, Path));
@@ -67,26 +80,38 @@ package body AdaMutant.Runner is
                  (Source_File'(Path   => To_Unbounded_String (Path),
                    Source => To_Unbounded_String (Source)));
                for M of Found loop
-                  R.Mutants.Append
-                    (Mutant'
-                       (Id            => Next,
-                        File          => R.Files.Last_Index,
-                        Mutation      => M,
-                        Start_Pos     =>
-                          AdaMutant.Positions.Of_Offset (Source, M.First),
-                        End_Pos       =>
-                          AdaMutant.Positions.Of_Offset (Source, M.Last + 1),
-                        Original      => To_Unbounded_String
-                          (Source (M.First .. M.Last)),
-                        Status        => (if M.Ignored then Ignored
-                                          else Pending),
-                        Status_Reason => (if M.Ignored then
-                                            To_Unbounded_String
-                                              ("disabled by an adamutant "
-                                               & "comment")
-                                          else Null_Unbounded_String),
-                        Killed_By     => None,
-                        Elapsed       => 0.0));
+                  declare
+                     Start_Pos : constant AdaMutant.Positions.Position :=
+                       AdaMutant.Positions.Of_Offset (Source, M.First);
+                     End_Pos   : constant AdaMutant.Positions.Position :=
+                       AdaMutant.Positions.Of_Offset (Source, M.Last + 1);
+                     Unchanged : constant Boolean :=
+                       Since /= "" and then not M.Ignored
+                       and then not AdaMutant.Changes.Touches
+                         (Changes, Path, Start_Pos.Line, End_Pos.Line);
+                  begin
+                     R.Mutants.Append
+                       (Mutant'
+                          (Id            => Next,
+                           File          => R.Files.Last_Index,
+                           Mutation      => M,
+                           Start_Pos     => Start_Pos,
+                           End_Pos       => End_Pos,
+                           Original      => To_Unbounded_String
+                             (Source (M.First .. M.Last)),
+                           Status        => (if M.Ignored or else Unchanged
+                                             then Ignored else Pending),
+                           Status_Reason =>
+                             (if M.Ignored then
+                                To_Unbounded_String
+                                  ("disabled by an adamutant comment")
+                              elsif Unchanged then
+                                To_Unbounded_String
+                                  ("unchanged since " & Since)
+                              else Null_Unbounded_String),
+                           Killed_By     => None,
+                           Elapsed       => 0.0));
+                  end;
                   Next := Next + 1;
                end loop;
             end;
