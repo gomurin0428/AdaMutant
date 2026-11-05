@@ -337,6 +337,27 @@ procedure Unit_Tests is
       Check (Glob_Match ("?.ads", "p.ads"), "glob ?");
       Check (not Glob_Match ("*.adb", "a.ads"), "glob extension");
       Check (Join ("a", "b/c") = "a/b/c", "join");
+      declare
+         use GNAT.OS_Lib;
+         Path : constant String := "write_changed.tmp";
+         Stamp : time_t;
+         Deleted : Boolean;
+      begin
+         Write (Path, "original");
+         --  An odd second ahead of the clock, which the rewrite cannot pass
+         --  by itself: one second later would round to the same even
+         --  second in the ALI files GNAT writes on Windows.
+         Stamp := To_C (File_Time_Stamp (Path)) + 1001;
+         if Stamp mod 2 = 0 then
+            Stamp := Stamp + 1;
+         end if;
+         Set_File_Last_Modify_Time_Stamp (Path, To_Ada (Stamp));
+         Write_Changed (Path, "mutant");
+         Check (To_C (File_Time_Stamp (Path)) = Stamp + 2,
+                "rewrite moves the time stamp two seconds");
+         Check (Read (Path) = "mutant", "rewrite content");
+         Delete_File (Path, Deleted);
+      end;
    end Test_Files;
 
    --  POSIX only: uses /bin/sh commands.

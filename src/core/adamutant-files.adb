@@ -43,10 +43,13 @@ package body AdaMutant.Files is
    begin
       Write (Path, Content);
       After := File_Time_Stamp (Path);
-      if Before /= Invalid_Time and then After <= Before then
-         Set_File_Last_Modify_Time_Stamp (Path, To_Ada (To_C (Before) + 1));
+      --  On Windows the compiler records source time stamps in ALI files
+      --  rounded up to an even second, so a stamp one second later can look
+      --  unchanged to gprbuild: the stamp moves by at least two seconds.
+      if Before /= Invalid_Time and then To_C (After) < To_C (Before) + 2 then
+         Set_File_Last_Modify_Time_Stamp (Path, To_Ada (To_C (Before) + 2));
          After := File_Time_Stamp (Path);
-         if After <= Before then
+         if To_C (After) < To_C (Before) + 2 then
             raise File_Error with "cannot update the time stamp of " & Path;
          end if;
       end if;

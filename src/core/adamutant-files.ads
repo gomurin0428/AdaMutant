@@ -13,9 +13,11 @@ package AdaMutant.Files is
    procedure Write (Path : String; Content : String);
 
    procedure Write_Changed (Path : String; Content : String);
-   --  Writes Content and makes sure the modification time differs from the
-   --  previous one, so time-stamp based builders (gprbuild) notice the
-   --  change even when several writes happen within one second.
+   --  Writes Content and makes sure the modification time is at least two
+   --  seconds later than the previous one, so time-stamp based builders
+   --  (gprbuild) notice the change even when several writes happen within
+   --  one second, and on Windows, where GNAT rounds the stamps it records
+   --  up to an even second.
 
    function Glob_Match (Pattern, Path : String) return Boolean;
    --  "**" matches any sequence including '/', "*" any sequence without
