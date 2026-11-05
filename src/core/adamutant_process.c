@@ -198,16 +198,32 @@ extern char **environ;
    LIMIT bytes.  */
 static int group_exceeds (pid_t group, long long limit)
 {
-  pid_t pids[256];
+  pid_t *pids = NULL, *grown;
   struct rusage_info_v2 info;
-  int count, i;
+  int capacity = 256, count, i, exceeds = 0;
 
-  count = proc_listpgrppids (group, pids, (int) sizeof pids);
-  for (i = 0; i < count && i < 256; i++)
+  /* The listing stops at the end of the buffer, so a full buffer is grown
+     and the group listed again until every process fits.  */
+  for (;;)
+    {
+      grown = realloc (pids, capacity * sizeof (pid_t));
+      if (grown == NULL)
+        {
+          free (pids);
+          return 0;
+        }
+      pids = grown;
+      count = proc_listpgrppids (group, pids, capacity * (int) sizeof (pid_t));
+      if (count < capacity)
+        break;
+      capacity *= 2;
+    }
+  for (i = 0; i < count && !exceeds; i++)
     if (proc_pid_rusage (pids[i], RUSAGE_INFO_V2, (rusage_info_t *) &info) == 0
         && info.ri_phys_footprint > (unsigned long long) limit)
-      return 1;
-  return 0;
+      exceeds = 1;
+  free (pids);
+  return exceeds;
 }
 
 #endif
@@ -225,6 +241,7 @@ int adamutant_run (const char *command, const char *directory,
                    int *timed_out, int *elapsed_ms)
 {
   int log, nul, status = 0, count = 0, extra_count = 0, i, kept;
+  int memory_killed = 0;
   char **envp;
   const char *p;
   char *argv[4];
@@ -327,6 +344,7 @@ int adamutant_run (const char *command, const char *directory,
             "adamutant: killed, a process exceeded test_memory_limit_mb\n";
           int fd = open (log_path, O_WRONLY | O_APPEND | O_CLOEXEC);
 
+          memory_killed = 1;
           kill (-pid, SIGKILL);
           while (waitpid (pid, &status, 0) < 0 && errno == EINTR)
             ;
@@ -343,6 +361,10 @@ int adamutant_run (const char *command, const char *directory,
   *elapsed_ms = (int) (now_ms () - start);
   kill (-pid, SIGKILL);
 
+  /* The command may have exited by itself, even successfully, between the
+     sampling and the kill: the test still failed.  */
+  if (memory_killed)
+    return 128 + SIGKILL;
   if (WIFEXITED (status))
     return WEXITSTATUS (status);
   if (WIFSIGNALED (status))
