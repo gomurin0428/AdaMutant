@@ -27,7 +27,9 @@ EXAMPLES = {
     },
     "spark_counter": {"exit": 0, "killed_by": "proof"},
     # Every mutant's test first allocates 1 GiB, which only the memory limit
-    # makes fail: without the limit some mutants would survive.
+    # makes fail: without the limit some mutants would survive.  The test
+    # keeps the allocation while it runs, so that macOS, where AdaMutant
+    # samples the memory instead of capping it, sees it too.
     "memory_limit": {
         "exit": 0, "example": "calculator",
         "config": "test_memory_limit_mb = 256\n"
@@ -35,7 +37,7 @@ EXAMPLES = {
         "extra": {"alloc_then_test.py":
                   "import os, subprocess, sys\n"
                   "if os.environ.get('ADAMUTANT_MUTANT_ID', '0') != '0':\n"
-                  "    bytearray(1 << 30)\n"
+                  "    held = bytearray(1 << 30)\n"
                   "sys.exit(subprocess.call([os.path.join('bin', 'test_calculator')]))\n"},
     },
     # The test takes one second per test running at the same time, so with

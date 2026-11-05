@@ -22,7 +22,9 @@ package AdaMutant.Processes is
    --  ADAMUTANT_MUTANT_ID set to Mutant_Id and ADAMUTANT_MUTANT_FILE set to
    --  Mutant_File (empty, which cmd.exe treats as unset, by default).  A Timeout of 0.0 means none.
    --  A Memory_Limit_Mb other than 0 caps the memory of each process; an
-   --  allocation beyond it fails (Storage_Error in Ada programs).
+   --  allocation beyond it fails (Storage_Error in Ada programs).  macOS
+   --  cannot cap it, so there the process tree is killed as soon as one of
+   --  its processes is found above the limit.
    --  The whole process tree is killed when the command ends or times out.
 
 end AdaMutant.Processes;
