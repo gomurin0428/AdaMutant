@@ -638,6 +638,10 @@ package body AdaMutant.Runner is
          --  a schema can hold, and run the tests once for each of them.
          Mains : constant String_Vectors.Vector :=
            Main_Sources (Slot_Dir (1));
+         Main_Texts : String_Vectors.Vector;
+         --  The sources of the mains as they are in the sandbox, which is
+         --  a copy made when the run started.  The project itself may have
+         --  been edited since.
          Log   : constant String := Join (Logs, "combined-build.log");
 
          type Schema_Array is
@@ -693,9 +697,10 @@ package body AdaMutant.Runner is
                       else To_String (Schemas (F).Text)));
                end if;
             end loop;
-            for Main of Mains loop
+            for K in Mains.First_Index .. Mains.Last_Index loop
                declare
-                  Original : constant String := Read (Join (Root, Main));
+                  Main     : constant String := Mains (K);
+                  Original : constant String := Main_Texts (K);
                   Text     : Unbounded_String :=
                     To_Unbounded_String (Original);
                   Support  : constant String :=
@@ -767,6 +772,9 @@ package body AdaMutant.Runner is
 
          Any : Boolean;
       begin
+         for Main of Mains loop
+            Main_Texts.Append (Read (Join (Slot_Dir (1), Main)));
+         end loop;
          if Mains.Is_Empty then
             if Warn /= null then
                Warn ("no GNAT ALI file of a main subprogram after the build;"
