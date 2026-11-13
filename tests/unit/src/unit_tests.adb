@@ -340,20 +340,21 @@ procedure Unit_Tests is
       declare
          use GNAT.OS_Lib;
          Path : constant String := "write_changed.tmp";
-         Stamp : time_t;
+         Stamp : OS_Time;
          Deleted : Boolean;
       begin
          Write (Path, "original");
          --  An odd second ahead of the clock, which the rewrite cannot pass
          --  by itself: one second later would round to the same even
-         --  second in the ALI files GNAT writes on Windows.
-         Stamp := To_C (File_Time_Stamp (Path)) + 1001;
-         if Stamp mod 2 = 0 then
-            Stamp := Stamp + 1;
-         end if;
-         Set_File_Last_Modify_Time_Stamp (Path, To_Ada (Stamp));
+         --  second in the ALI files GNAT writes on Windows.  (The type of
+         --  To_C is not named: it is time_t up to GNAT 15 and
+         --  Long_Long_Integer from GNAT 16 on.)
+         Stamp := File_Time_Stamp (Path);
+         Stamp := To_Ada
+           (To_C (Stamp) + (if To_C (Stamp) mod 2 = 0 then 1001 else 1002));
+         Set_File_Last_Modify_Time_Stamp (Path, Stamp);
          Write_Changed (Path, "mutant");
-         Check (To_C (File_Time_Stamp (Path)) = Stamp + 2,
+         Check (File_Time_Stamp (Path) = To_Ada (To_C (Stamp) + 2),
                 "rewrite moves the time stamp two seconds");
          Check (Read (Path) = "mutant", "rewrite content");
          Delete_File (Path, Deleted);
