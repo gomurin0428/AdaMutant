@@ -9,6 +9,7 @@ with AdaMutant.Lexer;
 with AdaMutant.Mutators; use AdaMutant.Mutators;
 with AdaMutant.Positions;
 with AdaMutant.Processes; use AdaMutant.Processes;
+with AdaMutant.Schemata;
 
 package body AdaMutant.Runner is
 
@@ -209,6 +210,47 @@ package body AdaMutant.Runner is
       return Result;
    end Compiled_Sources;
 
+   function Main_Sources (Dir : String) return String_Vectors.Vector is
+      --  Paths, relative to Dir, of the sources of the main subprograms
+      --  that the GNAT ALI files under Dir describe.
+      Files  : constant String_Vectors.Vector :=
+        Find_Files (Dir, String_Vectors.Empty_Vector);
+      Names  : String_Vectors.Vector;
+      Result : String_Vectors.Vector;
+   begin
+      for Path of Files loop
+         if Path'Length > 4
+           and then Ada.Characters.Handling.To_Lower
+             (Path (Path'Last - 3 .. Path'Last)) = ".ali"
+         then
+            declare
+               Name : constant String :=
+                 AdaMutant.Schemata.Main_Source (Read (Join (Dir, Path)));
+            begin
+               if Name /= "" and then not Names.Contains (Name) then
+                  Names.Append (Name);
+               end if;
+            end;
+         end if;
+      end loop;
+      for Path of Files loop
+         if Names.Contains (Base_Name (Path)) then
+            Result.Append (Path);
+         end if;
+      end loop;
+      return Result;
+   end Main_Sources;
+
+   function Directory_Of (Path : String) return String is
+   begin
+      for K in reverse Path'Range loop
+         if Path (K) = '/' then
+            return Path (Path'First .. K - 1);
+         end if;
+      end loop;
+      return "";
+   end Directory_Of;
+
    procedure Execute
      (R            : in out Report;
       Keep_Sandbox : Boolean;
@@ -237,6 +279,14 @@ package body AdaMutant.Runner is
       Work_Items : Mutant_Array_Access :=
         new Mutant_Array (1 .. Natural (R.Mutants.Length));
       Pending_Count : Natural := 0;
+
+      --  Mutants that are part of the one build that contains many mutants
+      --  (see AdaMutant.Schemata), and those among them that its tests did
+      --  not detect: these still go to the proof, without another build.
+      type Flags is array (1 .. Natural (R.Mutants.Length)) of Boolean;
+      Combined : Flags := [others => False];
+      Tested   : Flags := [others => False];
+      Combined_Test_TO : Duration := 0.0;
 
       function Slot_Dir (Slot : Positive) return String is
         (Join (Sandbox, Image (Slot)));
@@ -306,11 +356,13 @@ package body AdaMutant.Runner is
 
       protected Queue is
          procedure Next (Index : out Natural);
+         procedure Next_Combined (Index : out Natural);
          procedure Finished (Done_Now : out Natural);
          procedure Fail (Message : String);
          function Failure return String;
       private
          Cursor  : Natural := 0;
+         Cursor_Combined : Natural := 0;
          Done    : Natural := 0;
          Problem : Unbounded_String;
       end Queue;
@@ -330,6 +382,23 @@ package body AdaMutant.Runner is
                end if;
             end loop;
          end Next;
+
+         procedure Next_Combined (Index : out Natural) is
+         begin
+            Index := 0;
+            if Length (Problem) > 0 then
+               return;
+            end if;
+            while Cursor_Combined < Work_Items'Last loop
+               Cursor_Combined := Cursor_Combined + 1;
+               if Combined (Cursor_Combined)
+                 and then Work_Items (Cursor_Combined).Status = Pending
+               then
+                  Index := Cursor_Combined;
+                  return;
+               end if;
+            end loop;
+         end Next_Combined;
 
          procedure Finished (Done_Now : out Natural) is
          begin
@@ -361,7 +430,9 @@ package body AdaMutant.Runner is
          delay until Last - (Seconds (Last) - Whole) + 2.0;
       end Wait_For_New_Stamp;
 
-      procedure Test_Mutant (Slot : Positive; M : in out Mutant) is
+      procedure Test_Mutant
+        (Slot : Positive; M : in out Mutant; Already_Tested : Boolean)
+      is
          Dir      : constant String := Slot_Dir (Slot);
          Rel      : constant String := To_String (R.Files (M.File).Path);
          Path     : constant String := Join (Dir, Rel);
@@ -376,27 +447,30 @@ package body AdaMutant.Runner is
                  (if Name = "test" then S.Test_Memory_Limit_Mb else 0), Rel));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
-         declare
-            B : constant Run_Result :=
-              Step ("build", To_String (S.Build), Build_TO);
-         begin
-            if B.Timed_Out then
-               M.Status := Compile_Error;
-               M.Status_Reason := To_Unbounded_String ("build timed out");
-            elsif B.Exit_Code /= 0 then
-               M.Status := Compile_Error;
-               declare
-                  E : constant String :=
-                    Build_Error (Read (Log_Base & "-build.log"));
-               begin
-                  M.Status_Reason := To_Unbounded_String
-                    (if E = "" then
-                        "build failed with exit status" & B.Exit_Code'Image
-                     else "build failed: " & E);
-               end;
-            end if;
-         end;
-         if M.Status = Pending and then Has_Test then
+         if not Already_Tested then
+            declare
+               B : constant Run_Result :=
+                 Step ("build", To_String (S.Build), Build_TO);
+            begin
+               if B.Timed_Out then
+                  M.Status := Compile_Error;
+                  M.Status_Reason := To_Unbounded_String ("build timed out");
+               elsif B.Exit_Code /= 0 then
+                  M.Status := Compile_Error;
+                  declare
+                     E : constant String :=
+                       Build_Error (Read (Log_Base & "-build.log"));
+                  begin
+                     M.Status_Reason := To_Unbounded_String
+                       (if E = "" then
+                           "build failed with exit status" & B.Exit_Code'Image
+                        else "build failed: " & E);
+                  end;
+               end if;
+            end;
+         end if;
+         if M.Status = Pending and then Has_Test and then not Already_Tested
+         then
             declare
                T : constant Run_Result :=
                  Step ("test", To_String (S.Test), Test_TO);
@@ -441,8 +515,39 @@ package body AdaMutant.Runner is
                elsif Has_Test then "tests passed" else "proof passed");
          end if;
          Write_Changed (Path, Original);
-         M.Elapsed := Clock - T0;
+         M.Elapsed := M.Elapsed + (Clock - T0);
       end Test_Mutant;
+
+      procedure Test_Combined
+        (Slot : Positive; Index : Positive; M : in out Mutant)
+      is
+         --  The build in the sandbox contains M: run its tests with M
+         --  switched on.
+         T0 : constant Time := Clock;
+         T  : constant Run_Result :=
+           Run (To_String (S.Test), Slot_Dir (Slot),
+                Join (Logs, "mutant-" & Image (M.Id) & "-test.log"), M.Id,
+                Combined_Test_TO, S.Test_Memory_Limit_Mb,
+                To_String (R.Files (M.File).Path));
+      begin
+         if T.Timed_Out then
+            M.Status := Timeout;
+            M.Killed_By := Tests;
+            M.Status_Reason := To_Unbounded_String
+              ("tests did not finish within the timeout");
+         elsif T.Exit_Code /= 0 then
+            M.Status := Killed;
+            M.Killed_By := Tests;
+            M.Status_Reason := To_Unbounded_String
+              ("tests failed with exit status" & T.Exit_Code'Image);
+         elsif Has_Prove then
+            Tested (Index) := True;
+         else
+            M.Status := Survived;
+            M.Status_Reason := To_Unbounded_String ("tests passed");
+         end if;
+         M.Elapsed := Clock - T0;
+      end Test_Combined;
 
       protected Output is
          entry Seize;
@@ -463,18 +568,33 @@ package body AdaMutant.Runner is
          end Release;
       end Output;
 
-      task type Worker (Slot : Positive) with Storage_Size => 64 * 1024 * 1024;
+      task type Worker (Slot : Positive; Combined_Build : Boolean)
+        with Storage_Size => 64 * 1024 * 1024;
 
       task body Worker is
          Index : Natural;
          Done  : Natural;
       begin
          loop
-            Queue.Next (Index);
+            if Combined_Build then
+               Queue.Next_Combined (Index);
+            else
+               Queue.Next (Index);
+            end if;
             exit when Index = 0;
-            Test_Mutant (Slot, Work_Items (Index));
-            Queue.Finished (Done);
-            if Progress /= null then
+            if Combined_Build then
+               Test_Combined (Slot, Index, Work_Items (Index));
+            else
+               Test_Mutant (Slot, Work_Items (Index), Tested (Index));
+            end if;
+            if Work_Items (Index).Status = Pending then
+               --  Its tests passed in the combined build; the proof is
+               --  still to come.
+               Done := 0;
+            else
+               Queue.Finished (Done);
+            end if;
+            if Progress /= null and then Done /= 0 then
                Output.Seize;
                begin
                   Progress (Done, Pending_Count, Work_Items (Index),
@@ -495,6 +615,222 @@ package body AdaMutant.Runner is
 
       type Worker_Access is access Worker;
       Slots : Positive;
+
+      procedure Run_Workers (Combined_Build : Boolean) is
+         Workers : array (1 .. Slots) of Worker_Access;
+      begin
+         for K in Workers'Range loop
+            Workers (K) := new Worker (K, Combined_Build);
+         end loop;
+         --  Wait for every worker.
+         for W of Workers loop
+            while not W'Terminated loop
+               delay 0.05;
+            end loop;
+         end loop;
+         if Queue.Failure /= "" then
+            raise Run_Error with Queue.Failure;
+         end if;
+      end Run_Workers;
+
+      procedure Run_Combined is
+         --  Build the project once with as many of the pending mutants as
+         --  a schema can hold, and run the tests once for each of them.
+         Mains : constant String_Vectors.Vector :=
+           Main_Sources (Slot_Dir (1));
+         Log   : constant String := Join (Logs, "combined-build.log");
+
+         type Schema_Array is
+           array (R.Files.First_Index .. R.Files.Last_Index)
+           of AdaMutant.Schemata.Schema;
+         type Schema_Array_Access is access Schema_Array;
+         procedure Free is new Ada.Unchecked_Deallocation
+           (Schema_Array, Schema_Array_Access);
+         Schemas : Schema_Array_Access := new Schema_Array;
+
+         function Rel (F : Positive) return String is
+           (To_String (R.Files (F).Path));
+
+         function Is_Main (Path : String) return Boolean is
+           (Mains.Contains (Path));
+
+         procedure Generate (F : Positive) is
+            Candidates : AdaMutant.Schemata.Candidate_Vectors.Vector;
+         begin
+            --  A deleted statement stays out.  Where the statement was the
+            --  first assignment to a variable, the variable has no value
+            --  in the mutant, and an optimizing compiler may then give it
+            --  the value that the original statement assigns in the other
+            --  alternative: the mutant would do what the original does.
+            for M of Work_Items.all loop
+               if M.File = F and then M.Status = Pending
+                 and then M.Mutation.Kind /= Statement_Deletion
+               then
+                  Candidates.Append
+                    (AdaMutant.Schemata.Candidate'
+                       (Id          => M.Id,
+                        First       => M.Mutation.First,
+                        Last        => M.Mutation.Last,
+                        Replacement => M.Mutation.Replacement));
+               end if;
+            end loop;
+            Schemas (F) := AdaMutant.Schemata.Build
+              (To_String (R.Files (F).Source), Candidates, Tag => F);
+         end Generate;
+
+         procedure Write_Sources (Slot : Positive; Restore : Boolean) is
+            --  The sources of the combined build, or the original ones
+            --  again.
+            Dir : constant String := Slot_Dir (Slot);
+         begin
+            for F in Schemas'Range loop
+               if not Schemas (F).Included.Is_Empty
+                 and then not Is_Main (Rel (F))
+               then
+                  Write_Changed
+                    (Join (Dir, Rel (F)),
+                     (if Restore then To_String (R.Files (F).Source)
+                      else To_String (Schemas (F).Text)));
+               end if;
+            end loop;
+            for Main of Mains loop
+               declare
+                  Original : constant String := Read (Join (Root, Main));
+                  Text     : Unbounded_String :=
+                    To_Unbounded_String (Original);
+                  Support  : constant String :=
+                    (if Directory_Of (Main) = "" then Dir
+                     else Join (Dir, Directory_Of (Main)));
+                  Spec     : constant String := Join
+                    (Support, AdaMutant.Schemata.Support_Spec_File);
+                  Body_File : constant String := Join
+                    (Support, AdaMutant.Schemata.Support_Body_File);
+               begin
+                  for F in Schemas'Range loop
+                     if Rel (F) = Main
+                       and then not Schemas (F).Included.Is_Empty
+                     then
+                        Text := Schemas (F).Text;
+                     end if;
+                  end loop;
+                  if Restore then
+                     Write_Changed (Join (Dir, Main), Original);
+                     if Ada.Directories.Exists (Spec) then
+                        Ada.Directories.Delete_File (Spec);
+                     end if;
+                     if Ada.Directories.Exists (Body_File) then
+                        Ada.Directories.Delete_File (Body_File);
+                     end if;
+                  else
+                     Write_Changed
+                       (Join (Dir, Main),
+                        AdaMutant.Schemata.With_Support (To_String (Text)));
+                     Write (Spec, AdaMutant.Schemata.Support_Spec);
+                     Write (Body_File, AdaMutant.Schemata.Support_Body);
+                  end if;
+               end;
+            end loop;
+         end Write_Sources;
+
+         function Drop_Compile_Errors return Natural is
+            --  Mutants whose own lines the compiler complained about do
+            --  not compile; they leave the combined build.
+            Dropped : Natural := 0;
+         begin
+            for D of AdaMutant.Schemata.Diagnostics (Read (Log)) loop
+               for F in Schemas'Range loop
+                  if Base_Name (Rel (F)) = To_String (D.File)
+                    and then D.Line <= Natural (Schemas (F).Owners.Length)
+                    and then Schemas (F).Owners (D.Line) /= 0
+                  then
+                     declare
+                        M : Mutant renames
+                          Work_Items (Schemas (F).Owners (D.Line));
+                        Done : Natural;
+                     begin
+                        if M.Status = Pending then
+                           M.Status := Compile_Error;
+                           M.Status_Reason := To_Unbounded_String
+                             ("build failed: " & To_String (D.Text));
+                           Dropped := Dropped + 1;
+                           Queue.Finished (Done);
+                           if Progress /= null then
+                              Progress (Done, Pending_Count, M, Rel (F));
+                           end if;
+                        end if;
+                     end;
+                  end if;
+               end loop;
+            end loop;
+            return Dropped;
+         end Drop_Compile_Errors;
+
+         Any : Boolean;
+      begin
+         if Mains.Is_Empty then
+            if Warn /= null then
+               Warn ("no GNAT ALI file of a main subprogram after the build;"
+                     & " every mutant is built on its own");
+            end if;
+            Free (Schemas);
+            return;
+         end if;
+
+         loop
+            Any := False;
+            for F in Schemas'Range loop
+               Generate (F);
+               Any := Any or else not Schemas (F).Included.Is_Empty;
+            end loop;
+            exit when not Any;
+            Write_Sources (1, Restore => False);
+            declare
+               B : constant Run_Result :=
+                 Run (To_String (S.Build), Slot_Dir (1), Log, 0, Build_TO);
+            begin
+               exit when not B.Timed_Out and then B.Exit_Code = 0;
+               if B.Timed_Out then
+                  raise Run_Error with
+                    "the build that contains the mutants timed out (log "
+                    & Log & ")";
+               elsif Drop_Compile_Errors = 0 then
+                  raise Run_Error with
+                    "the build that contains the mutants fails, and no"
+                    & " compiler message is on the lines of one mutant"
+                    & " (exit status" & B.Exit_Code'Image & ", log " & Log
+                    & ")" & ASCII.LF & Tail (Log, 20);
+               end if;
+            end;
+         end loop;
+
+         if Any then
+            for F in Schemas'Range loop
+               for Id of Schemas (F).Included loop
+                  Combined (Id) := True;
+               end loop;
+            end loop;
+            for Slot in 2 .. Slots loop
+               Delete_Tree (Slot_Dir (Slot));
+               Copy_Tree (Slot_Dir (1), Slot_Dir (Slot),
+                          String_Vectors.Empty_Vector);
+            end loop;
+            --  With no mutant switched on the tests must pass as before.
+            --  This run also measures them: the combined build is slower.
+            declare
+               Elapsed : Duration;
+            begin
+               Baseline_Step ("combined-test", To_String (S.Test), 0.0,
+                              Elapsed, S.Test_Memory_Limit_Mb, Slots);
+               Combined_Test_TO :=
+                 Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+            end;
+            Run_Workers (Combined_Build => True);
+         end if;
+         for Slot in 1 .. Slots loop
+            Write_Sources (Slot, Restore => True);
+         end loop;
+         Free (Schemas);
+      end Run_Combined;
    begin
       for K in Work_Items'Range loop
          Work_Items (K) := R.Mutants (K);
@@ -574,24 +910,12 @@ package body AdaMutant.Runner is
       end;
 
       if Pending_Count > 0 then
-         declare
-            Workers : array (1 .. Slots) of Worker_Access;
-         begin
-            for K in Workers'Range loop
-               Workers (K) := new Worker (K);
-            end loop;
-            --  Wait for every worker.
-            for W of Workers loop
-               while not W'Terminated loop
-                  delay 0.05;
-               end loop;
-            end loop;
-         end;
-      end if;
-
-      if Queue.Failure /= "" then
-         Free (Work_Items);
-         raise Run_Error with Queue.Failure;
+         if Has_Test then
+            Run_Combined;
+         end if;
+         --  What is left: mutants that no schema can hold, and the proof
+         --  of those that passed the tests of the combined build.
+         Run_Workers (Combined_Build => False);
       end if;
 
       for K in Work_Items'Range loop
