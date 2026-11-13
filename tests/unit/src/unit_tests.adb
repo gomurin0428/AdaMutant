@@ -15,6 +15,8 @@ with AdaMutant.Processes;
 
 with AdaMutant.Reports;
 with AdaMutant.Runner;
+with AdaMutant.Schemata;
+with Ada.Strings.Fixed;
 
 procedure Unit_Tests is
 
@@ -340,20 +342,21 @@ procedure Unit_Tests is
       declare
          use GNAT.OS_Lib;
          Path : constant String := "write_changed.tmp";
-         Stamp : time_t;
+         Stamp : OS_Time;
          Deleted : Boolean;
       begin
          Write (Path, "original");
          --  An odd second ahead of the clock, which the rewrite cannot pass
          --  by itself: one second later would round to the same even
-         --  second in the ALI files GNAT writes on Windows.
-         Stamp := To_C (File_Time_Stamp (Path)) + 1001;
-         if Stamp mod 2 = 0 then
-            Stamp := Stamp + 1;
-         end if;
-         Set_File_Last_Modify_Time_Stamp (Path, To_Ada (Stamp));
+         --  second in the ALI files GNAT writes on Windows.  (The type of
+         --  To_C is not named: it is time_t up to GNAT 15 and
+         --  Long_Long_Integer from GNAT 16 on.)
+         Stamp := File_Time_Stamp (Path);
+         Stamp := To_Ada
+           (To_C (Stamp) + (if To_C (Stamp) mod 2 = 0 then 1001 else 1002));
+         Set_File_Last_Modify_Time_Stamp (Path, Stamp);
          Write_Changed (Path, "mutant");
-         Check (To_C (File_Time_Stamp (Path)) = Stamp + 2,
+         Check (File_Time_Stamp (Path) = To_Ada (To_C (Stamp) + 2),
                 "rewrite moves the time stamp two seconds");
          Check (Read (Path) = "mutant", "rewrite content");
          Delete_File (Path, Deleted);
@@ -532,6 +535,355 @@ procedure Unit_Tests is
              "one line joins lines, keeps other blanks");
    end Test_Json;
 
+   procedure Test_Schemata is
+      use AdaMutant.Schemata;
+
+      Decl : constant String :=
+        "pragma Warnings (Off); function ADAMUTANT_ACTIVE_7 return"
+        & " Standard.Integer; pragma Import (C, ADAMUTANT_ACTIVE_7,"
+        & " ""adamutant_schemata_active""); pragma Warnings (On);";
+
+      Candidates : Candidate_Vectors.Vector;
+
+      procedure Mutate (Source, Pattern, Replacement : String) is
+         --  One more candidate: the first Pattern in Source becomes
+         --  Replacement.  Candidates are numbered from 1.
+         At_Index : constant Natural :=
+           Ada.Strings.Fixed.Index (Source, Pattern);
+      begin
+         Check (At_Index > 0, "schemata: test pattern " & Pattern);
+         Candidates.Append
+           (Candidate'(Id          => Natural (Candidates.Length) + 1,
+                       First       => At_Index,
+                       Last        => At_Index + Pattern'Length - 1,
+                       Replacement => To_Unbounded_String (Replacement)));
+      end Mutate;
+
+      function Ids (S : Schema) return String is
+         R : Unbounded_String;
+      begin
+         for Id of S.Included loop
+            Append (R, Id'Image);
+         end loop;
+         return To_String (R);
+      end Ids;
+
+      function Owners (S : Schema) return String is
+         R : Unbounded_String;
+      begin
+         for Owner of S.Owners loop
+            Append (R, Owner'Image);
+         end loop;
+         return To_String (R);
+      end Owners;
+
+      procedure Expect_None (Source, Pattern, Name : String) is
+         S : Schema;
+      begin
+         Candidates.Clear;
+         Mutate (Source, Pattern, "0");
+         S := Build (Source, Candidates, 7);
+         Check (S.Included.Is_Empty and then Length (S.Text) = 0,
+                "schemata: not included, " & Name, To_String (S.Text));
+      end Expect_None;
+   begin
+      --  A simple statement becomes a case statement.
+      declare
+         Source : constant String :=
+           "package body P is" & LF
+           & "   procedure Q (X : in out Integer) is" & LF
+           & "   begin" & LF
+           & "      X := X + 1;  --  why" & LF
+           & "   end Q;" & LF
+           & "end P;" & LF;
+         S : Schema;
+      begin
+         Candidates.Clear;
+         Mutate (Source, "+", "-");
+         Mutate (Source, "1", "0");
+         S := Build (Source, Candidates, 7);
+         Check (To_String (S.Text) =
+                  "pragma Style_Checks (Off);" & LF
+                  & "package body P is" & LF
+                  & Decl & LF
+                  & LF
+                  & "   procedure Q (X : in out Integer) is" & LF
+                  & "   begin" & LF
+                  & "      " & LF
+                  & "case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "when 1 =>" & LF
+                  & "X := X - 1;" & LF
+                  & "when 2 =>" & LF
+                  & "X := X + 0;" & LF
+                  & "when others =>" & LF
+                  & "X := X + 1;" & LF
+                  & "end case;" & LF
+                  & "  --  why" & LF
+                  & "   end Q;" & LF
+                  & "end P;" & LF,
+                "schemata: statement", To_String (S.Text));
+         Check (Ids (S) = " 1 2", "schemata: statement, included");
+         Check (Owners (S) = " 0 0 0 0 0 0 0 0 1 1 2 2 0 0 0 0 0 0 0",
+                "schemata: statement, owners of the lines", Owners (S));
+      end;
+
+      --  Conditions become case expressions.
+      declare
+         Source : constant String :=
+           "procedure Q (X : in out Integer) is" & LF
+           & "begin" & LF
+           & "   if X > 0 and then X < 9 then" & LF
+           & "      null;" & LF
+           & "   elsif X = 0 then" & LF
+           & "      null;" & LF
+           & "   end if;" & LF
+           & "   while X > 5 loop" & LF
+           & "      exit when X = 7;" & LF
+           & "   end loop;" & LF
+           & "end Q;" & LF;
+         S : Schema;
+      begin
+         Candidates.Clear;
+         Mutate (Source, "X > 0 and then X < 9", "True");
+         Mutate (Source, "X = 0", "X /= 0");
+         Mutate (Source, "X > 5", "False");
+         Mutate (Source, "X = 7", "True");
+         S := Build (Source, Candidates, 7);
+         Check (To_String (S.Text) =
+                  "pragma Style_Checks (Off);" & LF
+                  & "procedure Q (X : in out Integer) is" & LF
+                  & Decl & LF
+                  & LF
+                  & "begin" & LF
+                  & "   if (case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "when 1 => (" & LF
+                  & "True" & LF
+                  & ")," & LF
+                  & "when others => (" & LF
+                  & "X > 0 and then X < 9" & LF
+                  & ")) then" & LF
+                  & "      null;" & LF
+                  & "   elsif (case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "when 2 => (" & LF
+                  & "X /= 0" & LF
+                  & ")," & LF
+                  & "when others => (" & LF
+                  & "X = 0" & LF
+                  & ")) then" & LF
+                  & "      null;" & LF
+                  & "   end if;" & LF
+                  & "   while (case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "when 3 => (" & LF
+                  & "False" & LF
+                  & ")," & LF
+                  & "when others => (" & LF
+                  & "X > 5" & LF
+                  & ")) loop" & LF
+                  & "      " & LF
+                  & "case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "when 4 =>" & LF
+                  & "exit when True;" & LF
+                  & "when others =>" & LF
+                  & "exit when X = 7;" & LF
+                  & "end case;" & LF
+                  & LF
+                  & "   end loop;" & LF
+                  & "end Q;" & LF,
+                "schemata: conditions", To_String (S.Text));
+         Check (S.Owners (7) = 1 and then S.Owners (8) = 1
+                and then S.Owners (9) = 1 and then S.Owners (10) = 0
+                and then S.Owners (6) = 0,
+                "schemata: condition, owners of the lines", Owners (S));
+      end;
+
+      --  The expression of an expression function, in a specification
+      --  with aspects and a generic formal part in front.
+      declare
+         Source : constant String :=
+           "generic" & LF
+           & "   with function F (X : Integer) return Integer is <>;" & LF
+           & "package P with Pure is" & LF
+           & "   Limit : constant := 10;" & LF
+           & "   function Twice (X : Integer) return Integer is (X * 2)" & LF
+           & "     with Pre => X < Limit;" & LF
+           & "   function Pair (X : Integer) return R is (A => X, B => 1);"
+           & LF
+           & "end P;" & LF;
+         S : Schema;
+      begin
+         Candidates.Clear;
+         Mutate (Source, "10", "11");       --  a named number
+         Mutate (Source, "*", "/");
+         Mutate (Source, "X < Limit", "X <= Limit");  --  an aspect
+         Mutate (Source, "B => 1", "B => 0");
+         S := Build (Source, Candidates, 7);
+         Check (To_String (S.Text) =
+                  "pragma Style_Checks (Off);" & LF
+                  & "generic" & LF
+                  & "   with function F (X : Integer) return Integer is <>;"
+                  & LF
+                  & "package P with Pure is" & LF
+                  & Decl & LF
+                  & LF
+                  & "   Limit : constant := 10;" & LF
+                  & "   function Twice (X : Integer) return Integer is "
+                  & "(case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "when 2 =>" & LF
+                  & "(X / 2)" & LF
+                  & "," & LF
+                  & "when others =>" & LF
+                  & "(X * 2)" & LF
+                  & ")" & LF
+                  & "     with Pre => X < Limit;" & LF
+                  & "   function Pair (X : Integer) return R is "
+                  & "(case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "when 4 =>" & LF
+                  & "(A => X, B => 0)" & LF
+                  & "," & LF
+                  & "when others =>" & LF
+                  & "(A => X, B => 1)" & LF
+                  & ");" & LF
+                  & "end P;" & LF,
+                "schemata: expression functions", To_String (S.Text));
+         Check (Ids (S) = " 2 4",
+                "schemata: declarations and aspects stay out", Ids (S));
+      end;
+
+      --  Blocks, nested subprograms and what comes after them.
+      declare
+         Source : constant String :=
+           "package body P is" & LF
+           & "   type T is record" & LF
+           & "      A : Integer := 1;" & LF
+           & "   end record;" & LF
+           & "   procedure Q is" & LF
+           & "      procedure Inner is" & LF
+           & "      begin" & LF
+           & "         G := 2;" & LF
+           & "      end Inner;" & LF
+           & "      V : Integer := 3;" & LF
+           & "   begin" & LF
+           & "      declare" & LF
+           & "         W : Integer := 4;" & LF
+           & "      begin" & LF
+           & "         G := 5;" & LF
+           & "      end;" & LF
+           & "      case G is" & LF
+           & "         when 6 => G := 7;" & LF
+           & "         when others => null;" & LF
+           & "      end case;" & LF
+           & "      for I in 8 .. 9 loop" & LF
+           & "         G := 10;" & LF
+           & "      end loop;" & LF
+           & "      Named : loop" & LF
+           & "         exit Named when G = 11;" & LF
+           & "      end loop Named;" & LF
+           & "   exception" & LF
+           & "      when others => G := 12;" & LF
+           & "   end Q;" & LF
+           & "begin" & LF
+           & "   G := 13;" & LF
+           & "end P;" & LF;
+         S : Schema;
+      begin
+         Candidates.Clear;
+         for N in 1 .. 13 loop
+            declare
+               Image : constant String := Ada.Strings.Fixed.Trim
+                 (N'Image, Ada.Strings.Both);
+               Sep   : constant String :=
+                 (case N is when 6 => " =>", when 8 => " ..",
+                            when 9 => " loop", when others => ";");
+            begin
+               Mutate (Source, " " & Image & Sep, " 0" & Sep);
+            end;
+         end loop;
+         S := Build (Source, Candidates, 7);
+         Check (Ids (S) = " 2 5 7 10 11 12 13",
+                "schemata: only statements, in every kind of block",
+                Ids (S));
+      end;
+
+      Expect_None
+        ("procedure Q is begin <<L>> X := 1; end Q;", "1",
+         "a labelled statement");
+      Expect_None
+        ("function Q return T is begin return R : T := 1 do null;"
+         & " end return; end Q;", "1",
+         "the object of an extended return");
+      Expect_None
+        ("package body P is task body T is begin X := 1; end T; end P;",
+         "1", "a unit with tasking");
+      Expect_None
+        ("function Q (X : Integer) return Integer is (X + 1);", "1",
+         "an expression function that is a unit");
+      Expect_None
+        ("package P is new G (1);", "1", "an instantiation");
+      Expect_None
+        ("procedure Q is X : constant Integer := 1; begin null; end Q;",
+         "1", "a declaration");
+      Check (Build ("procedure Q is begin X := 1; end Q;",
+                    Candidate_Vectors.Empty_Vector, 7).Included.Is_Empty,
+             "schemata: no candidates");
+
+      --  The with clause for the support unit.
+      Check (With_Support ("procedure Main is begin null; end Main;" & LF)
+             = "pragma Style_Checks (Off);" & LF
+               & "with AdaMutant_Schemata_Support; pragma Unreferenced"
+               & " (AdaMutant_Schemata_Support); "
+               & "procedure Main is begin null; end Main;" & LF,
+             "schemata: with clause in a plain main");
+      Check (With_Support
+               ("pragma Style_Checks (Off);" & LF
+                & "pragma Ada_2022; pragma Profile (X);" & LF
+                & "with Ada.Text_IO;" & LF & "procedure Main is")
+             = "pragma Style_Checks (Off);" & LF
+               & "pragma Ada_2022; pragma Profile (X);" & LF
+               & "with AdaMutant_Schemata_Support; pragma Unreferenced"
+               & " (AdaMutant_Schemata_Support); with Ada.Text_IO;" & LF
+               & "procedure Main is",
+             "schemata: with clause after pragmas, no line added");
+      Check (Ada.Strings.Fixed.Index (Support_Body, "ADAMUTANT_MUTANT_ID") > 0
+             and then Ada.Strings.Fixed.Index
+                        (Support_Spec, "adamutant_schemata_active") > 0,
+             "schemata: support unit");
+
+      --  Compiler messages.
+      declare
+         D : constant Diagnostic_Vectors.Vector := Diagnostics
+           ("Compile" & LF
+            & "   [Ada]          p.adb" & LF
+            & "p.adb:12:05: error: expected type ""Integer""" & ASCII.CR & LF
+            & "p.adb:12:05: error: found type ""Float""" & LF
+            & "/tmp/x/src/Q-R.ads:7:1: warning: unused" & LF
+            & "C:\work\src\w.adb:3:4: (style) bad" & LF
+            & "gprbuild: *** compilation phase failed" & LF
+            & "time 12:30:15: nothing");
+      begin
+         Check (Natural (D.Length) = 4, "diagnostics: count",
+                D.Length'Image);
+         Check (To_String (D (1).File) = "p.adb" and then D (1).Line = 12
+                and then To_String (D (1).Text)
+                         = "p.adb:12:05: error: expected type ""Integer""",
+                "diagnostics: error line");
+         Check (To_String (D (3).File) = "q-r.ads" and then D (3).Line = 7,
+                "diagnostics: path and case");
+         Check (To_String (D (4).File) = "w.adb" and then D (4).Line = 3,
+                "diagnostics: Windows path");
+      end;
+
+      Check (Main_Source
+               ("V ""GNAT Lib v16""" & LF & "M P W=b" & LF & "A -O1" & LF
+                & "U unit_tests%b" & ASCII.HT & ASCII.HT & "Unit_Tests.adb"
+                & ASCII.HT & ASCII.HT & "68fb1a26 NE OO SU" & LF
+                & "U other%s" & ASCII.HT & "other.ads" & LF)
+             = "unit_tests.adb", "ali: main subprogram");
+      Check (Main_Source
+               ("V ""GNAT Lib v16""" & LF & "A -O1" & LF
+                & "U p%b" & ASCII.HT & ASCII.HT & "p.adb" & LF) = "",
+             "ali: not a main subprogram");
+   end Test_Schemata;
+
 begin
    Test_Lexer;
    Test_Operators;
@@ -547,6 +899,7 @@ begin
    Test_Changes;
    Test_Config;
    Test_Json;
+   Test_Schemata;
    Put_Line (Passed'Image & " passed," & Failed'Image & " failed");
    if Failed > 0 then
       Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);

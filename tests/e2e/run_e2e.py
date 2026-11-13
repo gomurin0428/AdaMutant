@@ -19,6 +19,9 @@ EXPECTED = Path(__file__).resolve().parent / "expected"
 EXAMPLES = {
     "calculator": {
         "exit": 0, "min_timeout": 1,
+        # Most mutants are tested in the one build that contains them all;
+        # only a few are built on their own.
+        "max_single_builds": 10,
         # A source that the build never compiles: its mutants are NoCoverage.
         "extra": {"src/unused.adb":
                   "function Unused (X : Integer) return Integer is\n"
@@ -26,6 +29,38 @@ EXAMPLES = {
         "output": "warning: src/unused.adb is not compiled by the build command",
     },
     "spark_counter": {"exit": 0, "killed_by": "proof"},
+    # A mutant that does not compile ("X * 2" with a Float X) must not stop
+    # the build that contains all mutants: it becomes a CompileError and the
+    # others are tested.  The test here checks little, so the score is
+    # below the example's break threshold (exit status 2).
+    "compile_error": {
+        "exit": 2, "example": "calculator", "max_single_builds": 12,
+        "extra": {
+            "src/powers.ads":
+                "package Powers is\n"
+                "   function Square (X : Float) return Float;\n"
+                "end Powers;\n",
+            "src/powers.adb":
+                "package body Powers is\n"
+                "   function Square (X : Float) return Float is\n"
+                "   begin\n"
+                "      return X ** 2;\n"
+                "   end Square;\n"
+                "end Powers;\n",
+            "tests/test_calculator.adb":
+                "with Ada.Command_Line;\n"
+                "with Calculator; use Calculator;\n"
+                "with Powers;\n"
+                "procedure Test_Calculator is\n"
+                "begin\n"
+                "   if Add (2, 3) /= 5 or else Max (1, 7) /= 7\n"
+                "     or else Max (9, 4) /= 9 or else not Is_Even (4)\n"
+                "     or else Powers.Square (3.0) /= 9.0\n"
+                "   then\n"
+                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+                "   end if;\n"
+                "end Test_Calculator;\n"},
+    },
     # Every mutant's test first allocates 1 GiB, which only the memory limit
     # makes fail: without the limit some mutants would survive.  The test
     # keeps the allocation while it runs, so that macOS, where AdaMutant
@@ -112,6 +147,14 @@ def run_example(name, spec, update):
             errors.append(f"no mutant killed by {spec['killed_by']}")
         if sum(m["status"] == "Timeout" for m in mutants) < spec.get("min_timeout", 0):
             errors.append("expected a Timeout mutant")
+        if "max_single_builds" in spec:
+            logs = work / ".adamutant" / "logs"
+            if not (logs / "combined-build.log").exists():
+                errors.append("no build that contains the mutants")
+            single = len(list(logs.glob("mutant-*-build.log")))
+            if single > spec["max_single_builds"]:
+                errors.append(f"{single} mutants were built on their own, "
+                              f"expected at most {spec['max_single_builds']}")
 
         expected_file = EXPECTED / f"{name}.json"
         if update:
