@@ -1,5 +1,5 @@
-name = "adamutant"
-description = "Mutation testing for Ada and SPARK (Stryker.NET-style)"
+name = "mutant"
+description = "AdaMutant: mutation testing for Ada and SPARK (Stryker.NET-style)"
 version = "0.1.0"
 long-description = """
 AdaMutant is a mutation testing tool for Ada and SPARK, in the spirit of
