@@ -24,6 +24,8 @@ make build        # bin/adamutant ができる
 make test         # 単体テスト + examples を使った E2E テスト
 ```
 
+[Alire](https://alire.ada.dev) を使う場合は、`alr build` で同じ `bin/adamutant` ができ、コンパイラも Alire が用意します。Alire でのビルドは警告では止まりません（`ADAMUTANT_WARNINGS_AS_ERRORS=false`）。`make build` は警告で止まります。
+
 ## 使い方
 
 プロジェクトのルートで設定ファイルを作って実行します。

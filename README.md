@@ -24,6 +24,8 @@ make build        # produces bin/adamutant
 make test         # unit tests + end-to-end tests that use the examples
 ```
 
+With [Alire](https://alire.ada.dev), `alr build` builds the same `bin/adamutant` and gets the compiler for you. A build with Alire does not stop at warnings (`ADAMUTANT_WARNINGS_AS_ERRORS=false`); `make build` does.
+
 ## Usage
 
 Create a configuration file in the root of your project and run AdaMutant there.
