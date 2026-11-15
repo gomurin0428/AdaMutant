@@ -1,66 +1,68 @@
 # AdaMutant
 
-Ada / SPARK 向けのミューテーションテストツールです。.NET の [Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/) と同じ考え方で、ソースに小さな変更（ミュータント）を自動で入れ、テストまたは GNATprove の証明がその変更を検出できるかを調べ、**ミューテーションスコア**を出します。
+**English** | [日本語](README.ja.md)
 
-- Ada 2022 までの字句解析器を内蔵（libadalang などの追加依存なし）
-- テストの失敗だけでなく **GNATprove の証明失敗でもミュータントを kill** できる（SPARK 向け）
-- **ミュータントをまとめて 1 回でビルド**し、テストはどのミュータントを有効にするかを切り替えながら実行する（ミュータント・スキーマ）。ミュータントごとにビルドし直さないので速い
-- サンドボックスを複数作って並列実行、タイムアウトしたテストはプロセスグループ（Windows はジョブオブジェクト）ごと終了
-- `test_memory_limit_mb` でテストの各プロセスのメモリを制限できます（POSIX は `RLIMIT_AS`、Windows はジョブオブジェクト。macOS は `RLIMIT_AS` を受け付けないので、AdaMutant がテストのプロセスの物理メモリ（phys_footprint）を 10 ミリ秒ごとに調べます）。ループ回数などを変えたミュータントが数 GB を確保すると、並列実行中にマシン全体がメモリ不足になり、ラン全体が落ちることがあります。上限を超えた確保は失敗し（Ada では `Storage_Error`）、そのミュータントは Killed になります。macOS では上限を超えた時点でテストのプロセスをまとめて終了し、同じく Killed になります（ログに `adamutant: killed, a process exceeded test_memory_limit_mb` と残ります）。変更前のテストも同じ上限で実行するので、上限が小さすぎればその時点でエラーになります
-- レポート: コンソール表、単体で開ける HTML、[mutation-testing-report-schema](https://github.com/stryker-mutator/mutation-testing-elements) v2 の JSON（Stryker のダッシュボードでも読めます）
+A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/) for .NET: it makes small changes (mutants) to the sources automatically, checks whether the tests or the GNATprove proofs detect each change, and reports the **mutation score**.
 
-## 必要なもの
+- A built-in lexer for Ada up to Ada 2022 (no extra dependencies such as libadalang)
+- Mutants can be killed **by a failed GNATprove proof** as well as by a failed test (for SPARK)
+- **All the mutants are built once**, and the tests run while switching which mutant is active (mutant schemata). It is fast because it does not rebuild for every mutant
+- Runs in parallel in several sandboxes. A test that times out is terminated together with its process group (its job object on Windows)
+- `test_memory_limit_mb` limits the memory of each test process (`RLIMIT_AS` on POSIX, a job object on Windows. macOS does not accept `RLIMIT_AS`, so AdaMutant checks the physical memory (phys_footprint) of the test processes every 10 milliseconds). When a mutant that changes, for example, a loop count allocates several GB, the whole machine can run out of memory during a parallel run and the whole run can crash. An allocation beyond the limit fails (`Storage_Error` in Ada) and the mutant is Killed. On macOS the test processes are terminated together as soon as the limit is exceeded, and the mutant is also Killed (the log contains `adamutant: killed, a process exceeded test_memory_limit_mb`). The tests of the unchanged project run under the same limit, so a limit that is too small is reported as an error at that point
+- Reports: a console table, a self-contained HTML file, and JSON in [mutation-testing-report-schema](https://github.com/stryker-mutator/mutation-testing-elements) v2 (the Stryker dashboard can read it)
 
-- GNAT（Ada 2022 対応、GNAT 14 で確認）と GPRbuild
-- 証明で kill したい場合は GNATprove
-- E2E テストを動かす場合は Python 3
+## Requirements
 
-## ビルド
+- GNAT with Ada 2022 support (tested with GNAT 14) and GPRbuild
+- GNATprove, if you want to kill mutants by proof
+- Python 3, to run the end-to-end tests
+
+## Building
 
 ```sh
-make build        # bin/adamutant ができる
-make test         # 単体テスト + examples を使った E2E テスト
+make build        # produces bin/adamutant
+make test         # unit tests + end-to-end tests that use the examples
 ```
 
-## 使い方
+## Usage
 
-プロジェクトのルートで設定ファイルを作って実行します。
+Create a configuration file in the root of your project and run AdaMutant there.
 
 ```sh
-adamutant init                 # adamutant.toml のひな形を作る
-adamutant list                 # 作られるミュータントの一覧（実行はしない）
-adamutant run                  # 実行してレポートを出す
+adamutant init                 # write a template adamutant.toml
+adamutant list                 # list the mutants that would be made (runs nothing)
+adamutant run                  # run and write the reports
 adamutant run --mutate 'src/parser*.adb' --concurrency 4
-adamutant run --since origin/main   # PR で変更した行だけ
+adamutant run --since origin/main   # only the lines changed in a pull request
 ```
 
-| オプション | 意味 |
+| Option | Meaning |
 |---|---|
-| `--config FILE` | 設定ファイル（既定 `adamutant.toml`）。プロジェクトルートは設定ファイルのあるディレクトリ |
-| `--mutate GLOB` | 対象ファイルをさらに絞る（複数指定可） |
-| `--concurrency N` | 並列サンドボックス数 |
-| `--since REF` | git のリビジョン REF と HEAD のマージベースから変更された行だけを変異させる（下記） |
-| `--keep-sandbox` | 終了後も `.adamutant/sandbox` を残す（調査用） |
+| `--config FILE` | Configuration file (default `adamutant.toml`). The project root is the directory that contains the configuration file |
+| `--mutate GLOB` | Narrow down the files to mutate (repeatable) |
+| `--concurrency N` | Number of parallel sandboxes |
+| `--since REF` | Only mutate the lines changed since the merge base of the git revision REF and HEAD (see below) |
+| `--keep-sandbox` | Keep `.adamutant/sandbox` after the run (for investigation) |
 
-`--since` は Stryker.NET の `--since` と同じく PR の CI 向けです。`git merge-base REF HEAD` からの差分（コミット済み・未コミットの両方）と、無視されていない未追跡ファイルを対象にします。変更のないファイルは読み込まず、変更のあるファイルでも変更行にかからないミュータントは `Ignored`（理由 `unchanged since REF`）になるので、スコアは変更行のミュータントだけで計算されます。仕様（`.ads`）だけを変えた場合でも本体のミュータントは対象になりません。CI では履歴が必要なので、GitHub Actions なら `actions/checkout` に `fetch-depth: 0` を指定してください。
+`--since` is meant for CI on pull requests, like `--since` in Stryker.NET. It covers the diff from `git merge-base REF HEAD` (both committed and uncommitted changes) and the untracked files that are not ignored. Unchanged files are not read. In a changed file, the mutants that do not touch a changed line become `Ignored` (reason `unchanged since REF`), so the score is computed from the mutants on the changed lines only. When only a spec (`.ads`) changed, the mutants of the body are not included. CI needs the history, so on GitHub Actions set `fetch-depth: 0` on `actions/checkout`.
 
-終了コード: 0 = 成功、1 = エラー（設定ミス、元のプロジェクトのビルド・テスト失敗など）、2 = スコアが `break` しきい値未満。
+Exit status: 0 = success, 1 = error (a mistake in the configuration, the original project fails to build or its tests fail, and so on), 2 = the score is below the `break` threshold.
 
-### 設定 (adamutant.toml)
+### Configuration (adamutant.toml)
 
 ```toml
-mutate = ["src/**/*.adb", "src/**/*.ads"]   # 変異させるファイル
+mutate = ["src/**/*.adb", "src/**/*.ads"]   # files to mutate
 exclude = ["src/generated/**"]
-build = "gprbuild -p -q -P tests.gpr"       # 必須。失敗したミュータントは CompileError
-test = "bin/run_tests"                      # 終了コード 0 以外なら Killed
-prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on"  # 0 以外なら Killed (証明)
-concurrency = 4                             # 既定は CPU 数の半分
-timeout_factor = 1.5                        # テスト時間の上限 = 元の時間 * factor + timeout_ms
+build = "gprbuild -p -q -P tests.gpr"       # required. A mutant that fails to build is CompileError
+test = "bin/run_tests"                      # Killed when the exit status is not 0
+prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on"  # Killed (by proof) when not 0
+concurrency = 4                             # default: half the number of CPUs
+timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
 timeout_ms = 5000
-test_memory_limit_mb = 2048                 # テスト 1 プロセスあたりのメモリ上限。既定 0 は無制限
-mutators = ["ArithmeticOperator", "EqualityOperator"]  # 省略時はすべて
-mutate_contracts = false                    # true で Pre/Post などのアスペクトも変異
-sandbox_exclude = [".git", "obj", "bin"]    # サンドボックスにコピーしないもの
+test_memory_limit_mb = 2048                 # memory limit of each test process. The default 0 means no limit
+mutators = ["ArithmeticOperator", "EqualityOperator"]  # all of them when omitted
+mutate_contracts = false                    # true also mutates aspects such as Pre/Post
+sandbox_exclude = [".git", "obj", "bin"]    # not copied into the sandboxes
 report_dir = ".adamutant/reports"
 
 [thresholds]
@@ -69,31 +71,31 @@ low = 60
 break = 0
 ```
 
-「元の時間」は、変異させていないプロジェクトのテスト（証明）を全サンドボックスで同時に流したときの最も遅い実行時間です。ミュータントを並列で流すときと同じ負荷で測るので、並列にすると遅くなるテストでも誤って Timeout になりません。
+The "original time" is the slowest run when the tests (proofs) of the unmutated project run in all the sandboxes at the same time. It is measured under the same load as the parallel runs of the mutants, so tests that become slower in parallel are not reported as Timeout by mistake.
 
-`test` と `prove` は少なくとも一方が必要です。両方あるときはテストを先に実行し、テストが通ったミュータントだけを証明にかけます。コマンドは POSIX では `/bin/sh -c`、Windows では `cmd.exe /c` で実行され、環境変数 `ADAMUTANT_MUTANT_ID` が渡されます。ミュータントのビルド・テスト・証明には、変異させたファイルのパス（`files` に書いたとおりのプロジェクトルートからの相対パス）が `ADAMUTANT_MUTANT_FILE` でも渡されます（ベースラインの実行では空です）。cmd.exe は `bin/test` の `/` 以降をスイッチとして解釈するため、`/` を含むパスは `test = '"bin/test"'` のように引用符で囲んでください（`/bin/sh` でもそのまま動きます）。未知のキーはエラーになります。
+At least one of `test` and `prove` is required. When both are set, the tests run first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report; it is empty in the baseline runs). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
 
-## ミュータント
+## Mutators
 
-| 名前 | 例 |
+| Name | Examples |
 |---|---|
-| ArithmeticOperator | `+`↔`-`, `*`↔`/`, `mod`,`rem`→`*`（`mod`↔`rem` は符号が異なるときしか差が出ず、ほぼ等価ミュータントになるため）, `**`→`*`, `&` は対象外 |
-| EqualityOperator | `<`→`<=`,`>=`、`=`↔`/=` など |
-| LogicalOperator | `and`↔`or`, `and then`↔`or else`, `xor`→`or`。`A and then B and then C` のような連鎖では `(A or else B) and then C` のように括弧を補う |
+| ArithmeticOperator | `+`↔`-`, `*`↔`/`, `mod`,`rem`→`*` (`mod`↔`rem` differ only when the signs differ, so that would almost always be an equivalent mutant), `**`→`*`. `&` is not mutated |
+| EqualityOperator | `<`→`<=`,`>=`, `=`↔`/=` and so on |
+| LogicalOperator | `and`↔`or`, `and then`↔`or else`, `xor`→`or`. In a chain such as `A and then B and then C`, parentheses are added, as in `(A or else B) and then C` |
 | UnaryOperator | `not X`→`X`, `-X`↔`+X`, `abs X`→`X` |
 | BooleanLiteral | `True`↔`False` |
 | MembershipOperator | `in`↔`not in` |
-| ConditionalExpression | `if`/`elsif` の条件 → `True`/`False`、`while` → `False`、`exit when` → `True` |
-| StatementDeletion | 代入・手続き呼び出し文 → `null;` |
-| NumericLiteral | `0`→`1`, `1`→`0`, `n`→`n+1`, 実数 → `0.0`。基数付き・指数付きの整数リテラルも同じ規則で、基数は保ちます（`16#FF#`→`16#100#`, `1E6`→`1000001`）。宣言した部分型の範囲の上下限 `String (1 .. 6)` などは対象外 |
+| ConditionalExpression | the condition of `if`/`elsif` → `True`/`False`, of `while` → `False`, of `exit when` → `True` |
+| StatementDeletion | assignment statements and procedure call statements → `null;` |
+| NumericLiteral | `0`→`1`, `1`→`0`, `n`→`n+1`, a real literal → `0.0`. Based integer literals and integer literals with an exponent follow the same rules, and the base is kept (`16#FF#`→`16#100#`, `1E6`→`1000001`). The bounds of the range of a declared subtype, such as `String (1 .. 6)`, are not mutated |
 | StringLiteral | `"abc"`→`""`, `""`→`"AdaMutant was here!"` |
 
-`with`/`use` 節、`pragma`、表現節（`for X'Size use ...`）、`digits`/`delta` は変異させません。サブプログラムの仮引数の既定値も、宣言と本体で一致していないとコンパイルできない（完全準拠）ため変異させません（`is null`、`is abstract`、式関数、ジェネリック仮サブプログラムの既定値は変異させます）。アスペクト（`Pre`, `Post`, `Type_Invariant` など）とゴーストコード（`Ghost` アスペクト付きで宣言されたサブプログラム・オブジェクト・型の宣言と本体、およびそれらを呼び出す・代入する文）は `mutate_contracts = true` のときだけ変異させます。ゴーストの名前は変異対象の `.adb` と、同じ名前の `.ads` から集めます。
+`with`/`use` clauses, `pragma`s, representation clauses (`for X'Size use ...`) and `digits`/`delta` are not mutated. The default values of the formal parameters of a subprogram are not mutated either, because the program does not compile unless the declaration and the body match (full conformance). The default values in `is null` and `is abstract` subprograms, in expression functions and in generic formal subprograms are mutated. Aspects (`Pre`, `Post`, `Type_Invariant` and so on) and ghost code (the declarations and bodies of the subprograms, objects and types declared with the `Ghost` aspect, and the statements that call them or assign to them) are mutated only when `mutate_contracts = true`. The ghost names are collected from the `.adb` being mutated and from the `.ads` of the same name.
 
-### コメントで無効化
+### Disabling with comments
 
 ```ada
---  adamutant:disable-next-line EqualityOperator: 等価ミュータント
+--  adamutant:disable-next-line EqualityOperator: equivalent mutant
 if A + B > Max then
 
 --  adamutant:disable StatementDeletion, StringLiteral
@@ -101,35 +103,35 @@ Log ("...");
 --  adamutant:enable
 ```
 
-名前を省略するか `all` ですべてのミュータント。無効化されたものは `Ignored` としてレポートに残り、スコアには含まれません。
+Leave out the names, or write `all`, to disable every mutator. A disabled mutant stays in the report as `Ignored` and is not counted in the score.
 
-## 状態とスコア
+## Statuses and score
 
-| 状態 | 意味 |
+| Status | Meaning |
 |---|---|
-| Killed | テストまたは証明が失敗した（検出できた） |
-| Timeout | テストが時間内に終わらなかった（検出扱い） |
-| Survived | テストも証明も通った（検出できなかった） |
-| NoCoverage | ビルドがそのファイルをコンパイルしていない（未検出扱い、実行はしない） |
-| CompileError | ミュータントがビルドできなかった（スコア対象外） |
-| RuntimeError | コマンドを起動できなかったなど（スコア対象外） |
-| Ignored | コメントで無効化（スコア対象外） |
+| Killed | A test or a proof failed (detected) |
+| Timeout | The tests did not finish in time (counted as detected) |
+| Survived | The tests and the proof both passed (not detected) |
+| NoCoverage | The build does not compile the file (counted as not detected, and not run) |
+| CompileError | The mutant could not be built (not in the score) |
+| RuntimeError | A command could not be started, and the like (not in the score) |
+| Ignored | Disabled by a comment (not in the score) |
 
-`スコア = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
+`score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
 
-## 仕組み
+## How it works
 
-1. 元のプロジェクトを `.adamutant/sandbox/1` にコピーし、ビルドとテスト（と証明）を一度通して所要時間を測る。失敗したらエラーで止まる
-2. 元のビルドが出力した GNAT の ALI ファイルの `D` 行（依存ソース）に現れないファイルは、どのテストからも検出できないので、そのミュータントは実行せず NoCoverage として警告する。ALI が 1 つもないとき、`prove` を設定したとき（GNATprove はビルド対象外のソースも証明し得る）は判定しない。古い ALI が残っていると判定は甘くなる（実行される）だけなので、`sandbox_exclude` に `obj` を入れておくと正確になる
-3. 同じ状態をワーカー数ぶんのサンドボックスに複製
-4. `test` があるとき、**ミュータントをまとめたソース**を作って 1 回ビルドし、ミュータントごとにテストだけを実行する（下記）
-5. まとめられなかったミュータントは、各ワーカーが 1 ファイルだけを書き換え → `build` → `test` → 元に戻す、を繰り返す。GNAT の ALI のタイムスタンプは 1 秒単位で、Windows では偶数秒に切り上げられるため、書き換えるたびに mtime を 2 秒以上進めて再コンパイル漏れを防いでいる
-6. `prove` があるとき、テストで検出できなかったミュータントを 1 つずつ証明にかける（1 ファイルを書き換え → `prove` → 元に戻す）。証明は、まとめたソースでは行わない。どのミュータントが原因かを切り分けられないため
-7. ログは `.adamutant/logs`、レポートは `report_dir` に出力
+1. Copy the original project to `.adamutant/sandbox/1`, then build it and run the tests (and the proof) once to measure how long they take. If any of them fails, stop with an error
+2. A file that does not appear in the `D` lines (the source dependencies) of the GNAT ALI files that the original build wrote cannot be detected by any test, so its mutants are not run and are reported as NoCoverage with a warning. This check is not made when there is no ALI file at all, or when `prove` is set (GNATprove may prove sources that the build does not cover). Stale ALI files only make the check more lenient (the mutants are run), so putting `obj` in `sandbox_exclude` makes it accurate
+3. Copy that state into one sandbox for each worker
+4. When `test` is set, make **sources that contain all the mutants**, build them once, and run only the tests for each mutant (see below)
+5. For the mutants that could not be put together, each worker repeats: rewrite one file → `build` → `test` → restore. The time stamps in GNAT's ALI files have a resolution of one second, and on Windows they are rounded up to an even second, so the mtime is moved forward by two seconds or more at every rewrite to make sure that the file is recompiled
+6. When `prove` is set, the mutants that the tests did not detect go to the proof one at a time (rewrite one file → `prove` → restore). The proof is not run on the sources that contain all the mutants, because it could not tell which mutant caused a failure
+7. The logs are written to `.adamutant/logs` and the reports to `report_dir`
 
-### ミュータントをまとめたビルド
+### Building the mutants once
 
-ミュータントの入ったソースは、たとえば次のようになります（`ADAMUTANT_ACTIVE_1` は、テスト実行時の環境変数 `ADAMUTANT_MUTANT_ID` の値を返す関数です。0 のときはどのミュータントも有効になりません）。
+The sources that contain the mutants look like this, for example (`ADAMUTANT_ACTIVE_1` is a function that returns the value of the environment variable `ADAMUTANT_MUTANT_ID` when the tests run. When it is 0, no mutant is active).
 
 ```ada
 case ADAMUTANT_ACTIVE_1 is
@@ -142,39 +144,39 @@ X := X + 1;
 end case;
 ```
 
-まとめるのは、字句解析だけで範囲を確実に決められる次の場所のミュータントです。
+The mutants that are put together are those in the following places, whose extent can be determined reliably by lexical analysis alone.
 
-| 場所 | 書き換え |
+| Place | Rewritten as |
 |---|---|
-| 単純な文（代入、手続き呼び出し、`return`、`exit`、`raise` など） | `case` 文 |
-| `if`、`elsif`、`while` の条件 | `case` 式 |
-| 式関数の式 | `case` 式 |
+| Simple statements (assignment, procedure call, `return`, `exit`, `raise` and so on) | a `case` statement |
+| The conditions of `if`, `elsif` and `while` | a `case` expression |
+| The expression of an expression function | a `case` expression |
 
-次のものはまとめず、これまでどおり 1 つずつビルドします。
+The following are not put together, and are built one at a time as before.
 
-- 宣言の中のミュータント（定数、名前付き数、型の範囲など）、`for` の範囲、`case` の選択肢、アスペクト。静的な式が必要なことがあり、実行時の切り替えにできないため
-- StatementDeletion。削除した文が変数への最初の代入だった場合、ミュータントではその変数が未初期化になる。最適化するコンパイラは、未初期化の変数に「もう一方の分岐で代入される値」を割り当ててよいので、まとめたビルドではミュータントが元のプログラムと同じ動きになり、検出できたはずのものを見逃す
-- タスク、プロテクト型、`accept`、`select` を含むファイル、名前付きの文、拡張 return のオブジェクト宣言
+- Mutants in declarations (constants, named numbers, the ranges of types and so on), in the ranges of `for`, in the choices of `case`, and in aspects. These may need a static expression, so they cannot be switched at run time
+- StatementDeletion. When the deleted statement was the first assignment to a variable, the variable is uninitialized in the mutant. An optimizing compiler may give an uninitialized variable "the value assigned in the other branch", so in the build that contains all the mutants the mutant would behave like the original program, and a mutant that should have been detected would be missed
+- Files that contain tasks, protected types, `accept` or `select`; statements that have a name; the object declaration of an extended return
 
-まとめたビルドでコンパイルエラーが出たときは、エラーの行がどのミュータントの行かを調べ、そのミュータントを CompileError にして、残りでビルドし直します。どのミュータントの行でもない場所でビルドが失敗したときは、エラーで終了します。
+When the build that contains all the mutants has a compile error, AdaMutant finds which mutant the line of the error belongs to, marks that mutant as CompileError, and builds again with the rest. When the build fails at a place that is not a line of any mutant, AdaMutant exits with an error.
 
-ミュータントを 1 つずつビルドする場合との違いが 1 つあります。まとめたソースではスタイル検査を切っており、また、ファイル全体を見て出る警告（文を削除したために変数が使われなくなった、など）は出ません。そのため、警告をエラーにしているプロジェクト（`-gnatwe`、`-gnaty`）では、警告だけが理由でコンパイルできなかったミュータントが CompileError ではなく実行されるようになります。
+There is one difference from building the mutants one at a time. The style checks are turned off in the sources that contain all the mutants, and the warnings that come from looking at the whole file (a variable is no longer used because a statement was deleted, for example) do not appear. So, in a project that treats warnings as errors (`-gnatwe`, `-gnaty`), a mutant that did not compile only because of a warning is now run instead of becoming CompileError.
 
-必要なもの。
+What it needs:
 
-- テストプログラムのメインサブプログラムが Ada で、ビルドが GNAT の ALI ファイルを残すこと。有効なミュータントの番号を返す関数は、AdaMutant が生成するユニット `AdaMutant_Schemata_Support` にあり、サンドボックスの中でだけ、メインのソースと同じディレクトリに置いてメインに `with` を足します。メインが見つからないときは警告を出し、すべてのミュータントを 1 つずつビルドします
-- C の `getenv` が使えること（環境変数を読むため）
-- テストコマンドが、ビルドした実行ファイルをそのまま実行すること。`ADAMUTANT_MUTANT_ID` は以前からテストコマンドに渡している環境変数で、テストプログラムまで届く必要があります
+- The main subprogram of the test program is written in Ada, and the build leaves GNAT ALI files. The function that returns the number of the active mutant is in `AdaMutant_Schemata_Support`, a unit that AdaMutant generates. Only inside the sandbox, AdaMutant puts it in the same directory as the source of the main and adds a `with` to the main. When the main cannot be found, AdaMutant prints a warning and builds every mutant one at a time
+- C's `getenv` is available (to read the environment variable)
+- The test command runs the built executable as it is. `ADAMUTANT_MUTANT_ID` is the environment variable that has always been passed to the test command, and it has to reach the test program
 
-## サンプル
+## Examples
 
-- [examples/calculator](examples/calculator): わざと境界値を検査しないテスト。生き残ったミュータントとタイムアウトが見られる
-- [examples/spark_counter](examples/spark_counter): テストなし、GNATprove の証明だけでミュータントを kill する例
+- [examples/calculator](examples/calculator): tests that do not check the boundary values on purpose. You can see surviving mutants and a timeout
+- [examples/spark_counter](examples/spark_counter): no tests. The mutants are killed by the GNATprove proof alone
 
 ```sh
 cd examples/calculator && ../../bin/adamutant run
 ```
 
-## ライセンス
+## License
 
 Apache License 2.0
