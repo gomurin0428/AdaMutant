@@ -170,7 +170,7 @@ The tests cannot detect a mutant in a place that no test executes. AdaMutant doe
 
 It works as follows. In the build that contains all the mutants, the function that switches the mutants records the number of the place that it is called from. It records only while no mutant is active (`ADAMUTANT_MUTANT_ID` is 0 or not set). Before it runs the mutants, AdaMutant runs the tests once with no mutant active. Each process of the test program then writes the numbers of the places that it executes to `.adamutant/logs/coverage/<process id>.txt`. The directory is built into the generated unit. The merged result stays in `.adamutant/logs/coverage.txt`.
 
-- This covers the mutants that are in the build that contains all the mutants, and StatementDeletion. A StatementDeletion mutant is not in that build, but the build records whether the statement is executed. The StatementDeletion of a statement that is not executed is not even built
+- This covers the mutants that are in the build that contains all the mutants, and StatementDeletion. A StatementDeletion mutant is not in that build, but the build records whether the statement is executed. The StatementDeletion of a statement that is not executed is not even built (when `prove` is set, it is built and then goes to the proof)
 - Mutants that cannot be put together, such as those in declarations, are not covered by this and are run as before
 - When `prove` is set too, a mutant in a place that no test executes skips the tests and goes to the proof. If the proof passes as well, it is Survived
 - A NoCoverage mutant is not compiled either. A mutant that does not compile is also NoCoverage when it is in a place that no test executes
@@ -186,6 +186,7 @@ What it needs:
 
 - The main subprogram of the test program is written in Ada, and the build leaves GNAT ALI files. The function that returns the number of the active mutant is in `AdaMutant_Schemata_Support`, a unit that AdaMutant generates. Only inside the sandbox, AdaMutant puts it in the same directory as the source of the main and adds a `with` to the main. When the main cannot be found, AdaMutant prints a warning and builds every mutant one at a time
 - C's `getenv` is available (to read the environment variable). Recording the executed places also uses `getpid`, `fopen`, `fputs` and `fflush`
+- The directory of the record is built into the generated code as an absolute path. When the test command runs test programs in another file system (a container with the project mounted somewhere else, for example), those processes cannot record. When only some of the processes cannot record, there is no warning. Set `coverage_analysis = false` for such a setup
 - The test command runs the built executable as it is. `ADAMUTANT_MUTANT_ID` is the environment variable that has always been passed to the test command, and it has to reach the test program
 
 ## Examples

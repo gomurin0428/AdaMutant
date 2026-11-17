@@ -1,4 +1,5 @@
 {
+ "src/copies.adb:5:7 StatementDeletion null;": "Killed",
  "src/counters.adb:10:10 ConditionalExpression False": "Killed",
  "src/counters.adb:10:10 ConditionalExpression True": "Killed",
  "src/counters.adb:10:12 ArithmeticOperator -": "Killed",

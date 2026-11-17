@@ -493,7 +493,11 @@ package body AdaMutant.Schemata is
                         Put ([1 => LF]);
                         Put ("case " & Selector (R) & " is" & LF, Probe);
                         if Probe /= 0 then
-                           Put ("when -1 => raise Program_Error;" & LF, Probe);
+                           --  The compiler may warn that nothing handles
+                           --  the exception (No_Exception_Propagation).
+                           Put ("when -1 => pragma Warnings (Off);"
+                                & " raise Program_Error;"
+                                & " pragma Warnings (On);" & LF, Probe);
                         end if;
                         for K in Of_Candidate'Range loop
                            if Of_Candidate (K) = R
@@ -618,7 +622,9 @@ package body AdaMutant.Schemata is
    --  every line, so a program that ends abruptly loses nothing, and every
    --  process has a file of its own, so no two processes write to one
    --  file.  The text is Ada 95, so it compiles with whatever language
-   --  version the project sets.
+   --  version the project sets, and it uses fixed buffers only, so it
+   --  also compiles under the restriction No_Secondary_Stack.  Without a
+   --  Coverage_Dir the body has no elaboration code.
    function Support_Body
      (Last_Site : Natural := 0; Coverage_Dir : String := "") return String is
      (Style_Off & LF
@@ -649,7 +655,11 @@ package body AdaMutant.Schemata is
       & "   pragma Import (C, Fputs, ""fputs"");" & LF
       & "   function Fflush (To : System.Address) return Standard.Integer;" & LF
       & "   pragma Import (C, Fflush, ""fflush"");" & LF
-      & "   function Digits_Of (N : Standard.Integer) return String is" & LF
+      & "   procedure Put_Number" & LF
+      & "     (N    : Standard.Integer;" & LF
+      & "      Into : in out String;" & LF
+      & "      Last : in out Standard.Integer)" & LF
+      & "   is" & LF
       & "      Text  : String (1 .. 12);" & LF
       & "      First : Standard.Integer := 13;" & LF
       & "      Rest  : Standard.Integer := N;" & LF
@@ -661,8 +671,11 @@ package body AdaMutant.Schemata is
       & "         Rest := Rest / 10;" & LF
       & "         exit when Rest = 0;" & LF
       & "      end loop;" & LF
-      & "      return Text (First .. 12);" & LF
-      & "   end Digits_Of;" & LF
+      & "      for K in First .. 12 loop" & LF
+      & "         Last := Last + 1;" & LF
+      & "         Into (Last) := Text (K);" & LF
+      & "      end loop;" & LF
+      & "   end Put_Number;" & LF
       & "   procedure Load is" & LF
       & "      Id_Name : aliased constant String :=" & LF
       & "        ""ADAMUTANT_MUTANT_ID"" & ASCII.NUL;" & LF
@@ -686,11 +699,15 @@ package body AdaMutant.Schemata is
       & "      end if;" & LF
       & "      if Found = 0 and then Folder'Length > 0 then" & LF
       & "         declare" & LF
-      & "            Name : aliased constant String :=" & LF
-      & "              Folder & ""/"" & Digits_Of (abs Getpid) & "".txt""" & LF
-      & "              & ASCII.NUL;" & LF
+      & "            Name : aliased String (1 .. Folder'Length + 18);" & LF
+      & "            Last : Standard.Integer := Folder'Length;" & LF
       & "            Mode : aliased constant String := ""a"" & ASCII.NUL;" & LF
       & "         begin" & LF
+      & "            Name (1 .. Folder'Length) := Folder;" & LF
+      & "            Last := Last + 1;" & LF
+      & "            Name (Last) := '/';" & LF
+      & "            Put_Number (abs Getpid, Name, Last);" & LF
+      & "            Name (Last + 1 .. Last + 5) := "".txt"" & ASCII.NUL;" & LF
       & "            Stream := Fopen (Name'Address, Mode'Address);" & LF
       & "         end;" & LF
       & "      end if;" & LF
@@ -698,11 +715,14 @@ package body AdaMutant.Schemata is
       & "      Loaded := True;" & LF
       & "   end Load;" & LF
       & "   procedure Report (Site : Standard.Integer) is" & LF
-      & "      Text : aliased constant String :=" & LF
-      & "        Digits_Of (Site) & ASCII.LF & ASCII.NUL;" & LF
+      & "      Text : aliased String (1 .. 14);" & LF
+      & "      Last : Standard.Integer := 0;" & LF
       & "      Code : Standard.Integer;" & LF
       & "   begin" & LF
       & "      Seen (Site) := True;" & LF
+      & "      Put_Number (Site, Text, Last);" & LF
+      & "      Text (Last + 1) := ASCII.LF;" & LF
+      & "      Text (Last + 2) := ASCII.NUL;" & LF
       & "      Code := Fputs (Text'Address, Stream);" & LF
       & "      Code := Fflush (Stream);" & LF
       & "   end Report;" & LF
@@ -719,13 +739,15 @@ package body AdaMutant.Schemata is
       & "      end if;" & LF
       & "      return Value;" & LF
       & "   end Active;" & LF
-      & "begin" & LF
-      & "   if not Loaded then" & LF
-      & "      Load;" & LF
-      & "   end if;" & LF
-      & "   if Stream /= System.Null_Address then" & LF
-      & "      Report (0);" & LF
-      & "   end if;" & LF
+      & (if Coverage_Dir = "" then ""
+         else
+           "begin" & LF
+           & "   if not Loaded then" & LF
+           & "      Load;" & LF
+           & "   end if;" & LF
+           & "   if Stream /= System.Null_Address then" & LF
+           & "      Report (0);" & LF
+           & "   end if;" & LF)
       & "end " & Unit_Name & ";" & LF);
 
    function With_Support (Source : String) return String is

@@ -248,10 +248,12 @@ EXAMPLES = {
                 "end Test_Calculator;\n"},
     },
     # Tests and proof together: a mutant in code that no test executes
-    # skips the tests and goes to the proof.
+    # skips the tests and goes to the proof.  The deleted statement of
+    # Copy, which is built on its own, is still built before it is proved.
     "prove_and_test": {
         "exit": 0, "example": "spark_counter", "killed_by": "proof",
         "min_uncovered": 1,
+        "uncovered_built": "src/copies.adb:5:7 StatementDeletion null;",
         "config": "build = 'gprbuild -p -q -P counters_tests.gpr'\n"
                   "test = '\"bin/test_counters\"'\n"
                   "sandbox_exclude = ['.git', 'obj', 'bin']\n",
@@ -266,8 +268,23 @@ EXAMPLES = {
                 "      for Default_Switches (\"Ada\") use (\"-gnat2022\");\n"
                 "   end Compiler;\n"
                 "end Counters_Tests;\n",
+            "src/copies.ads":
+                "package Copies with SPARK_Mode is\n"
+                "   procedure Copy (From : Integer; To : in out Integer)\n"
+                "   with Post => To = From;\n"
+                "end Copies;\n",
+            "src/copies.adb":
+                "package body Copies with SPARK_Mode is\n"
+                "   procedure Copy (From : Integer; To : in out Integer) is\n"
+                "   begin\n"
+                "      --  Only its deletion can be mutated.\n"
+                "      To := From;\n"
+                "   end Copy;\n"
+                "end Copies;\n",
             "tests/test_counters.adb":
                 "with Ada.Command_Line;\n"
+                "with Copies;\n"
+                "pragma Unreferenced (Copies);\n"
                 "with Counters;\n"
                 "procedure Test_Counters is\n"
                 "begin\n"
@@ -374,6 +391,14 @@ def run_example(name, spec, update):
             for step in ("build", "prove"):
                 if m["status"] == "NoCoverage" and (logs / f"mutant-{m['id']}-{step}.log").exists():
                     errors.append(f"mutant {m['id']} is NoCoverage, but has a {step} log")
+        if "uncovered_built" in spec:
+            found = [m for p, f in report["files"].items() for m in f["mutants"]
+                     if key(p, m) == spec["uncovered_built"]]
+            if len(found) != 1 or found[0].get("coveredBy") != [] \
+                    or not (logs / f"mutant-{found[0]['id']}-build.log").exists() \
+                    or not (logs / f"mutant-{found[0]['id']}-prove.log").exists():
+                errors.append(f"{spec['uncovered_built']}: expected an uncovered mutant "
+                              f"with a build log and a prove log, got {found}")
         for m in mutants:
             if "no_reason" in spec and spec["no_reason"] in m.get("statusReason", ""):
                 errors.append(f"mutant {m['id']}: {m['statusReason']}")

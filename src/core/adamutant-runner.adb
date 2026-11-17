@@ -867,7 +867,15 @@ package body AdaMutant.Runner is
                end if;
             end loop;
             Write (Join (Logs, "coverage.txt"), To_String (Merged));
-            Delete_Tree (Coverage_Dir);
+            --  A program that the test command left running may still
+            --  hold its file open, which stops the deletion on Windows.
+            --  Left where it is, the directory does no harm.
+            begin
+               Delete_Tree (Coverage_Dir);
+            exception
+               when File_Error =>
+                  null;
+            end;
             if not Reported then
                --  No program that contains the support unit has run, or
                --  none could write its file.
