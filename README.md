@@ -9,6 +9,7 @@ A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.
 - **All the mutants are built once**, and the tests run while switching which mutant is active (mutant schemata). It is fast because it does not rebuild for every mutant
 - **Mutants in code that no test executes are not run.** AdaMutant records which places the tests of the unchanged project execute, and marks the mutants in the other places as NoCoverage
 - **Results per test.** When several test commands are given with names, the report says which tests execute and detect each mutant, and a mutant is only tested with the tests that execute its place (`[tests]`)
+- **The results of an earlier run are reused.** A mutant on lines that have not changed takes its result from an earlier report (`--baseline`)
 - **Equivalent mutants are recognized automatically.** AdaMutant compiles the survivors with optimization and marks a mutant as Ignored when its object code is the same as before the change (`equivalence_build`)
 - Runs in parallel in several sandboxes. A test that times out is terminated together with its process group (its job object on Windows)
 - `test_memory_limit_mb` limits the memory of each test process (`RLIMIT_AS` on POSIX, a job object on Windows. macOS does not accept `RLIMIT_AS`, so AdaMutant checks the physical memory (phys_footprint) of the test processes every 10 milliseconds). When a mutant that changes, for example, a loop count allocates several GB, the whole machine can run out of memory during a parallel run and the whole run can crash. An allocation beyond the limit fails (`Storage_Error` in Ada) and the mutant is Killed. On macOS the test processes are terminated together as soon as the limit is exceeded, and the mutant is also Killed (the log contains `adamutant: killed, a process exceeded test_memory_limit_mb`). The tests of the unchanged project run under the same limit, so a limit that is too small is reported as an error at that point
@@ -39,6 +40,7 @@ adamutant list                 # list the mutants that would be made (runs nothi
 adamutant run                  # run and write the reports
 adamutant run --mutate 'src/parser*.adb' --concurrency 4
 adamutant run --since origin/main   # only the lines changed in a pull request
+adamutant run --baseline .adamutant/reports/mutation-report.json   # reuse the results of the last run
 ```
 
 | Option | Meaning |
@@ -47,6 +49,7 @@ adamutant run --since origin/main   # only the lines changed in a pull request
 | `--mutate GLOB` | Narrow down the files to mutate (repeatable) |
 | `--concurrency N` | Number of parallel sandboxes |
 | `--since REF` | Only mutate the lines changed since the merge base of the git revision REF and HEAD (see below) |
+| `--baseline FILE` | Reuse the results in FILE, the JSON report of an earlier run, for the mutants on lines that have not changed (see below) |
 | `--keep-sandbox` | Keep `.adamutant/sandbox` after the run (for investigation) |
 
 `--since` is meant for CI on pull requests, like `--since` in Stryker.NET. It covers the diff from `git merge-base REF HEAD` (both committed and uncommitted changes) and the untracked files that are not ignored. Unchanged files are not read. In a changed file, the mutants that do not touch a changed line become `Ignored` (reason `unchanged since REF`), so the score is computed from the mutants on the changed lines only. When only a spec (`.ads`) changed, the mutants of the body are not included. CI needs the history, so on GitHub Actions set `fetch-depth: 0` on `actions/checkout`.
@@ -87,6 +90,35 @@ break = 0
 The "original time" is the slowest run when the tests (proofs) of the unmutated project run in all the sandboxes at the same time. It is measured under the same load as the parallel runs of the mutants, so tests that become slower in parallel are not reported as Timeout by mistake.
 
 At least one of `test` and `prove` is required. When both are set, the tests run first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report; it is empty in the baseline runs). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
+
+### Reusing the results of an earlier run
+
+With `--baseline FILE`, where FILE is the JSON report of an earlier run (`mutation-report.json`), a mutant on lines that have not changed takes its result from that report. A mutant whose result is reused is not run. Its `statusReason` ends with `(from the baseline report)`.
+
+Which mutants are the same is decided by comparing the sources line by line. AdaMutant compares the source in the report with the source as it is now. A mutant is the same when none of its lines has changed and the columns, the mutator and the replacement are the same. Lines added above, which shift the line numbers, do not matter. git is not used.
+
+The lines are matched by way of the lines that occur exactly once in each of the two sources. A line that occurs several times, such as `begin` or `end if;`, is only matched where it adjoins such a line. So a line is never taken for another line with the same text. Of two functions that have changed places, one counts as changed lines.
+
+The results that are reused depend on whether `--since` is given.
+
+| Usage | Results reused | Mutants run |
+|---|---|---|
+| `--baseline FILE` | Killed, Timeout and CompileError on lines unchanged since the source in the report | The mutants on lines changed since the source in the report, and the mutants that were not detected last time (Survived, NoCoverage and so on) |
+| `--since REF --baseline FILE` | On lines unchanged since REF, every result that the report has (including Survived, NoCoverage, and Ignored for an equivalent mutant). On lines changed since REF, as in the row above | The mutants on lines changed since REF (except those on lines unchanged since the source in the report that are already detected) |
+
+- `--baseline` alone suits a run after tests have been added. It skips the mutants that were detected last time and tries only the survivors again
+- Together with `--since`, CI on a pull request runs only the changed lines and still reports the score and the report of the whole project. Unchanged files are read in this case. FILE is, for example, the report of a full run on the main branch
+- Together with `--since`, a mutant on a line unchanged since REF for which the report has no usable result stays Ignored (`unchanged since REF`), as with `--since` alone, and is outside the score
+- When FILE does not exist, AdaMutant prints a warning and runs without reusing a result (for a first run). When FILE is not JSON, has no `files`, or is not a file, it is an error
+- A CompileError of a build that ran out of time is not reused (without `--since` the mutant runs again)
+- FILE is read before the reports are written, so it may be the file that this run writes
+
+A reused result rests on nothing but the lines being unchanged. In the following cases stale results remain, so run everything without `--baseline` from time to time.
+
+- Tests were removed or weakened (a mutant that counts as detected survives now)
+- What an unchanged line does has changed because of a change in another line or another file
+- The build or test commands or the compiler changed
+- Mutants whose result depends on the load of the machine (a Timeout because the time ran out)
 
 ## Mutators
 
@@ -134,7 +166,7 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 
 ### Results per test
 
-A `[tests]` table instead of `test` gives several test commands, each with a name. The key is the name and the value is the command. A name consists of letters, digits, `_`, `-` and `.`. It cannot be the name of a setting (`build`, `test`, `prove` and so on), and two names cannot differ only in case. Write `[tests]` after the settings. `test` and `[tests]` cannot be used together.
+A `[tests]` table instead of `test` gives several test commands, each with a name. The key is the name and the value is the command. A name consists of letters, digits, `_`, `-` and `.`. It cannot be the name of a setting (`build`, `test`, `prove` and so on) or `proof`, which the reports use for the proof, and two names cannot differ only in case. Write `[tests]` after the settings. `test` and `[tests]` cannot be used together.
 
 ```toml
 [tests]

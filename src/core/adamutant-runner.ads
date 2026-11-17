@@ -10,14 +10,18 @@ package AdaMutant.Runner is
    function Discover
      (Settings : AdaMutant.Config.Configuration;
       Only     : AdaMutant.Files.String_Vectors.Vector;
-      Since    : String := "")
+      Since    : String := "";
+      Unchanged_Files : Boolean := False)
       return AdaMutant.Results.Report;
    --  Mutants of the files selected by the configuration (and by Only, a
    --  list of globs, when it is not empty).  Mutants covered by adamutant
    --  directives get the Ignored status, the others Pending.  A Since other
    --  than "" is a git revision: only files changed since its merge base
    --  with HEAD are scanned, and their mutants on unchanged lines get the
-   --  Ignored status.  Raises Run_Error when git fails.
+   --  Ignored status.  With Unchanged_Files the files that have not
+   --  changed are scanned too, and all their mutants get the Ignored
+   --  status: the report is then complete, for the results of an earlier
+   --  run to be filled in.  Raises Run_Error when git fails.
 
    function Build_Error (Log : String) return String;
    --  The first compiler error in the text of a build log (a GNAT line
