@@ -921,6 +921,104 @@ def check_proof_log():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_library():
+    """A project with a library gives the same results every time."""
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-library-"))
+    work = root / "p"
+    try:
+        files = {
+            "p.gpr":
+                'with "vendor/vendor.gpr";\n'
+                "project P is\n"
+                '   for Source_Dirs use ("tests");\n'
+                '   for Object_Dir use "obj";\n'
+                '   for Exec_Dir use "bin";\n'
+                '   for Main use ("test_main.adb");\n'
+                "end P;\n",
+            "vendor/vendor.gpr":
+                "library project Vendor is\n"
+                '   for Source_Dirs use ("src");\n'
+                '   for Object_Dir use "obj";\n'
+                '   for Library_Name use "vendor";\n'
+                '   for Library_Dir use "lib";\n'
+                '   for Library_Kind use "static";\n'
+                "end Vendor;\n",
+            "vendor/src/vend.ads":
+                "package Vend is\n"
+                "   function Padded (A : Integer) return Integer;\n"
+                "   function Bigger (A, B : Integer) return Integer;\n"
+                "end Vend;\n",
+            "vendor/src/vend.adb":
+                "package body Vend is\n"
+                "   Slack  : constant := 0;\n"
+                "   Margin : constant := 0;\n"
+                "   function Padded (A : Integer) return Integer is (A + Slack);\n"
+                "   function Bigger (A, B : Integer) return Integer is\n"
+                "   begin\n"
+                "      if A > B + Margin then\n"
+                "         return A;\n"
+                "      else\n"
+                "         return B;\n"
+                "      end if;\n"
+                "   end Bigger;\n"
+                "end Vend;\n",
+            "tests/test_main.adb":
+                "with Ada.Command_Line;\n"
+                "with Vend;\n"
+                "procedure Test_Main is\n"
+                "begin\n"
+                "   if Vend.Bigger (1, 7) /= 7 or else Vend.Bigger (9, 4) /= 9\n"
+                "     or else Vend.Bigger (5, 4) /= 5 or else Vend.Padded (3) < 3\n"
+                "   then\n"
+                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+                "   end if;\n"
+                "end Test_Main;\n",
+            "adamutant.toml":
+                'mutate = ["vendor/src/*.adb"]\n'
+                'build = "gprbuild -p -q -P p.gpr"\n'
+                "test = '\"bin/test_main\"'\n"
+                "concurrency = 2\n"
+                'sandbox_exclude = [".git", "obj", "bin", "vendor/obj", "vendor/lib"]\n',
+        }
+        for rel, text in files.items():
+            (work / rel).parent.mkdir(parents=True, exist_ok=True)
+            (work / rel).write_text(text)
+        # The two named numbers are static, so their mutants are built one
+        # by one, the first right before the second.
+        expected = {"vendor/src/vend.adb:2:25 NumericLiteral 1": "Survived",
+                    "vendor/src/vend.adb:3:25 NumericLiteral 1": "Killed",
+                    "vendor/src/vend.adb:4:55 ArithmeticOperator -": "Survived",
+                    "vendor/src/vend.adb:7:10 ConditionalExpression True": "Killed",
+                    "vendor/src/vend.adb:7:10 ConditionalExpression False": "Killed",
+                    "vendor/src/vend.adb:7:12 EqualityOperator >=": "Survived",
+                    "vendor/src/vend.adb:7:12 EqualityOperator <=": "Killed",
+                    "vendor/src/vend.adb:7:16 ArithmeticOperator -": "Survived"}
+        errors = []
+        # The objects of a mutant are compiled within a second of the build
+        # before.  A library that is then not made again would leave its
+        # mutants without effect: those of the build of all the mutants in
+        # about every second run, and with one sandbox the second named
+        # number would be tested with the library of the first.
+        for attempt in range(1, 5):
+            if attempt == 3:
+                config = work / "adamutant.toml"
+                config.write_text(config.read_text().replace(
+                    "concurrency = 2", "concurrency = 1"))
+            proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            report = work / ".adamutant" / "reports" / "mutation-report.json"
+            if proc.returncode != 0 or not report.exists():
+                errors.append(f"run {attempt}: exit status {proc.returncode}\n{proc.stdout}")
+                break
+            got = statuses(json.loads(report.read_text(encoding="utf-8")))
+            if got != expected:
+                errors.append(f"run {attempt}: {got}")
+        return errors
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def check_baseline():
     """--baseline FILE reuses the results of an earlier run for unchanged lines."""
     # The directory to remove afterwards: "work" becomes the project in it.
@@ -1061,7 +1159,7 @@ def main():
     failed = False
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
     checks = (("since", check_since), ("proof_log", check_proof_log),
-              ("baseline", check_baseline))
+              ("baseline", check_baseline), ("library", check_library))
     unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:
         sys.exit("no such case: " + " ".join(unknown))

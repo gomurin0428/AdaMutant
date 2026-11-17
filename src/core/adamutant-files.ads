@@ -30,6 +30,11 @@ package AdaMutant.Files is
    --  All regular files under Root as sorted relative paths.  Directories
    --  whose relative path matches an entry of Skip_Dirs are not visited.
 
+   procedure Wait_Past_Stamps (Dir : String; Relative : String_Vectors.Vector);
+   --  Returns when the clock is two seconds past the newest time stamp of
+   --  the files Relative of Dir, in whole seconds.  A file that does not
+   --  exist does not count, and a time stamp in the future counts as now.
+
    procedure Copy_Tree
      (From, To : String; Skip_Dirs : String_Vectors.Vector);
    --  Copies the files under From to To, preserving time stamps.
