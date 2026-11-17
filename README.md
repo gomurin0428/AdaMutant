@@ -206,7 +206,7 @@ Make the command the `build` command with only the switches for optimization and
 - Leave debug information out (`-g0`). It contains column positions and the like, so equivalent mutants do not come out the same
 - Keep every other switch as in `build` (assertions on or off, suppressed checks, scenario variables and so on). The verdict is about the program that the compiler and the switches of this command produce
 - Use a command that compiles every unit that depends on the mutated file again (gprbuild with the whole project does). A mutant of a constant in a specification, of a generic body or of a body that is inlined only shows in the objects of other units. A command that only compiles the mutated file cannot be used
-- Linking is not needed (`-c` for gprbuild)
+- Compile only (`-c` for gprbuild). Binding and linking are not needed, and with a library project they can make AdaMutant miss equivalent mutants
 
 A mutant that comes out "the same" is equivalent, but a mutant that comes out "different" is not necessarily non-equivalent: only those that the compiler reduces to the same code are found.
 

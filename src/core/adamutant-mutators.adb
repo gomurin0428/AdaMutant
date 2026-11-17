@@ -249,8 +249,14 @@ package body AdaMutant.Mutators is
                           or else At_Top (J, "private")
                           or else At_Top (J, "generic")
                           or else At_Top (J, "package")
-                          or else (At_Top (J, "is")
-                                   and then not Is_Del (J + 1, "("));
+                          or else
+                            --  Not the "is" of an expression function, of
+                            --  a null procedure or of an abstract
+                            --  subprogram, whose aspects come after it.
+                            (At_Top (J, "is")
+                             and then not Is_Del (J + 1, "(")
+                             and then not Is_Kw (J + 1, "null")
+                             and then not Is_Kw (J + 1, "abstract"));
                         if At_Top (J, "procedure") or else At_Top (J, "function")
                           or else At_Top (J, "type")
                           or else At_Top (J, "subtype")

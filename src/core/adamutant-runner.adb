@@ -65,7 +65,9 @@ package body AdaMutant.Runner is
                Found   : Mutation_Vectors.Vector;
             begin
                begin
-                  if not Options.Mutate_Contracts and then Spec /= ""
+                  --  Also when contracts are mutated: the mutations in
+                  --  ghost code are known as such.
+                  if Spec /= ""
                     and then Ada.Directories.Exists (Join (Root, Spec))
                   then
                      Options.Ghost_Names.Union
@@ -1016,8 +1018,10 @@ package body AdaMutant.Runner is
             and then
               --  Not what the binder makes ("b__main.o", "b~main.o"): it
               --  holds a version of every unit, which differs for every
-              --  mutant.
-              Base_Name (Path) (1 .. 2) not in "b_" | "b~");
+              --  mutant.  No unit has such a name ("b_utils.o" is one).
+              not (Base_Name (Path)'Length > 3
+                   and then (Base_Name (Path) (1 .. 3) = "b__"
+                             or else Base_Name (Path) (1 .. 2) = "b~")));
 
          function Dependents (Dir, Source : String) return Digest_Maps.Map is
             --  What each GNAT ALI file under Dir says about the time stamp
@@ -1192,6 +1196,10 @@ package body AdaMutant.Runner is
                  and then (not Before.Contains (Digest_Maps.Key (C))
                            or else Before (Digest_Maps.Key (C))
                                    /= Digest_Maps.Element (C));
+            end loop;
+            --  A unit that depended on the file before still does.
+            for C in Before.Iterate loop
+               Rebuilt := Rebuilt and then After.Contains (Digest_Maps.Key (C));
             end loop;
             Result :=
               (if B.Timed_Out or else B.Exit_Code /= 0 then Failed
@@ -1506,6 +1514,7 @@ package body AdaMutant.Runner is
                when E : others =>
                   if Warn /= null then
                      Warn ("the search for equivalent mutants has stopped: "
+                           & Ada.Exceptions.Exception_Name (E) & ": "
                            & Ada.Exceptions.Exception_Message (E));
                   end if;
             end;

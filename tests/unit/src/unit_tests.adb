@@ -308,6 +308,54 @@ procedure Unit_Tests is
       end;
    end Test_Directives;
 
+   procedure Test_Ghost_Names is
+      Names : constant Name_Sets.Set := Ghost_Names
+        ("package P is" & LF
+         & "   procedure Note (C : Integer) is null with Ghost;" & LF
+         & "   procedure Plain (C : Integer) is null;" & LF
+         & "   function Twice (X : Integer) return Integer is (X * 2)"
+         & " with Ghost;" & LF
+         & "   procedure Mark with Ghost;" & LF
+         & "   function Old return Integer is abstract with Ghost;" & LF
+         & "end P;" & LF);
+   begin
+      Check (Names.Contains ("note") and then Names.Contains ("twice")
+             and then Names.Contains ("mark") and then Names.Contains ("old")
+             and then not Names.Contains ("plain")
+             and then Natural (Names.Length) = 4,
+             "ghost names: null procedures and abstract subprograms too",
+             Names.Length'Image);
+   end Test_Ghost_Names;
+
+   procedure Test_Contract_Flag is
+      --  Mutations in aspects and in ghost code are marked, also in the
+      --  body of a subprogram that only its specification declares ghost.
+      Source : constant String :=
+        "package body P is" & LF
+        & "   function F (X : Integer) return Integer" & LF
+        & "     with Post => F'Result > 1 is" & LF
+        & "   begin" & LF
+        & "      return X + 2;" & LF
+        & "   end F;" & LF
+        & "   procedure G (X : in out Integer) is" & LF
+        & "   begin" & LF
+        & "      X := X * 3;" & LF
+        & "   end G;" & LF
+        & "end P;" & LF;
+      Options : Scan_Options := (Mutate_Contracts => True, others => <>);
+      Marked  : Unbounded_String;
+   begin
+      Options.Ghost_Names.Insert ("g");
+      for M of Find (Source, Options) loop
+         Append (Marked, (if M.Contract then "C" else "-"));
+      end loop;
+      --  > and 1 (two mutations of > and one of 1) in the aspect; + and 2
+      --  in F; the deletion, * and 3 in G.
+      Check (To_String (Marked) = "CCC--CCC",
+             "mutations of contracts and ghost code are marked",
+             To_String (Marked) & " " & Describe (Source, Options));
+   end Test_Contract_Flag;
+
    procedure Test_Apply is
       S : constant String := "X := A + B;";
       M : Mutation;
@@ -1013,6 +1061,8 @@ begin
    Test_Conditions;
    Test_Skipped;
    Test_Directives;
+   Test_Ghost_Names;
+   Test_Contract_Flag;
    Test_Apply;
    Test_Files;
    if GNAT.OS_Lib.Directory_Separator = '/' then

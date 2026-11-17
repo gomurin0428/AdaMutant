@@ -297,22 +297,25 @@ EXAMPLES = {
     },
     # Survivors in three files.  Two are equivalent mutants like those of
     # the example (in More); one is not, and shows only in the object of
-    # another unit: the named number of Limits is used in Client.  The
+    # another unit: the named number of B_Limits is used in Client.  The
     # command of the example compiles Client again and finds it different.
+    # The object of B_Limits is compared although its name starts like
+    # that of a file of the binder ("b__main.o"): the survivors of its
+    # expression function are not equivalent.
     "equivalence_dependent": {
         "exit": 0, "example": "calculator", "equivalent": 3,
-        "expect": {"src/limits.ads:2:24 NumericLiteral 4": "Survived"},
+        "expect": {"src/b_limits.ads:2:24 NumericLiteral 4": "Survived"},
         "extra": "DEPENDENT",
     },
     # The same with an equivalence_build command that only compiles the
     # mutated file, which is not a command to use: it does not compile
-    # Client again, so nothing can be said about the mutant of Limits, and
+    # Client again, so nothing can be said about the mutant of B_Limits, and
     # it does not bring the objects of the mutant before back to those of
     # the unmodified project, so AdaMutant has to (otherwise the equivalent
     # mutants of one file look different because of the other file).
     "equivalence_selective": {
         "exit": 0, "example": "calculator", "equivalent": 3,
-        "expect": {"src/limits.ads:2:24 NumericLiteral 4": "Survived"},
+        "expect": {"src/b_limits.ads:2:24 NumericLiteral 4": "Survived"},
         "config": "equivalence_build = '{python} compile_one.py'\n",
         "output": "does not compile every unit that depends on the file again",
         "extra": "DEPENDENT",
@@ -341,13 +344,46 @@ EXAMPLES = {
     },
     # Mutants of contracts that survive the proof are other contracts, not
     # equivalent mutants, although the objects are the same without
-    # assertions.
+    # assertions.  So are the mutants of the call of Note, which only the
+    # specification declares ghost.
     "equivalence_contracts": {
         "exit": 0, "example": "spark_counter", "equivalent": 0,
-        "min_survived": 2,
+        "min_survived": 5,
+        "expect": {"src/counters.adb:5:7 StatementDeletion null;": "Survived"},
         "config": "mutate = ['src/**/*.adb', 'src/**/*.ads']\n"
                   "mutate_contracts = true\n"
                   "equivalence_build = 'gprbuild -p -q -c -P counters.gpr -cargs -O2 -g0'\n",
+        "extra": {
+            "src/counters.ads":
+                "package Counters with SPARK_Mode is\n"
+                "   Max : constant := 100;\n"
+                "   subtype Count is Natural range 0 .. Max;\n"
+                "   procedure Note (C : Count) is null with Ghost;\n"
+                "   function Increment (C : Count) return Count\n"
+                "   with Pre  => C < Max,\n"
+                "        Post => Increment'Result = C + 1;\n"
+                "   function Saturating_Add (A, B : Count) return Count\n"
+                "   with Post =>\n"
+                "     (if A + B <= Max then Saturating_Add'Result = A + B\n"
+                "      else Saturating_Add'Result = Max);\n"
+                "end Counters;\n",
+            "src/counters.adb":
+                "package body Counters with SPARK_Mode is\n"
+                "   function Increment (C : Count) return Count is\n"
+                "   begin\n"
+                "      --  Ghost code: it is not in the program.\n"
+                "      Note (C + 0);\n"
+                "      return C + 1;\n"
+                "   end Increment;\n"
+                "   function Saturating_Add (A, B : Count) return Count is\n"
+                "   begin\n"
+                "      if A + B > Max then\n"
+                "         return Max;\n"
+                "      else\n"
+                "         return A + B;\n"
+                "      end if;\n"
+                "   end Saturating_Add;\n"
+                "end Counters;\n"},
     },
 }
 
@@ -359,21 +395,21 @@ DEPENDENT = {
                 "if one:\n"
                 "    command += ['-u', os.path.basename(one)]\n"
                 "sys.exit(subprocess.call(command + ['-cargs', '-O2', '-g0']))\n",
-            "src/limits.ads":
-                "package Limits is\n"
+            "src/b_limits.ads":
+                "package B_Limits is\n"
                 "   Small : constant := 3;\n"
                 "   function Is_Big (X : Integer) return Boolean is (X > 100);\n"
-                "end Limits;\n",
+                "end B_Limits;\n",
             "src/client.ads":
                 "package Client is\n"
                 "   function Tiny (X : Integer) return Boolean;\n"
                 "end Client;\n",
             "src/client.adb":
-                "with Limits;\n"
+                "with B_Limits;\n"
                 "package body Client is\n"
                 "   function Tiny (X : Integer) return Boolean is\n"
                 "   begin\n"
-                "      return X < Limits.Small;\n"
+                "      return X < B_Limits.Small;\n"
                 "   end Tiny;\n"
                 "end Client;\n",
             "src/more.ads":
@@ -395,7 +431,7 @@ DEPENDENT = {
                 "with Ada.Command_Line;\n"
                 "with Calculator; use Calculator;\n"
                 "with Client;\n"
-                "with Limits;\n"
+                "with B_Limits;\n"
                 "with More;\n"
                 "procedure Test_Calculator is\n"
                 "begin\n"
@@ -407,7 +443,7 @@ DEPENDENT = {
                 "     or else Sum_To (4) /= 10\n"
                 "     or else More.Larger (1, 7) /= 7 or else More.Larger (9, 4) /= 9\n"
                 "     or else not Client.Tiny (1) or else Client.Tiny (5)\n"
-                "     or else not Limits.Is_Big (200) or else Limits.Is_Big (50)\n"
+                "     or else not B_Limits.Is_Big (200) or else B_Limits.Is_Big (50)\n"
                 "   then\n"
                 "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
                 "   end if;\n"
