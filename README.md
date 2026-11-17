@@ -97,7 +97,7 @@ With `--baseline FILE`, where FILE is the JSON report of an earlier run (`mutati
 
 Which mutants are the same is decided by comparing the sources line by line. AdaMutant compares the source in the report with the source as it is now. A mutant is the same when none of its lines has changed and the columns, the mutator and the replacement are the same. Lines added above, which shift the line numbers, do not matter. git is not used.
 
-The lines are matched by way of the lines that occur exactly once in each of the two sources. A line that occurs several times, such as `begin` or `end if;`, is only matched where it adjoins such a line. So a line is never taken for another line with the same text. Code that has moved, such as two functions that changed places, counts as changed lines.
+The lines are matched by way of the lines that occur exactly once in each of the two sources. A line that occurs several times, such as `begin` or `end if;`, is only matched where it adjoins such a line. So a line is never taken for another line with the same text. Of two functions that have changed places, one counts as changed lines.
 
 The results that are reused depend on whether `--since` is given.
 
@@ -110,7 +110,7 @@ The results that are reused depend on whether `--since` is given.
 - Together with `--since`, CI on a pull request runs only the changed lines and still reports the score and the report of the whole project. Unchanged files are read in this case. FILE is, for example, the report of a full run on the main branch
 - Together with `--since`, a mutant on a line unchanged since REF for which the report has no usable result stays Ignored (`unchanged since REF`), as with `--since` alone, and is outside the score
 - When FILE does not exist, AdaMutant prints a warning and runs without reusing a result (for a first run). When FILE is not JSON, has no `files`, or is not a file, it is an error
-- A CompileError of a build that ran out of time is not reused; the mutant runs again
+- A CompileError of a build that ran out of time is not reused (without `--since` the mutant runs again)
 - FILE is read before the reports are written, so it may be the file that this run writes
 
 A reused result rests on nothing but the lines being unchanged. In the following cases stale results remain, so run everything without `--baseline` from time to time.
