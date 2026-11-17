@@ -4,6 +4,7 @@ with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO; use Ada.Text_IO;
+with AdaMutant.Baselines;
 with AdaMutant.Config;
 with AdaMutant.Files;
 with AdaMutant.Mutators;
@@ -33,6 +34,8 @@ procedure AdaMutant_Main is
       Put_Line ("  --mutate GLOB       only mutate matching files (repeatable)");
       Put_Line ("  --since REF         only mutate lines changed since the merge");
       Put_Line ("                      base of the git revision REF and HEAD");
+      Put_Line ("  --baseline FILE     reuse the results of the JSON report FILE of");
+      Put_Line ("                      an earlier run for unchanged lines");
       Put_Line ("  --concurrency N     number of parallel sandboxes");
       Put_Line ("  --keep-sandbox      keep .adamutant/sandbox after the run");
       Put_Line ("  --help, --version");
@@ -46,6 +49,7 @@ procedure AdaMutant_Main is
      To_Unbounded_String (AdaMutant.Config.Default_File_Name);
    Only         : AdaMutant.Files.String_Vectors.Vector;
    Since        : Unbounded_String;
+   Baseline     : Unbounded_String;
    Concurrency  : Natural := 0;
    Keep_Sandbox : Boolean := False;
 
@@ -73,6 +77,11 @@ procedure AdaMutant_Main is
                Since := To_Unbounded_String (Value);
                if Length (Since) = 0 then
                   raise Usage_Error with "--since needs a git revision";
+               end if;
+            elsif A = "--baseline" then
+               Baseline := To_Unbounded_String (Value);
+               if Length (Baseline) = 0 then
+                  raise Usage_Error with "--baseline needs a file name";
                end if;
             elsif A = "--concurrency" then
                begin
@@ -148,7 +157,9 @@ procedure AdaMutant_Main is
    end Do_List;
 
    procedure Do_Run is
-      R : Report := AdaMutant.Runner.Discover (Load, Only, To_String (Since));
+      R : Report := AdaMutant.Runner.Discover
+        (Load, Only, To_String (Since),
+         Unchanged_Files => Length (Baseline) > 0);
       Report_Dir : constant String := AdaMutant.Files.Join
         (To_String (R.Settings.Root), To_String (R.Settings.Report_Dir));
    begin
@@ -156,6 +167,27 @@ procedure AdaMutant_Main is
                 & Image (Natural (R.Mutants.Length)) & " mutants in"
                 & Natural (R.Files.Length)'Image & " files, concurrency"
                 & R.Settings.Concurrency'Image);
+      if Length (Baseline) > 0 then
+         --  A first run has no earlier report yet.
+         if not Ada.Directories.Exists (To_String (Baseline)) then
+            Warn ("the baseline report " & To_String (Baseline)
+                  & " does not exist; every mutant is run");
+         else
+            declare
+               Reused : Natural;
+            begin
+               AdaMutant.Baselines.Apply
+                 (R, AdaMutant.Files.Read (To_String (Baseline)), Reused);
+               Put_Line ("Reused " & Image (Reused) & " results of "
+                         & To_String (Baseline));
+            exception
+               when E : AdaMutant.Baselines.Baseline_Error =>
+                  raise AdaMutant.Runner.Run_Error with
+                    "--baseline " & To_String (Baseline) & ": "
+                    & Ada.Exceptions.Exception_Message (E);
+            end;
+         end if;
+      end if;
       Put_Line ("Building and testing the unmodified project...");
       AdaMutant.Runner.Execute
         (R, Keep_Sandbox, Progress'Access, Warn'Access, Note'Access);
@@ -221,6 +253,9 @@ begin
    end loop;
 
    Parse_Arguments;
+   if Length (Baseline) > 0 and then Command /= "run" then
+      raise Usage_Error with "--baseline is an option of the run command";
+   end if;
    if Command = "run" then
       Do_Run;
    elsif Command = "list" then

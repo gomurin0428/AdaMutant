@@ -2,9 +2,11 @@ with Ada.Command_Line;
 with Ada.Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO; use Ada.Text_IO;
+with AdaMutant.Baselines;
 with AdaMutant.Changes;
 with AdaMutant.Config;
 with AdaMutant.Files;
+with AdaMutant.Json;
 with AdaMutant.Lexer;
 with AdaMutant.Mutators; use AdaMutant.Mutators;
 with Ada.Directories;
@@ -14,6 +16,7 @@ with AdaMutant.Positions;
 with AdaMutant.Processes;
 
 with AdaMutant.Reports;
+with AdaMutant.Results;
 with AdaMutant.Runner;
 with AdaMutant.Schemata;
 with Ada.Strings.Fixed;
@@ -759,6 +762,236 @@ procedure Unit_Tests is
              "one line joins lines, keeps other blanks");
    end Test_Json;
 
+   procedure Test_Json_Reader is
+      use AdaMutant.Json;
+
+      procedure Rejects (Text, Name : String) is
+      begin
+         declare
+            V : constant Value := Parse (Text);
+         begin
+            Check (V = No_Value and then False, Name, "accepted");
+         end;
+      exception
+         when Syntax_Error =>
+            Check (True, Name);
+      end Rejects;
+
+      function Member (V : Value; Name : String) return Value
+        renames AdaMutant.Json.Field;
+
+      V : constant Value := Parse
+        (" { ""a"" : [1, -20, 3.5, true, false, null, ""x\ny""] ,"
+         & " ""b"":{""c"":""\u00e9\ud83d\ude00\""\\\/""},"
+         & " ""a"":7, ""e"":[] , ""o"":{} }" & LF);
+      A : constant Value := Member (V, "a");
+   begin
+      Check (Is_Object (V) and then Length (V) = 5
+             and then Name (V, 2) = "b", "json: object");
+      Check (Is_List (A) and then Length (A) = 7, "json: list");
+      Check (Integer_Of (Element (A, 1), 0) = 1
+             and then Integer_Of (Element (A, 2), 0) = -20
+             and then Integer_Of (Element (A, 3), 9) = 9
+             and then Integer_Of (Element (A, 7), 9) = 9
+             and then Integer_Of (No_Value, 4) = 4, "json: numbers");
+      Check (Kind_Of (Element (A, 4)) = Boolean_Value
+             and then Kind_Of (Element (A, 6)) = Null_Value, "json: literals");
+      Check (Text_Of (Element (A, 7)) = "x" & LF & "y", "json: escape");
+      Check (Text_Of (Member (Member (V, "b"), "c"))
+             = Character'Val (16#C3#) & Character'Val (16#A9#)
+               & Character'Val (16#F0#) & Character'Val (16#9F#)
+               & Character'Val (16#98#) & Character'Val (16#80#) & """\/",
+             "json: \u escapes and a surrogate pair become UTF-8");
+      Check (Member (V, "none") = No_Value and then not Is_Text (No_Value)
+             and then Member (A, "a") = No_Value, "json: missing member");
+      Check (Length (Member (V, "e")) = 0 and then Length (Member (V, "o")) = 0,
+             "json: empty list and object");
+      --  What the report writer escapes comes back as it was.
+      Check (Text_Of (Parse (AdaMutant.Reports.Json_String
+                               ("a<b""c\" & LF & ASCII.HT & "d")))
+             = "a<b""c\" & LF & ASCII.HT & "d", "json: round trip");
+      Rejects ("{""a"":1,}", "json: trailing comma");
+      Rejects ("[1 2]", "json: missing comma");
+      Rejects ("""abc", "json: unterminated string");
+      Rejects ("{} x", "json: text after the value");
+      Rejects ("", "json: empty text");
+   end Test_Json_Reader;
+
+   procedure Test_Baselines is
+      use AdaMutant.Baselines;
+      use AdaMutant.Results;
+
+      function Map (Old_Text, New_Text : String) return String is
+         R : Unbounded_String;
+      begin
+         for N of Line_Map (Lines (Old_Text), Lines (New_Text)) loop
+            Append (R, N'Image);
+         end loop;
+         return To_String (R);
+      end Map;
+
+      Old_Source : constant String :=
+        "procedure P is" & LF          --  1
+        & "begin" & LF                 --  2
+        & "   X := X + 1;" & LF        --  3
+        & "   Y := Y - 1;" & LF        --  4
+        & "   Z := 2;" & LF            --  5
+        & "end P;" & LF;               --  6
+      New_Source : constant String :=
+        "--  A comment." & LF          --  1
+        & "procedure P is" & LF        --  2
+        & "begin" & LF                 --  3
+        & "   X := X + 1;" & LF        --  4
+        & "   Y := Y - 2;" & LF        --  5  changed
+        & "   Z := 2;" & LF            --  6
+        & "end P;" & LF;               --  7
+
+      function Old_Mutant
+        (Line, Column, End_Column : Positive;
+         Mutator, Replacement, Status, More : String) return String is
+        ("{""id"":""9"",""mutatorName"":""" & Mutator & """,""replacement"":"""
+         & Replacement & """,""location"":{""start"":{""line"":" & Line'Image
+         & ",""column"":" & Column'Image & "},""end"":{""line"":" & Line'Image
+         & ",""column"":" & End_Column'Image & "}},""status"":""" & Status
+         & """" & More & "}");
+
+      Baseline : constant String :=
+        "{""schemaVersion"":""2"",""files"":{""src/p.adb"":{""language"":"
+        & """ada"",""source"":"
+        & AdaMutant.Reports.Json_String (Old_Source) & ",""mutants"":["
+        & Old_Mutant (3, 11, 12, "ArithmeticOperator", "-", "Killed",
+                      ",""statusReason"":""test a failed with exit status 1"""
+                      & ",""killedBy"":[""a"",""b""],""coveredBy"":[""a"",""b"","
+                      & """c""],""testsCompleted"":2") & ","
+        & Old_Mutant (3, 13, 14, "NumericLiteral", "0", "Survived",
+                      ",""statusReason"":""tests passed""") & ","
+        & Old_Mutant (4, 11, 12, "ArithmeticOperator", "+", "Killed", "") & ","
+        & Old_Mutant (5, 9, 10, "NumericLiteral", "3", "Killed",
+                      ",""killedBy"":[""proof: postcondition"",""proof: range"
+                      & " check""],""statusReason"":""proof failed: x (from the"
+                      & " baseline report)""") & ","
+        & Old_Mutant (5, 4, 11, "StatementDeletion", "null;", "Ignored",
+                      ",""statusReason"":""equivalent mutant: same code""")
+        & "]}}}";
+
+      function Report_Of (Unchanged : Boolean) return Report is
+         R : Report;
+
+         procedure Add (Line, Column, End_Column : Positive;
+                        Kind : Mutator_Kind; Replacement : String) is
+         begin
+            R.Mutants.Append
+              (Mutant'
+                 (Id        => Natural (R.Mutants.Length) + 1,
+                  File      => 1,
+                  Mutation  => (Kind        => Kind,
+                                Replacement =>
+                                  To_Unbounded_String (Replacement),
+                                others      => <>),
+                  Start_Pos => (Line, Column),
+                  End_Pos   => (Line, End_Column),
+                  Status    => (if Unchanged then Ignored else Pending),
+                  Unchanged => Unchanged,
+                  others    => <>));
+         end Add;
+      begin
+         R.Files.Append
+           (Source_File'(Path   => To_Unbounded_String ("src/p.adb"),
+                         Source => To_Unbounded_String (New_Source)));
+         Add (4, 11, 12, Arithmetic_Operator, "-");   --  1: was Killed
+         Add (4, 13, 14, Numeric_Literal, "0");       --  2: was Survived
+         Add (5, 11, 12, Arithmetic_Operator, "+");   --  3: line changed
+         Add (6, 9, 10, Numeric_Literal, "3");        --  4: was Killed
+         Add (6, 4, 11, Statement_Deletion, "null;"); --  5: was equivalent
+         Add (6, 9, 10, Numeric_Literal, "4");        --  6: not in the report
+         return R;
+      end Report_Of;
+
+      function Statuses (R : Report) return String is
+         S : Unbounded_String;
+      begin
+         for M of R.Mutants loop
+            Append (S, " " & Name (M.Status) & (if M.Reused then "*" else ""));
+         end loop;
+         return To_String (S);
+      end Statuses;
+
+      R      : Report;
+      Reused : Natural;
+   begin
+      Check (Map ("a" & LF & "b" & LF & "c" & LF, "a" & LF & "b" & LF & "c")
+             = " 1 2 3", "line map: the same text");
+      Check (Map (Old_Source, New_Source) = " 0 1 2 3 0 5 6",
+             "line map: a line added and a line changed",
+             Map (Old_Source, New_Source));
+      Check (Map (New_Source, Old_Source) = " 2 3 4 0 6 7",
+             "line map: a line removed and a line changed",
+             Map (New_Source, Old_Source));
+      Check (Map ("a" & LF & "x" & LF & "b" & LF & "y" & LF & "c" & LF,
+                  "c" & LF & "a" & LF & "b" & LF & "x" & LF & "c" & LF)
+             = " 0 1 3 0 5", "line map: lines keep their order",
+             Map ("a" & LF & "x" & LF & "b" & LF & "y" & LF & "c" & LF,
+                  "c" & LF & "a" & LF & "b" & LF & "x" & LF & "c" & LF));
+      Check (Map ("", "a" & LF) = " 0" and then Map ("a" & LF, "") = "",
+             "line map: empty texts");
+
+      --  A plain run: what was detected is taken over, the rest runs.
+      R := Report_Of (Unchanged => False);
+      Apply (R, Baseline, Reused);
+      Check (Reused = 2 and then Statuses (R)
+             = " Killed* Pending Pending Killed* Pending Pending",
+             "baseline: detected mutants on unchanged lines are reused",
+             Reused'Image & Statuses (R));
+      Check (To_String (R.Mutants (1).Status_Reason)
+             = "test a failed with exit status 1 (from the baseline report)"
+             and then R.Mutants (1).Killed_By = Tests
+             and then Natural (R.Mutants (1).Killers.Length) = 2
+             and then R.Mutants (1).Killers (2) = "b"
+             and then R.Mutants (1).Reached = Covered
+             and then Natural (R.Mutants (1).Covered_By.Length) = 3
+             and then R.Mutants (1).Tests_Run = 2,
+             "baseline: the tests of a reused result");
+      Check (To_String (R.Mutants (4).Status_Reason)
+             = "proof failed: x (from the baseline report)"
+             and then R.Mutants (4).Killed_By = Proof
+             and then Natural (R.Mutants (4).Failed_Checks.Length) = 2
+             and then R.Mutants (4).Failed_Checks (2) = "range check"
+             and then R.Mutants (4).Reached = Unknown,
+             "baseline: the checks of a reused result, the note once",
+             To_String (R.Mutants (4).Status_Reason));
+
+      --  With --since: every result on an unchanged line is taken over.
+      R := Report_Of (Unchanged => True);
+      Apply (R, Baseline, Reused);
+      Check (Reused = 4 and then Statuses (R)
+             = " Killed* Survived* Ignored Killed* Ignored* Ignored",
+             "baseline: with --since every result is reused",
+             Reused'Image & Statuses (R));
+      Check (R.Mutants (5).Equivalent and then not R.Mutants (5).Unchanged
+             and then R.Mutants (3).Unchanged
+             and then not R.Mutants (3).Equivalent,
+             "baseline: an equivalent mutant stays one");
+
+      R := Report_Of (Unchanged => False);
+      Apply (R, "{""files"":{""src/other.adb"":{""source"":"""","
+             & """mutants"":[]}}}", Reused);
+      Check (Reused = 0, "baseline: a report without the file");
+      begin
+         Apply (R, "[1, 2", Reused);
+         Check (False, "baseline: malformed text is refused");
+      exception
+         when Baseline_Error =>
+            Check (True, "baseline: malformed text is refused");
+      end;
+      begin
+         Apply (R, "{""schemaVersion"":""2""}", Reused);
+         Check (False, "baseline: a text without files is refused");
+      exception
+         when Baseline_Error =>
+            Check (True, "baseline: a text without files is refused");
+      end;
+   end Test_Baselines;
+
    procedure Test_Schemata is
       use AdaMutant.Schemata;
 
@@ -1227,6 +1460,8 @@ begin
    Test_Changes;
    Test_Config;
    Test_Json;
+   Test_Json_Reader;
+   Test_Baselines;
    Test_Schemata;
    Put_Line (Passed'Image & " passed," & Failed'Image & " failed");
    if Failed > 0 then

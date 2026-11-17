@@ -20,7 +20,8 @@ package body AdaMutant.Runner is
 
    function Discover
      (Settings : Configuration; Only : String_Vectors.Vector;
-      Since    : String := "") return Report
+      Since    : String := ""; Unchanged_Files : Boolean := False)
+      return Report
    is
       R     : Report;
       Root  : constant String := To_String (Settings.Root);
@@ -52,7 +53,8 @@ package body AdaMutant.Runner is
          if Matches_Any (Settings.Mutate, Path)
            and then not Matches_Any (Settings.Exclude, Path)
            and then (Only.Is_Empty or else Matches_Any (Only, Path))
-           and then (Since = "" or else Changes.Contains (Path))
+           and then (Since = "" or else Unchanged_Files
+                     or else Changes.Contains (Path))
          then
             declare
                Source  : constant String := Read (Join (Root, Path));
@@ -120,6 +122,8 @@ package body AdaMutant.Runner is
                            Killers       => String_Vectors.Empty_Vector,
                            Tests_Run     => 0,
                            Equivalent    => False,
+                           Unchanged     => Unchanged,
+                           Reused        => False,
                            Elapsed       => 0.0));
                   end;
                   Next := Next + 1;
@@ -1399,11 +1403,12 @@ package body AdaMutant.Runner is
          Base      : Digest_Maps.Map;
 
          function Examined (M : Mutant) return Boolean is
-           (M.Status = Survived and then not M.Mutation.Contract);
+           (M.Status = Survived and then not M.Mutation.Contract
+            and then not M.Reused);
          --  The survivors that can be equivalent mutants by their object
          --  code.  A mutant of a contract leaves no trace in the objects
          --  unless assertions are enabled, and is another contract all the
-         --  same.
+         --  same.  A result taken from an earlier run stays as it is.
 
          --  Copies of the object files of the unmodified project.
          Store : constant String := Join (Sandbox, "equivalence-base");
@@ -1624,6 +1629,8 @@ package body AdaMutant.Runner is
 
          type Comparer_Access is access Comparer;
       begin
+         --  The survivors of this run: a result taken from an earlier run
+         --  stays as it is.
          for M of Work_Items.all loop
             if Examined (M) then
                Survivors := Survivors + 1;

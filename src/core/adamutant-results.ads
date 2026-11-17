@@ -44,6 +44,11 @@ package AdaMutant.Results is
       Equivalent    : Boolean := False;
       --  Ignored because its object code is that of the unmodified
       --  project.
+      Unchanged     : Boolean := False;
+      --  Ignored because its lines are unchanged since the revision of
+      --  "--since".
+      Reused        : Boolean := False;
+      --  The result is that of an earlier run ("--baseline").
       Elapsed       : Duration := 0.0;
    end record;
 

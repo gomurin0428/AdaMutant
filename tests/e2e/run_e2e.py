@@ -921,13 +921,143 @@ def check_proof_log():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_baseline():
+    """--baseline FILE reuses the results of an earlier run for unchanged lines."""
+    work = Path(tempfile.mkdtemp(prefix="adamutant-baseline-"))
+    try:
+        shutil.copytree(ROOT / "examples" / "calculator", work / "p",
+                        ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
+        base = work / "base.json"
+        work = work / "p"
+        src = work / "src" / "calculator.adb"
+        test = work / "tests" / "test_calculator.adb"
+        report = work / ".adamutant" / "reports" / "mutation-report.json"
+        logs = work / ".adamutant" / "logs"
+        (work / ".gitignore").write_text(".adamutant/\nobj/\nbin/\n")
+        git(work, "init", "-q", "-b", "main")
+        git(work, "add", "-A")
+        git(work, "commit", "-q", "-m", "base")
+        errors = []
+
+        def run(*options):
+            proc = subprocess.run([str(EXE), "run", *options], cwd=work, text=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            mutants = {}
+            if proc.returncode in (0, 2):
+                data = json.loads(report.read_text(encoding="utf-8"))
+                mutants = {key(p, m): m for p, f in data["files"].items()
+                           for m in f["mutants"]}
+            return proc, mutants
+
+        def reused(m):
+            return m.get("statusReason", "").endswith("(from the baseline report)")
+
+        def ran(m):
+            return any(logs.glob(f"mutant-{m['id']}-*.log"))
+
+        # A first run has no earlier report: a warning, and everything runs.
+        proc, first = run("--baseline", str(base))
+        if proc.returncode != 0 or "does not exist; every mutant is run" not in proc.stdout:
+            return [f"first run: exit {proc.returncode}\n{proc.stdout}"]
+        if any(reused(m) for m in first.values()):
+            errors.append("first run: a result is marked as reused")
+        shutil.copy(report, base)
+
+        # One line changes, a comment moves the lines below it, and a new
+        # test detects mutants that survived.
+        edit_line(src, "return A + B;", "return B + A;")
+        edit_line(src, "   function Max", "   --  The larger one.\n   function Max")
+        edit_line(test, '   Check (Grade (10) = "C", "Grade C");',
+                  '   Check (Grade (10) = "C", "Grade C");\n'
+                  '   Check (Grade (80) = "A", "Grade A, lowest");\n'
+                  '   Check (Grade (79) = "B", "Grade B, highest");')
+        proc, second = run("--baseline", str(base))
+        if proc.returncode != 0 or "Reused " not in proc.stdout:
+            return errors + [f"second run: exit {proc.returncode}\n{proc.stdout}"]
+        moved = {k: m for k, m in second.items() if "B + A" not in
+                 src.read_text().splitlines()[m["location"]["start"]["line"] - 1]}
+        if len(moved) != len(second) - 1:
+            errors.append("second run: expected one mutant on the changed line")
+        old = {(k.split()[1], k.split(" ", 2)[2], m["status"]) for k, m in first.items()}
+        for k, m in second.items():
+            was_detected = any(o[0] == k.split()[1] and o[1] == k.split(" ", 2)[2]
+                               and o[2] in ("Killed", "Timeout") for o in old)
+            if k not in moved:
+                if reused(m) or not ran(m) or m["status"] != "Killed":
+                    errors.append(f"second run, changed line: {k} {m['status']} {m.get('statusReason')}")
+            elif reused(m):
+                if ran(m):
+                    errors.append(f"second run: {k} is reused, but was run")
+                if m["status"] not in ("Killed", "Timeout"):
+                    errors.append(f"second run: {k} is reused with status {m['status']}")
+            elif m["status"] in ("Killed", "Timeout") and not ran(m):
+                errors.append(f"second run: {k} is detected without a run")
+        count = sum(reused(m) for m in second.values())
+        detected = sum(m["status"] in ("Killed", "Timeout") for m in first.values())
+        if count != detected - 1:
+            errors.append(f"second run: {count} results reused, the first run "
+                          f"detected {detected} mutants and one is on the changed line")
+        if f"Reused {count} results" not in proc.stdout:
+            errors.append(f"second run: the output does not say 'Reused {count} results'")
+        newly = [k for k, m in second.items()
+                 if m["status"] == "Killed" and not reused(m) and k in moved]
+        if len(newly) < 3:
+            errors.append(f"second run: the new tests detect only {newly}")
+
+        # With --since the results of the unchanged lines are those of the
+        # earlier report, whatever they are, and only the changed line runs.
+        git(work, "add", "-A")
+        git(work, "commit", "-q", "-m", "second")
+        shutil.copy(report, base)
+        edit_line(src, "return B + A;", "return A + B;")
+        proc, third = run("--since", "main", "--baseline", str(base))
+        if proc.returncode != 0:
+            return errors + [f"third run: exit {proc.returncode}\n{proc.stdout}"]
+        if len(third) != len(second):
+            errors.append(f"third run: {len(third)} mutants, expected {len(second)}")
+        for k, m in third.items():
+            on_changed = "A + B" in src.read_text().splitlines()[m["location"]["start"]["line"] - 1] \
+                and k.startswith("src/calculator.adb")
+            if on_changed:
+                if reused(m) or not ran(m):
+                    errors.append(f"third run, changed line: {k} {m.get('statusReason')}")
+            else:
+                if ran(m):
+                    errors.append(f"third run: {k} was run")
+                before = second[k]["status"]
+                if m["status"] != before:
+                    errors.append(f"third run: {k} is {m['status']}, the report had {before}")
+                if before != "Ignored" and not reused(m):
+                    errors.append(f"third run: {k} is not marked as reused")
+        if not any(m["status"] == "Survived" and reused(m) for m in third.values()):
+            errors.append("third run: no survivor of the earlier report")
+        if not any(m["status"] == "Ignored" and reused(m) for m in third.values()):
+            errors.append("third run: no equivalent mutant of the earlier report")
+        if "Looking for equivalent mutants" in proc.stdout:
+            errors.append("third run: results of the earlier report were examined again")
+
+        bad = work / "bad.json"
+        bad.write_text("{}")
+        proc, _ = run("--baseline", str(bad))
+        if proc.returncode != 1 or "--baseline" not in proc.stdout:
+            errors.append(f"bad report: exit {proc.returncode}, {proc.stdout}")
+        proc = subprocess.run([str(EXE), "list", "--baseline", str(base)], cwd=work,
+                              text=True, capture_output=True)
+        if proc.returncode != 1 or "run command" not in proc.stderr:
+            errors.append(f"list --baseline: exit {proc.returncode}, {proc.stderr}")
+        return errors
+    finally:
+        shutil.rmtree(work.parent, ignore_errors=True)
+
+
 def main():
     update = "--update" in sys.argv
     if not EXE.exists():
         sys.exit(f"{EXE} not found; run 'make build' first")
     failed = False
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
-    checks = (("since", check_since), ("proof_log", check_proof_log))
+    checks = (("since", check_since), ("proof_log", check_proof_log),
+              ("baseline", check_baseline))
     unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:
         sys.exit("no such case: " + " ".join(unknown))
