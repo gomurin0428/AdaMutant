@@ -125,6 +125,20 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 
 `score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
 
+### Which check of the proof detected a mutant
+
+For a mutant that the proof detects (Killed, with the proof in `killedBy`), AdaMutant records the kinds of the checks that GNATprove could not prove. `killedBy` in the JSON report then looks like `["proof: postcondition", "proof: range check"]`, and `statusReason` holds the first message of GNATprove. The console shows the number of mutants for each kind of check.
+
+```
+Mutants killed by the proof, by the check that fails (alone: no other kind of check fails for the mutant):
+  range check   |     5 |     2 alone
+  postcondition |     5 |     2 alone
+```
+
+`alone` is the number of mutants that only that kind of check detected. A mutant that only a range check or an overflow check detected was not detected by a contract such as a postcondition, so these point to places where the contracts are weak.
+
+The names of the kinds come from the messages of GNATprove (the part before `... might fail`). When no message can be read, `killedBy` is `["proof"]` as before.
+
 ## How it works
 
 1. Copy the original project to `.adamutant/sandbox/1`, then build it and run the tests (and the proof) once to measure how long they take. If any of them fails, stop with an error

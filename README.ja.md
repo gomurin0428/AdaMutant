@@ -125,6 +125,20 @@ Log ("...");
 
 `スコア = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
 
+### 証明のどの検査で検出したか
+
+証明で検出したミュータント（Killed、`killedBy` が証明）には、GNATprove が証明できなかった検査の種類を記録します。JSON の `killedBy` は `["proof: postcondition", "proof: range check"]` のようになり、`statusReason` には GNATprove の最初のメッセージが入ります。コンソールには、検査の種類ごとの数が出ます。
+
+```
+Mutants killed by the proof, by the check that fails (alone: no other kind of check fails for the mutant):
+  range check   |     5 |     2 alone
+  postcondition |     5 |     2 alone
+```
+
+`alone` は、その種類の検査だけで検出したミュータントの数です。範囲検査やオーバーフロー検査だけで検出したミュータントは、事後条件などの契約では検出できなかったものなので、契約が弱い場所の手がかりになります。
+
+種類の名前は GNATprove のメッセージから取ります（`... might fail` の前の部分）。メッセージを読み取れなかったときは、これまでどおり `killedBy` は `["proof"]` です。
+
 ## 仕組み
 
 1. 元のプロジェクトを `.adamutant/sandbox/1` にコピーし、ビルドとテスト（と証明）を一度通して所要時間を測る。失敗したらエラーで止まる

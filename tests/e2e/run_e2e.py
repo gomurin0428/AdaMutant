@@ -63,7 +63,10 @@ EXAMPLES = {
                   "begin\n   return X + 1;\nend Unused;\n"},
         "output": "warning: src/unused.adb is not compiled by the build command",
     },
-    "spark_counter": {"exit": 0, "killed_by": "proof"},
+    # The report says which checks the proof failed on.
+    "spark_counter": {"exit": 0, "killed_by": "proof",
+                      "proof_checks": ["postcondition", "range check"],
+                      "output": "Mutants killed by the proof, by the check that fails"},
     # A mutant that does not compile ("X * 2" with a Float X) must not stop
     # the build that contains all mutants: it becomes a CompileError and the
     # others are tested.  The test here checks little, so the score is
@@ -564,9 +567,13 @@ def run_example(name, spec, update):
             errors.append("schemaVersion is not 2")
         actual = statuses(report)
         mutants = [m for f in report["files"].values() for m in f["mutants"]]
+        killers = {k for m in mutants for k in m.get("killedBy", [])}
         if "killed_by" in spec and not any(
-                spec["killed_by"] in m.get("killedBy", []) for m in mutants):
+                k.split(":")[0] == spec["killed_by"] for k in killers):
             errors.append(f"no mutant killed by {spec['killed_by']}")
+        for check in spec.get("proof_checks", []):
+            if f"proof: {check}" not in killers:
+                errors.append(f"no mutant killed by the proof of a {check}: {sorted(killers)}")
         # Mutants in code that the tests do not execute are not run.
         logs = work / ".adamutant" / "logs"
         uncovered = [m for m in mutants if m.get("coveredBy") == []]

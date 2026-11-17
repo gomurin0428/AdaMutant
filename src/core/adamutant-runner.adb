@@ -114,6 +114,7 @@ package body AdaMutant.Runner is
                                   ("unchanged since " & Since)
                               else Null_Unbounded_String),
                            Killed_By     => None,
+                           Failed_Checks => String_Vectors.Empty_Vector,
                            Reached       => Unknown,
                            Equivalent    => False,
                            Elapsed       => 0.0));
@@ -156,6 +157,105 @@ package body AdaMutant.Runner is
       end loop;
       return "";
    end Build_Error;
+
+   function Severity_Of (Message : String; Text_First : out Positive)
+     return String
+   is
+      --  The severity of a "file:line:col: severity: text" line and the
+      --  start of its text, or "".
+      Colons : Natural := 0;
+      First  : Natural := 0;
+   begin
+      Text_First := Message'First;
+      for K in Message'Range loop
+         if Message (K) = ':' then
+            Colons := Colons + 1;
+            --  A drive letter ("C:\dir\p.adb:1:2: ...") has its own colon.
+            if Colons = 1 and then K = Message'First + 1
+              and then K < Message'Last and then Message (K + 1) in '/' | '\'
+            then
+               Colons := 0;
+            elsif Colons = 3 then
+               First := K + 1;
+            elsif Colons = 4 then
+               while First < K and then Message (First) = ' ' loop
+                  First := First + 1;
+               end loop;
+               Text_First := K + 1;
+               while Text_First <= Message'Last
+                 and then Message (Text_First) = ' '
+               loop
+                  Text_First := Text_First + 1;
+               end loop;
+               return Message (First .. K - 1);
+            end if;
+         end if;
+      end loop;
+      return "";
+   end Severity_Of;
+
+   function Proof_Failures (Log : String) return String_Vectors.Vector is
+      Result : String_Vectors.Vector;
+   begin
+      for D of AdaMutant.Schemata.Diagnostics (Log) loop
+         declare
+            Line  : constant String := To_String (D.Text);
+            First : Positive;
+            Sev   : constant String := Severity_Of (Line, First);
+            pragma Unreferenced (First);
+         begin
+            if Sev in "high" | "medium" | "low" | "error" then
+               Result.Append (Line);
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Proof_Failures;
+
+   function Check_Kind (Message : String) return String is
+      First : Positive;
+      Sev   : constant String := Severity_Of (Message, First);
+
+      function Up_To_Comma (Text : String) return String is
+      begin
+         for K in Text'Range loop
+            if Text (K) = ',' then
+               return Text (Text'First .. K - 1);
+            end if;
+         end loop;
+         return Text;
+      end Up_To_Comma;
+   begin
+      if Sev = "error" or else First > Message'Last then
+         return "error";
+      end if;
+      declare
+         Text  : constant String := Message (First .. Message'Last);
+         Might : constant Natural :=
+           Index (To_Unbounded_String (Text), " might ");
+      begin
+         if Text (Text'First) = '"' then
+            --  Flow analysis: '"X" might not be initialized'.
+            for K in Text'First + 1 .. Text'Last loop
+               if Text (K) = '"' then
+                  declare
+                     Rest : constant String :=
+                       Up_To_Comma (Text (K + 1 .. Text'Last));
+                  begin
+                     return
+                       (if Rest'Length > 1
+                        then Rest (Rest'First + 1 .. Rest'Last) else Text);
+                  end;
+               end if;
+            end loop;
+            return Text;
+         elsif Might > 0 then
+            return Text (Text'First .. Text'First + Might - 2);
+         else
+            return Up_To_Comma (Text);
+         end if;
+      end;
+   end Check_Kind;
 
    function Base_Name (Path : String) return String is
    begin
@@ -524,8 +624,25 @@ package body AdaMutant.Runner is
                elsif P.Exit_Code /= 0 then
                   M.Status := Killed;
                   M.Killed_By := Proof;
-                  M.Status_Reason := To_Unbounded_String
-                    ("proof failed with exit status" & P.Exit_Code'Image);
+                  declare
+                     Failures : constant String_Vectors.Vector :=
+                       Proof_Failures (Read (Log_Base & "-prove.log"));
+                  begin
+                     for F of Failures loop
+                        if not M.Failed_Checks.Contains (Check_Kind (F)) then
+                           M.Failed_Checks.Append (Check_Kind (F));
+                        end if;
+                     end loop;
+                     M.Status_Reason := To_Unbounded_String
+                       (if Failures.Is_Empty then
+                           "proof failed with exit status" & P.Exit_Code'Image
+                        else
+                           "proof failed: " & Failures.First_Element
+                           & (if Natural (Failures.Length) > 1
+                              then " (and" & Natural'Image
+                                     (Natural (Failures.Length) - 1) & " more)"
+                              else ""));
+                  end;
                end if;
             end;
          end if;

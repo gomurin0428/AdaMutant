@@ -381,6 +381,49 @@ procedure Unit_Tests is
              = "x.adb:4:5: error: last", "build error on last line");
       Check (AdaMutant.Runner.Build_Error ("gprbuild: failed" & ASCII.LF)
              = "", "no build error line");
+      declare
+         use AdaMutant.Runner;
+         Log : constant String :=
+           "Phase 3 of 3: flow analysis and proof ..." & LF
+           & LF
+           & "counters.adb:10:07: warning: statement has no effect" & LF
+           & "   10 |      if False then" & LF
+           & "counters.adb:5:16: medium: range check might fail, cannot prove"
+           & " lower bound for C - 1" & ASCII.CR & LF
+           & "    5 |      return C - 1;" & LF
+           & "  possible fix: add precondition (C >= 1) to subprogram at"
+           & " counters.ads:7" & LF
+           & "counters.ads:9:17: medium: postcondition might fail" & LF
+           & "p.adb:3:4: info: overflow check proved" & LF
+           & "C:\work\p.adb:8:9: high: ""X"" is not initialized" & LF
+           & "p.adb:2:1: error: missing "";""" & LF
+           & "gnatprove: unproved check messages considered as errors" & LF;
+         F : constant String_Vectors.Vector := Proof_Failures (Log);
+      begin
+         Check (Natural (F.Length) = 4, "proof failures: count",
+                F.Length'Image);
+         Check (F (1) = "counters.adb:5:16: medium: range check might fail,"
+                        & " cannot prove lower bound for C - 1",
+                "proof failures: the line of the message", F (1));
+         Check (Check_Kind (F (1)) = "range check", "check kind: range check",
+                Check_Kind (F (1)));
+         Check (Check_Kind (F (2)) = "postcondition",
+                "check kind: postcondition", Check_Kind (F (2)));
+         Check (Check_Kind (F (3)) = "is not initialized",
+                "check kind: flow analysis, Windows path", Check_Kind (F (3)));
+         Check (Check_Kind (F (4)) = "error", "check kind: error",
+                Check_Kind (F (4)));
+         Check (Check_Kind
+                  ("p.adb:7:8: medium: loop invariant might not be preserved"
+                   & " by an arbitrary iteration") = "loop invariant",
+                "check kind: loop invariant");
+         Check (Check_Kind ("p.adb:7:8: medium: ""X"" might not be"
+                            & " initialized, in call") =
+                  "might not be initialized",
+                "check kind: initialization");
+         Check (Proof_Failures ("gnatprove: error" & LF).Is_Empty,
+                "proof failures: none");
+      end;
       Check (Glob_Match ("src/**/*.adb", "src/a.adb"), "glob ** empty");
       Check (Glob_Match ("src/**/*.adb", "src/x/y/a.adb"), "glob ** deep");
       Check (not Glob_Match ("src/*.adb", "src/x/a.adb"), "glob * no slash");
