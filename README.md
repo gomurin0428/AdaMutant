@@ -197,6 +197,8 @@ equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"
 - Leave debug information out (`-g0`). It contains column positions and the like, so equivalent mutants do not come out the same
 - Linking is not needed (`-c` for gprbuild)
 - All the files with the extension `.o` or `.obj` in the sandbox are compared
+- Before it builds the unchanged project with this command, AdaMutant removes the object files and the ALI files in the sandbox. With the objects of `build` still there, gprbuild would not make them again although the switches differ (unless `-s` is given). Everything is compiled once more, which takes that much time
+- After each mutant is compared, the object files are put back to those of the unchanged project. So the objects of one mutant do not stay for the next comparison, even with a command that only compiles the mutated file (one that uses `ADAMUTANT_MUTANT_FILE`, for example)
 
 A mutant that comes out "the same" is equivalent, but a mutant that comes out "different" is not necessarily non-equivalent: only those that the compiler reduces to the same code are found. The mutants found to be equivalent are listed on the console under `Equivalent mutants`. The verdict is about the program that the compiler and the switches of this command produce.
 

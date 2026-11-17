@@ -1005,29 +1005,95 @@ package body AdaMutant.Runner is
          Command : constant String := To_String (S.Equivalence_Build);
          Log     : constant String := Join (Logs, "equivalence-build.log");
 
+         function Has_Extension (Path, Extension : String) return Boolean is
+           (Path'Length > Extension'Length
+            and then Ada.Characters.Handling.To_Lower
+                       (Path (Path'Last - Extension'Length + 1 .. Path'Last))
+                     = Extension);
+
+         function Is_Object (Path : String) return Boolean is
+           (Has_Extension (Path, ".o") or else Has_Extension (Path, ".obj"));
+
          function Objects (Dir : String) return Digest_Maps.Map is
             Result : Digest_Maps.Map;
          begin
             for Path of Find_Files (Dir, String_Vectors.Empty_Vector) loop
-               declare
-                  Lower : constant String :=
-                    Ada.Characters.Handling.To_Lower (Path);
-               begin
-                  if (Lower'Length > 2
-                      and then Lower (Lower'Last - 1 .. Lower'Last) = ".o")
-                    or else
-                      (Lower'Length > 4
-                       and then Lower (Lower'Last - 3 .. Lower'Last) = ".obj")
-                  then
-                     Result.Insert (Path, Digest (Join (Dir, Path)));
-                  end if;
-               end;
+               if Is_Object (Path) then
+                  Result.Insert (Path, Digest (Join (Dir, Path)));
+               end if;
             end loop;
             return Result;
          end Objects;
 
+         procedure Remove_Objects (Dir : String) is
+            --  The objects in Dir come from the build command, and a
+            --  builder may take them to be up to date although the
+            --  equivalence_build command has other switches (gprbuild
+            --  does, without -s).  Without them, and without the ALI
+            --  files that describe them, everything is compiled anew.
+         begin
+            for Path of Find_Files (Dir, String_Vectors.Empty_Vector) loop
+               if Is_Object (Path) or else Has_Extension (Path, ".ali") then
+                  Ada.Directories.Delete_File (Join (Dir, Path));
+               end if;
+            end loop;
+         end Remove_Objects;
+
          Survivors : Natural := 0;
          Base      : Digest_Maps.Map;
+
+         --  Copies of the object files of the unmodified project.
+         Store : constant String := Join (Sandbox, "equivalence-base");
+
+         procedure Keep_Objects (Dir : String) is
+         begin
+            for C in Base.Iterate loop
+               declare
+                  Target : constant String :=
+                    Join (Store, Digest_Maps.Key (C));
+               begin
+                  Ada.Directories.Create_Path
+                    (Ada.Directories.Containing_Directory (Target));
+                  Ada.Directories.Copy_File
+                    (Join (Dir, Digest_Maps.Key (C)), Target,
+                     "mode=overwrite,preserve=all_attributes");
+               end;
+            end loop;
+         end Keep_Objects;
+
+         procedure Reset_Objects (Dir : String; Now : Digest_Maps.Map) is
+            --  Now is what a build with a mutant has left in Dir.  A
+            --  command that only compiles what has changed since its last
+            --  run (gprbuild) replaces the objects of the mutant by itself
+            --  once the source is the original again, but a command that
+            --  only compiles the mutated file does not, and the objects
+            --  of this mutant would make the next one look different.
+         begin
+            for C in Now.Iterate loop
+               declare
+                  Name : constant String := Digest_Maps.Key (C);
+               begin
+                  if not Base.Contains (Name) then
+                     Ada.Directories.Delete_File (Join (Dir, Name));
+                  elsif Base (Name) /= Digest_Maps.Element (C) then
+                     Ada.Directories.Copy_File
+                       (Join (Store, Name), Join (Dir, Name),
+                        "mode=overwrite,preserve=all_attributes");
+                  end if;
+               end;
+            end loop;
+            for C in Base.Iterate loop
+               declare
+                  Name : constant String := Digest_Maps.Key (C);
+               begin
+                  if not Now.Contains (Name) then
+                     Ada.Directories.Copy_File
+                       (Join (Store, Name), Join (Dir, Name),
+                        "mode=overwrite,preserve=all_attributes");
+                  end if;
+               end;
+            end loop;
+         end Reset_Objects;
 
          --  The files that the command is known to compile.
          Compiled : array (R.Files.First_Index .. R.Files.Last_Index)
@@ -1045,15 +1111,20 @@ package body AdaMutant.Runner is
             Path     : constant String := Join (Dir, Rel);
             Original : constant String := To_String (R.Files (M.File).Source);
             B        : Run_Result;
+            Now      : Digest_Maps.Map;
             Result   : Outcome;
          begin
             Write_Changed (Path, Apply (Original, M.Mutation));
             B := Run (Command, Dir, Join (Logs, Log_Name), M.Id, Build_TO,
                       Mutant_File => Rel);
+            Now := Objects (Dir);
             Result :=
               (if B.Timed_Out or else B.Exit_Code /= 0 then Failed
-               elsif Objects (Dir) = Base then Same else Different);
+               elsif Now = Base then Same else Different);
             Write_Changed (Path, Original);
+            if Now /= Base then
+               Reset_Objects (Dir, Now);
+            end if;
             return Result;
          end Build_With;
 
@@ -1173,9 +1244,10 @@ package body AdaMutant.Runner is
          end if;
 
          --  Every sandbox holds the unmodified sources again.  The objects
-         --  in them are what the last mutants left: the command brings
-         --  those of the first sandbox up to date, and the other sandboxes
-         --  start as copies of it.
+         --  in them are what the last mutants left: the command makes
+         --  those of the first sandbox anew, and the other sandboxes start
+         --  as copies of it.
+         Remove_Objects (Slot_Dir (1));
          declare
             B : constant Run_Result :=
               Run (Command, Slot_Dir (1), Log, 0, Build_TO);
@@ -1199,6 +1271,7 @@ package body AdaMutant.Runner is
             end if;
             return;
          end if;
+         Keep_Objects (Slot_Dir (1));
 
          Survivors := 0;
          for F in Compiled'Range loop

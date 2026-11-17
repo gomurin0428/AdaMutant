@@ -295,6 +295,54 @@ EXAMPLES = {
                 "   end if;\n"
                 "end Test_Counters;\n"},
     },
+    # An equivalence_build command that only compiles the mutated file.  It
+    # does not bring the objects of the mutant before back to those of the
+    # unmodified project, so AdaMutant has to: otherwise the equivalent
+    # mutants of one file look different because of the other file.
+    "equivalence_selective": {
+        "exit": 0, "example": "calculator", "equivalent": 3,
+        "config": "equivalence_build = '{python} compile_one.py'\n",
+        "extra": {
+            "compile_one.py":
+                "import os, subprocess, sys\n"
+                "one = os.environ.get('ADAMUTANT_MUTANT_FILE', '')\n"
+                "command = ['gprbuild', '-p', '-q', '-c', '-P', 'calculator_tests.gpr']\n"
+                "if one:\n"
+                "    command += ['-u', os.path.basename(one)]\n"
+                "sys.exit(subprocess.call(command + ['-cargs', '-O2', '-g0']))\n",
+            "src/more.ads":
+                "package More is\n"
+                "   function Larger (A, B : Integer) return Integer;\n"
+                "end More;\n",
+            "src/more.adb":
+                "package body More is\n"
+                "   function Larger (A, B : Integer) return Integer is\n"
+                "   begin\n"
+                "      if A > B then\n"
+                "         return A;\n"
+                "      else\n"
+                "         return B;\n"
+                "      end if;\n"
+                "   end Larger;\n"
+                "end More;\n",
+            "tests/test_calculator.adb":
+                "with Ada.Command_Line;\n"
+                "with Calculator; use Calculator;\n"
+                "with More;\n"
+                "procedure Test_Calculator is\n"
+                "begin\n"
+                "   if Add (2, 3) /= 5 or else Max (1, 7) /= 7\n"
+                "     or else Max (9, 4) /= 9 or else not Is_Even (4)\n"
+                "     or else Clamp (5, 0, 10) /= 5 or else Clamp (-5, 0, 10) /= 0\n"
+                "     or else Clamp (50, 0, 10) /= 10 or else Grade (95) /= \"A\"\n"
+                "     or else Grade (70) /= \"B\" or else Grade (10) /= \"C\"\n"
+                "     or else Sum_To (4) /= 10\n"
+                "     or else More.Larger (1, 7) /= 7 or else More.Larger (9, 4) /= 9\n"
+                "   then\n"
+                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+                "   end if;\n"
+                "end Test_Calculator;\n"},
+    },
     # An equivalence_build command that fails: a warning, and the survivors
     # stay.
     "equivalence_fails": {
@@ -302,12 +350,21 @@ EXAMPLES = {
         "config": "equivalence_build = '{python} -c \"import sys; sys.exit(3)\"'\n",
         "output": "warning: the equivalence_build command fails (exit status 3)",
     },
-    # An equivalence_build command that compiles nothing leaves the object
-    # files of the normal build as they are.  That must not make every
-    # survivor an equivalent mutant.
+    # An equivalence_build command that compiles nothing: the object files
+    # of the normal build are not taken for its own, so there is nothing to
+    # compare.
     "equivalence_noop": {
         "exit": 0, "example": "calculator", "equivalent": 0,
         "config": "equivalence_build = '{python} -c \"pass\"'\n",
+        "output": "warning: the equivalence_build command leaves no object file",
+    },
+    # An equivalence_build command that compiles something, but not the
+    # mutated files: the object files never change.  That must not make
+    # every survivor an equivalent mutant.
+    "equivalence_other": {
+        "exit": 0, "example": "calculator", "equivalent": 0,
+        "config": "equivalence_build = 'gprbuild -p -q -c -u -P calculator_tests.gpr"
+                  " test_calculator.adb -cargs -O2 -g0'\n",
         "output": "warning: the equivalence_build command makes the same object files",
     },
     # Every mutant's test first allocates 1 GiB, which only the memory limit
@@ -553,13 +610,16 @@ def main():
     if not EXE.exists():
         sys.exit(f"{EXE} not found; run 'make build' first")
     failed = False
+    only = [a for a in sys.argv[1:] if not a.startswith("--")]
     for name, spec in EXAMPLES.items():
+        if only and name not in only:
+            continue
         errors = run_example(name, spec, update)
         print(("FAIL " if errors else "ok   ") + name)
         for e in errors:
             print("  " + e)
         failed = failed or bool(errors)
-    errors = check_since()
+    errors = [] if only and "since" not in only else check_since()
     print(("FAIL " if errors else "ok   ") + "since")
     for e in errors:
         print("  " + e)
