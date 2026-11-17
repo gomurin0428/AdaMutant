@@ -525,8 +525,10 @@ procedure Unit_Tests is
             Wait_Past_Stamps (".", Names);
             Check (To_C (Current_Time) - To_C (Start) <= 1,
                    "no wait for an old file");
+            --  The clock before the write: a new file may get a time stamp
+            --  in the next second while the clock still shows this one.
+            Start := Current_Time;
             Write (Path, "y");
-            Start := File_Time_Stamp (Path);
             Wait_Past_Stamps (".", Names);
             Check (To_C (Current_Time) - To_C (Start) in 2 .. 3,
                    "a wait of two seconds for a new file");

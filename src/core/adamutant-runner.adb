@@ -1772,26 +1772,6 @@ package body AdaMutant.Runner is
       begin
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
       end;
-      for Path of Find_Files (Slot_Dir (1), String_Vectors.Empty_Vector) loop
-         declare
-            Name : constant String := Base_Name (Path);
-
-            function Ends_With (Extension : String) return Boolean is
-              (Name'Length > Extension'Length
-               and then Name (Name'Last - Extension'Length + 1 .. Name'Last)
-                        = Extension);
-         begin
-            --  A shared library may have a version after ".so".
-            if Ends_With (".a") or else Ends_With (".lib")
-              or else Ends_With (".so") or else Ends_With (".dll")
-              or else Ends_With (".dylib")
-              or else Ada.Strings.Fixed.Index (Name, ".so.") > 0
-            then
-               Libraries.Append (Path);
-            end if;
-         end;
-      end loop;
-
       --  Counted before the NoCoverage check, which needs the files the
       --  baseline test compiles too, so a few sandboxes may stay idle.
       Slots := Positive'Max (1, Natural'Min (S.Concurrency, Pending_Count));
@@ -1820,6 +1800,27 @@ package body AdaMutant.Runner is
             end loop;
          end if;
       end;
+
+      --  The libraries, after the tests too: a test command may build one.
+      for Path of Find_Files (Slot_Dir (1), String_Vectors.Empty_Vector) loop
+         declare
+            Name : constant String := Base_Name (Path);
+
+            function Ends_With (Extension : String) return Boolean is
+              (Name'Length > Extension'Length
+               and then Name (Name'Last - Extension'Length + 1 .. Name'Last)
+                        = Extension);
+         begin
+            --  A shared library may have a version after ".so".
+            if Ends_With (".a") or else Ends_With (".lib")
+              or else Ends_With (".so") or else Ends_With (".dll")
+              or else Ends_With (".dylib")
+              or else Ada.Strings.Fixed.Index (Name, ".so.") > 0
+            then
+               Libraries.Append (Path);
+            end if;
+         end;
+      end loop;
 
       --  A mutated file that no compilation of the build depends on can
       --  never be detected; skip its mutants instead of reporting them as
