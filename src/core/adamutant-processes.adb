@@ -21,8 +21,7 @@ package body AdaMutant.Processes is
       Mutant_Id : Natural;
       Timeout   : Duration;
       Memory_Limit_Mb : Natural := 0;
-      Mutant_File : String := "";
-      Coverage_File : String := "") return Run_Result
+      Mutant_File : String := "") return Run_Result
    is
       Id_Image : constant String := Mutant_Id'Image;
       C_Cmd    : chars_ptr := New_String (Command);
@@ -31,8 +30,7 @@ package body AdaMutant.Processes is
       --  NUL-terminated entries ended by an empty one (To_C adds its NUL)
       C_Env    : constant char_array := To_C
         ("ADAMUTANT_MUTANT_ID=" & Id_Image (Id_Image'First + 1 .. Id_Image'Last)
-         & ASCII.NUL & "ADAMUTANT_MUTANT_FILE=" & Mutant_File & ASCII.NUL
-         & "ADAMUTANT_COVERAGE_FILE=" & Coverage_File & ASCII.NUL);
+         & ASCII.NUL & "ADAMUTANT_MUTANT_FILE=" & Mutant_File & ASCII.NUL);
       T_Out    : aliased int := 0;
       Elapsed  : aliased int := 0;
       Ms       : constant int :=

@@ -108,16 +108,90 @@ EXAMPLES = {
         "exit": 2, "example": "calculator", "extra": SPARE,
         "config": "coverage_analysis = false\n", "max_uncovered": 0,
     },
-    # A test command that does not pass the environment on reports nothing:
-    # every mutant is run, as without coverage analysis.
+    # Test programs that cannot write their record (here its directory is
+    # gone) record nothing: every mutant is run, as without coverage
+    # analysis.
     "coverage_lost": {
         "exit": 2, "example": "calculator", "max_uncovered": 0,
-        "config": "test = '{python} no_coverage_file.py'\n",
-        "extra": dict(SPARE, **{"no_coverage_file.py":
-                  "import os, subprocess, sys\n"
-                  "os.environ.pop('ADAMUTANT_COVERAGE_FILE', None)\n"
+        "config": "test = '{python} no_coverage_dir.py'\n",
+        "extra": dict(SPARE, **{"no_coverage_dir.py":
+                  "import os, shutil, subprocess, sys\n"
+                  "shutil.rmtree(os.path.join('..', '..', 'logs', 'coverage'),\n"
+                  "              ignore_errors=True)\n"
                   "sys.exit(subprocess.call([os.path.join('bin', 'test_calculator')]))\n"}),
-        "output": "warning: the tests reported no executed code",
+        "output": "warning: the test programs recorded nothing",
+    },
+    # Tests that execute none of the watched code are not a lost record:
+    # the mutants there are NoCoverage, without a warning.
+    "coverage_none": {
+        "exit": 2, "example": "calculator", "min_uncovered": 30,
+        "not_output": "warning: the test programs recorded nothing",
+        "extra": {"tests/test_calculator.adb":
+                  "with Calculator;\n"
+                  "procedure Test_Calculator is\n"
+                  "begin\n"
+                  "   null;\n"
+                  "end Test_Calculator;\n"},
+    },
+    # A statement that is only watched, on a line with a compiler warning,
+    # in a build that fails because of a mutant elsewhere: the statement is
+    # no longer watched, and its file, which then has nothing left in the
+    # combined build, gets its original source back.  (Left as it was, it
+    # would make every later build fail to link.)
+    "unwatched": {
+        "exit": 0, "example": "calculator", "no_reason": "undefined reference",
+        "extra": {
+            "calculator_tests.gpr":
+                "project Calculator_Tests is\n"
+                "   for Source_Dirs use (\"src\", \"tests\");\n"
+                "   for Object_Dir use \"obj\";\n"
+                "   for Exec_Dir use \"bin\";\n"
+                "   for Main use (\"test_calculator.adb\");\n"
+                "   package Compiler is\n"
+                "      for Default_Switches (\"Ada\") use (\"-gnat2022\", \"-gnata\", \"-gnatwa\");\n"
+                "   end Compiler;\n"
+                "end Calculator_Tests;\n",
+            "src/powers.ads":
+                "package Powers is\n"
+                "   function Square (X : Float) return Float;\n"
+                "end Powers;\n",
+            "src/powers.adb":
+                "package body Powers is\n"
+                "   function Square (X : Float) return Float is\n"
+                "   begin\n"
+                "      return X ** 2;\n"
+                "   end Square;\n"
+                "end Powers;\n",
+            "src/b_spare.ads":
+                "package B_Spare is\n"
+                "   Count : Integer;\n"
+                "   procedure Touch;\n"
+                "end B_Spare;\n",
+            "src/b_spare.adb":
+                "package body B_Spare is\n"
+                "   procedure Touch is\n"
+                "   begin\n"
+                "      Count := Count;\n"
+                "   end Touch;\n"
+                "end B_Spare;\n",
+            "tests/test_calculator.adb":
+                "with Ada.Command_Line;\n"
+                "with B_Spare;\n"
+                "with Calculator; use Calculator;\n"
+                "with Powers;\n"
+                "procedure Test_Calculator is\n"
+                "begin\n"
+                "   B_Spare.Touch;\n"
+                "   if Add (2, 3) /= 5 or else Max (1, 7) /= 7\n"
+                "     or else Max (9, 4) /= 9 or else not Is_Even (4)\n"
+                "     or else Clamp (5, 0, 10) /= 5 or else Clamp (-5, 0, 10) /= 0\n"
+                "     or else Clamp (50, 0, 10) /= 10 or else Grade (95) /= \"A\"\n"
+                "     or else Grade (70) /= \"B\" or else Grade (10) /= \"C\"\n"
+                "     or else Sum_To (4) /= 10 or else Powers.Square (3.0) /= 9.0\n"
+                "   then\n"
+                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+                "   end if;\n"
+                "end Test_Calculator;\n"},
     },
     # Tests and proof together: a mutant in code that no test executes
     # skips the tests and goes to the proof.
@@ -217,6 +291,8 @@ def run_example(name, spec, update):
             errors.append(f"exit status {proc.returncode}, expected {spec['exit']}\n{proc.stdout}")
         if spec.get("output", "") not in proc.stdout:
             errors.append(f"output lacks {spec['output']!r}\n{proc.stdout}")
+        if "not_output" in spec and spec["not_output"] in proc.stdout:
+            errors.append(f"output has {spec['not_output']!r}\n{proc.stdout}")
         for p, data in before.items():
             if p.read_bytes() != data:
                 errors.append(f"{p.relative_to(work)} was modified by the run")
@@ -239,11 +315,17 @@ def run_example(name, spec, update):
         logs = work / ".adamutant" / "logs"
         uncovered = [m for m in mutants if m.get("coveredBy") == []]
         for m in uncovered:
-            for step in ("build", "test"):
-                if (logs / f"mutant-{m['id']}-{step}.log").exists():
-                    errors.append(f"mutant {m['id']} is not covered, but has a {step} log")
-            if m["status"] == "NoCoverage" and (logs / f"mutant-{m['id']}-prove.log").exists():
-                errors.append(f"mutant {m['id']} is NoCoverage, but has a prove log")
+            if (logs / f"mutant-{m['id']}-test.log").exists():
+                errors.append(f"mutant {m['id']} is not covered, but has a test log")
+            for step in ("build", "prove"):
+                if m["status"] == "NoCoverage" and (logs / f"mutant-{m['id']}-{step}.log").exists():
+                    errors.append(f"mutant {m['id']} is NoCoverage, but has a {step} log")
+        for m in mutants:
+            if "no_reason" in spec and spec["no_reason"] in m.get("statusReason", ""):
+                errors.append(f"mutant {m['id']}: {m['statusReason']}")
+            if "no_reason" in spec and (logs / f"mutant-{m['id']}-build.log").exists() \
+                    and spec["no_reason"] in (logs / f"mutant-{m['id']}-build.log").read_text():
+                errors.append(f"mutant {m['id']}: {spec['no_reason']} in its build log")
         if len(uncovered) < spec.get("min_uncovered", 0):
             errors.append(f"{len(uncovered)} mutants without coverage, "
                           f"expected at least {spec['min_uncovered']}")

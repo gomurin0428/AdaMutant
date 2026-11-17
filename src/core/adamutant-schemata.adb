@@ -460,8 +460,9 @@ package body AdaMutant.Schemata is
          Put (Source (Pos .. Anchor));
          --  In a pure unit GNAT warns about the import, and about calls
          --  that it may leave out.  Leaving out a repeated call for one
-         --  place is fine: the result is the same for the whole run of the
-         --  program, and the place has been reported.
+         --  place would be fine: the result is the same for the whole run
+         --  of the program, and the place has been recorded.  (GNAT 14 and
+         --  16 leave out no call, at any optimization level.)
          Put (LF & "pragma Warnings (Off); "
               & "function " & Name & " (Site : Standard.Integer)"
               & " return Standard.Integer; "
@@ -564,14 +565,45 @@ package body AdaMutant.Schemata is
       & "   pragma Export (C, Active, """ & Symbol & """);" & LF
       & "end " & Unit_Name & ";" & LF);
 
+   function Ada_Literal (S : String) return String is
+      --  An Ada expression for S that does not depend on the encoding
+      --  that the compiler reads the source in.
+      R      : Unbounded_String := To_Unbounded_String ("""");
+      Quoted : Boolean := True;
+   begin
+      for C of S loop
+         if C in ' ' .. '~' and then C /= '"' then
+            if not Quoted then
+               Append (R, " & """);
+               Quoted := True;
+            end if;
+            Append (R, C);
+         else
+            if Quoted then
+               Append (R, """");
+               Quoted := False;
+            end if;
+            Append (R, " & Character'Val (" & Image (Character'Pos (C)) & ")");
+         end if;
+      end loop;
+      if Quoted then
+         Append (R, """");
+      end if;
+      return To_String (R);
+   end Ada_Literal;
+
    --  The environment is read on the first call and not when the unit is
    --  elaborated: a mutant can be in code that runs during the elaboration
-   --  of a unit that comes first.  For the same reason nothing here relies
-   --  on its elaboration: should the body be elaborated after the first
-   --  calls and reset the variables, the environment is read once more and
-   --  a place may be reported twice.  The text is Ada 95, so it compiles
-   --  with whatever language version the project sets.
-   function Support_Body (Last_Site : Natural := 0) return String is
+   --  of a unit that comes first.  For the same reason nothing but the
+   --  first line of the record relies on the elaboration of the body:
+   --  should the body be elaborated after the first calls and reset the
+   --  array, a place may be recorded twice.  The file is flushed after
+   --  every line, so a program that ends abruptly loses nothing, and every
+   --  process has a file of its own, so no two processes write to one
+   --  file.  The text is Ada 95, so it compiles with whatever language
+   --  version the project sets.
+   function Support_Body
+     (Last_Site : Natural := 0; Coverage_Dir : String := "") return String is
      (Style_Off & LF
       & "pragma Warnings (Off);" & LF
       & "with System;" & LF
@@ -579,6 +611,8 @@ package body AdaMutant.Schemata is
       & "package body " & Unit_Name & " is" & LF
       & "   pragma SPARK_Mode (Off);" & LF
       & "   use type System.Address;" & LF
+      & "   Folder : constant String :=" & LF
+      & "     " & Ada_Literal (Coverage_Dir) & ";" & LF
       & "   Loaded : Boolean := False;" & LF
       & "   Value  : Standard.Integer := 0;" & LF
       & "   Stream : System.Address := System.Null_Address;" & LF
@@ -588,6 +622,8 @@ package body AdaMutant.Schemata is
       & "   function Getenv (Name : System.Address) return System.Address;"
       & LF
       & "   pragma Import (C, Getenv, ""getenv"");" & LF
+      & "   function Getpid return Standard.Integer;" & LF
+      & "   pragma Import (C, Getpid, ""getpid"");" & LF
       & "   function Fopen (Path, Mode : System.Address) return System.Address;"
       & LF
       & "   pragma Import (C, Fopen, ""fopen"");" & LF
@@ -596,15 +632,24 @@ package body AdaMutant.Schemata is
       & "   pragma Import (C, Fputs, ""fputs"");" & LF
       & "   function Fflush (To : System.Address) return Standard.Integer;" & LF
       & "   pragma Import (C, Fflush, ""fflush"");" & LF
+      & "   function Digits_Of (N : Standard.Integer) return String is" & LF
+      & "      Text  : String (1 .. 12);" & LF
+      & "      First : Standard.Integer := 13;" & LF
+      & "      Rest  : Standard.Integer := N;" & LF
+      & "   begin" & LF
+      & "      loop" & LF
+      & "         First := First - 1;" & LF
+      & "         Text (First) :=" & LF
+      & "           Character'Val (Character'Pos ('0') + Rest mod 10);" & LF
+      & "         Rest := Rest / 10;" & LF
+      & "         exit when Rest = 0;" & LF
+      & "      end loop;" & LF
+      & "      return Text (First .. 12);" & LF
+      & "   end Digits_Of;" & LF
       & "   procedure Load is" & LF
-      & "      Id_Name   : aliased constant String :=" & LF
+      & "      Id_Name : aliased constant String :=" & LF
       & "        ""ADAMUTANT_MUTANT_ID"" & ASCII.NUL;" & LF
-      & "      File_Name : aliased constant String :=" & LF
-      & "        ""ADAMUTANT_COVERAGE_FILE"" & ASCII.NUL;" & LF
-      & "      Mode      : aliased constant String := ""a"" & ASCII.NUL;" & LF
       & "      Where : System.Address := Getenv (Id_Name'Address);" & LF
-      & "      File  : constant System.Address := Getenv (File_Name'Address);"
-      & LF
       & "      Found : Standard.Integer := 0;" & LF
       & "   begin" & LF
       & "      if Where /= System.Null_Address then" & LF
@@ -622,36 +667,26 @@ package body AdaMutant.Schemata is
       & "            Where := System.Storage_Elements.""+"" (Where, 1);" & LF
       & "         end loop;" & LF
       & "      end if;" & LF
-      & "      if File /= System.Null_Address then" & LF
+      & "      if Found = 0 and then Folder'Length > 0 then" & LF
       & "         declare" & LF
-      & "            First : Character;" & LF
-      & "            for First'Address use File;" & LF
-      & "            pragma Import (Ada, First);" & LF
+      & "            Name : aliased constant String :=" & LF
+      & "              Folder & ""/"" & Digits_Of (abs Getpid) & "".txt""" & LF
+      & "              & ASCII.NUL;" & LF
+      & "            Mode : aliased constant String := ""a"" & ASCII.NUL;" & LF
       & "         begin" & LF
-      & "            if First /= ASCII.NUL then" & LF
-      & "               Stream := Fopen (File, Mode'Address);" & LF
-      & "            end if;" & LF
+      & "            Stream := Fopen (Name'Address, Mode'Address);" & LF
       & "         end;" & LF
       & "      end if;" & LF
       & "      Value := Found;" & LF
       & "      Loaded := True;" & LF
       & "   end Load;" & LF
       & "   procedure Report (Site : Standard.Integer) is" & LF
-      & "      Text  : aliased String (1 .. 12);" & LF
-      & "      First : Standard.Integer := 11;" & LF
-      & "      Rest  : Standard.Integer := Site;" & LF
-      & "      Code  : Standard.Integer;" & LF
+      & "      Text : aliased constant String :=" & LF
+      & "        Digits_Of (Site) & ASCII.LF & ASCII.NUL;" & LF
+      & "      Code : Standard.Integer;" & LF
       & "   begin" & LF
-      & "      Text (11) := ASCII.LF;" & LF
-      & "      Text (12) := ASCII.NUL;" & LF
-      & "      loop" & LF
-      & "         First := First - 1;" & LF
-      & "         Text (First) :=" & LF
-      & "           Character'Val (Character'Pos ('0') + Rest mod 10);" & LF
-      & "         Rest := Rest / 10;" & LF
-      & "         exit when Rest = 0;" & LF
-      & "      end loop;" & LF
-      & "      Code := Fputs (Text (First)'Address, Stream);" & LF
+      & "      Seen (Site) := True;" & LF
+      & "      Code := Fputs (Text'Address, Stream);" & LF
       & "      Code := Fflush (Stream);" & LF
       & "   end Report;" & LF
       & "   function Active (Site : Standard.Integer)" & LF
@@ -663,11 +698,17 @@ package body AdaMutant.Schemata is
       & "      if Stream /= System.Null_Address" & LF
       & "        and then Site in Seen'Range and then not Seen (Site)" & LF
       & "      then" & LF
-      & "         Seen (Site) := True;" & LF
       & "         Report (Site);" & LF
       & "      end if;" & LF
       & "      return Value;" & LF
       & "   end Active;" & LF
+      & "begin" & LF
+      & "   if not Loaded then" & LF
+      & "      Load;" & LF
+      & "   end if;" & LF
+      & "   if Stream /= System.Null_Address then" & LF
+      & "      Report (0);" & LF
+      & "   end if;" & LF
       & "end " & Unit_Name & ";" & LF);
 
    function With_Support (Source : String) return String is

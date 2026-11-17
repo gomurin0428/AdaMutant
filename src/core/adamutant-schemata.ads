@@ -55,10 +55,8 @@ package AdaMutant.Schemata is
       --  The candidates that lie in one of the places above (those in
       --  Included and the probes), in the order of the candidates, each
       --  with the number of its place: the Id of the first candidate
-      --  there.  When the program executes a place while the environment
-      --  variable ADAMUTANT_COVERAGE_FILE names a file, it appends the
-      --  number of the place to that file, on a line of its own, once per
-      --  process.
+      --  there.  The support unit can record the places that a program
+      --  executes (see Support_Body).
       Owners   : Owner_Vectors.Vector;
       --  Owners (L) is the mutant whose code is on line L of Text, or the
       --  probe whose place alone line L belongs to, or 0 for a line that
@@ -85,9 +83,15 @@ package AdaMutant.Schemata is
    Support_Body_File : constant String := "adamutant_schemata_support.adb";
 
    function Support_Spec return String;
-   function Support_Body (Last_Site : Natural := 0) return String;
+   function Support_Body
+     (Last_Site : Natural := 0; Coverage_Dir : String := "") return String;
    --  Last_Site is the largest number of a place in the schemas of the
-   --  program.
+   --  program.  With a Coverage_Dir, a program that runs with no mutant
+   --  active records the places that it executes: each process appends
+   --  their numbers, one per line and each once, to the file
+   --  "<process id>.txt" in that directory, which has to exist.  The
+   --  first line is 0 and is written when the unit is elaborated, so a
+   --  process that executes no place leaves a file too.
 
    function With_Support (Source : String) return String;
    --  Source, the text of a main subprogram or of a schema of one, with a

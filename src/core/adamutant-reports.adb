@@ -280,7 +280,7 @@ package body AdaMutant.Reports is
       end if;
 
       --  The lines that no test executes, once each: there the mutation
-      --  does not matter.
+      --  does not matter.  With a proof their mutants are not NoCoverage.
       declare
          Header : Boolean := False;
          K      : Positive := R.Mutants.First_Index;
@@ -288,11 +288,8 @@ package body AdaMutant.Reports is
       begin
          while K <= R.Mutants.Last_Index loop
             Last := K;
-            if R.Mutants (K).Status = No_Coverage
-              and then R.Mutants (K).Reached = Not_Covered
-            then
+            if R.Mutants (K).Reached = Not_Covered then
                while Last < R.Mutants.Last_Index
-                 and then R.Mutants (Last + 1).Status = No_Coverage
                  and then R.Mutants (Last + 1).Reached = Not_Covered
                  and then R.Mutants (Last + 1).File = R.Mutants (K).File
                  and then R.Mutants (Last + 1).Start_Pos.Line

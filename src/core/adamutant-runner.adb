@@ -299,20 +299,17 @@ package body AdaMutant.Runner is
       function Slot_Dir (Slot : Positive) return String is
         (Join (Sandbox, Image (Slot)));
 
-      function Coverage_Log (Slot : Positive) return String is
-        (Join (Logs, "coverage-" & Image (Slot) & ".txt"));
-      --  The places that the tests in a sandbox executed.
+      Coverage_Dir : constant String := Join (Logs, "coverage");
+      --  Where the programs of the combined build record the places that
+      --  they execute while no mutant is active, a file per process.
 
       procedure Baseline_Step
         (Name, Command : String; Timeout : Duration; Elapsed : out Duration;
-         Memory_Limit_Mb : Natural := 0; Slots : Positive := 1;
-         Coverage : Boolean := False)
+         Memory_Limit_Mb : Natural := 0; Slots : Positive := 1)
       is
          --  The step runs in sandboxes 1 .. Slots at once, as the workers
          --  will run mutants, so Elapsed (the slowest run) includes the
-         --  slowdown of running in parallel.  With Coverage the programs
-         --  write the places they execute to the Coverage_Log of their
-         --  sandbox.
+         --  slowdown of running in parallel.
          function Log (Slot : Positive) return String is
            (Join (Logs, "baseline-" & Name
                   & (if Slot = 1 then "" else "-" & Image (Slot)) & ".log"));
@@ -333,9 +330,7 @@ package body AdaMutant.Runner is
                end Start;
                Results (Mine) :=
                  Run (Command, Slot_Dir (Mine), Log (Mine), 0, Timeout,
-                      Memory_Limit_Mb,
-                      Coverage_File =>
-                        (if Coverage then Coverage_Log (Mine) else ""));
+                      Memory_Limit_Mb);
             exception
                when E : others =>
                   Errors (Mine) := To_Unbounded_String
@@ -449,8 +444,11 @@ package body AdaMutant.Runner is
       end Wait_For_New_Stamp;
 
       procedure Test_Mutant
-        (Slot : Positive; M : in out Mutant; Already_Tested : Boolean)
+        (Slot : Positive; M : in out Mutant; Built, Skip_Tests : Boolean)
       is
+         --  Built: the build that contains the mutants has compiled M.
+         --  Skip_Tests: the tests have run with M there and passed, or
+         --  they do not execute the place of M.
          Dir      : constant String := Slot_Dir (Slot);
          Rel      : constant String := To_String (R.Files (M.File).Path);
          Path     : constant String := Join (Dir, Rel);
@@ -465,7 +463,7 @@ package body AdaMutant.Runner is
                  (if Name = "test" then S.Test_Memory_Limit_Mb else 0), Rel));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
-         if not Already_Tested then
+         if not Built then
             declare
                B : constant Run_Result :=
                  Step ("build", To_String (S.Build), Build_TO);
@@ -487,7 +485,7 @@ package body AdaMutant.Runner is
                end if;
             end;
          end if;
-         if M.Status = Pending and then Has_Test and then not Already_Tested
+         if M.Status = Pending and then Has_Test and then not Skip_Tests
          then
             declare
                T : constant Run_Result :=
@@ -605,7 +603,9 @@ package body AdaMutant.Runner is
             if Combined_Build then
                Test_Combined (Slot, Index, Work_Items (Index));
             else
-               Test_Mutant (Slot, Work_Items (Index), Tested (Index));
+               Test_Mutant (Slot, Work_Items (Index),
+                            Built      => Combined (Index),
+                            Skip_Tests => Tested (Index));
             end if;
             if Work_Items (Index).Status = Pending then
                --  Its tests passed in the combined build; the proof is
@@ -678,6 +678,11 @@ package body AdaMutant.Runner is
          function Is_Main (Path : String) return Boolean is
            (Mains.Contains (Path));
 
+         --  The files other than the mains that hold the text of a schema
+         --  in the first sandbox.
+         Holds_Schema : array (R.Files.First_Index .. R.Files.Last_Index)
+           of Boolean := [others => False];
+
          procedure Generate (F : Positive) is
             Candidates : AdaMutant.Schemata.Candidate_Vectors.Vector;
          begin
@@ -711,17 +716,25 @@ package body AdaMutant.Runner is
 
          procedure Write_Sources (Slot : Positive; Restore : Boolean) is
             --  The sources of the combined build, or the original ones
-            --  again.
+            --  again.  A file whose last mutant has left the combined
+            --  build gets its original source back at once: its schema
+            --  needs the support unit, which later builds do not have.
             Dir : constant String := Slot_Dir (Slot);
          begin
             for F in Schemas'Range loop
-               if Length (Schemas (F).Text) > 0
-                 and then not Is_Main (Rel (F))
-               then
+               if Is_Main (Rel (F)) then
+                  null;
+               elsif not Restore and then Length (Schemas (F).Text) > 0 then
                   Write_Changed
-                    (Join (Dir, Rel (F)),
-                     (if Restore then To_String (R.Files (F).Source)
-                      else To_String (Schemas (F).Text)));
+                    (Join (Dir, Rel (F)), To_String (Schemas (F).Text));
+                  Holds_Schema (F) := True;
+               elsif Holds_Schema (F) then
+                  --  The other sandboxes are copies of the first.
+                  Write_Changed
+                    (Join (Dir, Rel (F)), To_String (R.Files (F).Source));
+                  if Slot = Slots or else not Restore then
+                     Holds_Schema (F) := False;
+                  end if;
                end if;
             end loop;
             for K in Mains.First_Index .. Mains.Last_Index loop
@@ -760,7 +773,10 @@ package body AdaMutant.Runner is
                      Write (Spec, AdaMutant.Schemata.Support_Spec);
                      Write (Body_File,
                             AdaMutant.Schemata.Support_Body
-                              (Last_Site => Natural (R.Mutants.Length)));
+                              (Last_Site    => Natural (R.Mutants.Length),
+                               Coverage_Dir =>
+                                 (if S.Coverage_Analysis then Coverage_Dir
+                                  else "")));
                   end if;
                end;
             end loop;
@@ -810,41 +826,55 @@ package body AdaMutant.Runner is
             --  The tests of the unmodified project have run in the
             --  combined build.  They cannot detect a mutant in a place that
             --  they do not execute.
-            Hit     : Flags := [others => False];
-            Any_Hit : Boolean := False;
+            Hit      : Flags := [others => False];
+            Reported : Boolean := False;
+            Merged   : Unbounded_String;
+            Records  : constant String_Vectors.Vector :=
+              (if Ada.Directories.Exists (Coverage_Dir)
+               then Find_Files (Coverage_Dir, String_Vectors.Empty_Vector)
+               else String_Vectors.Empty_Vector);
          begin
-            for Slot in 1 .. Slots loop
-               if Ada.Directories.Exists (Coverage_Log (Slot)) then
-                  declare
-                     Text  : constant String := Read (Coverage_Log (Slot));
-                     Value : Natural := 0;
-                     Valid : Boolean := False;
-                  begin
-                     for C of Text loop
-                        if C in '0' .. '9' then
-                           if Value <= Hit'Last then
-                              Value := Value * 10
-                                + (Character'Pos (C) - Character'Pos ('0'));
-                           end if;
-                           Valid := True;
-                        else
-                           if Valid and then Value in Hit'Range then
-                              Hit (Value) := True;
-                              Any_Hit := True;
-                           end if;
-                           Value := 0;
-                           Valid := False;
+            for Name of Records loop
+               declare
+                  Text  : constant String := Read (Join (Coverage_Dir, Name));
+                  Value : Natural := 0;
+                  Valid : Boolean := False;
+               begin
+                  for C of Text loop
+                     if C in '0' .. '9' then
+                        if Value <= Hit'Last then
+                           Value := Value * 10
+                             + (Character'Pos (C) - Character'Pos ('0'));
                         end if;
-                     end loop;
-                  end;
+                        Valid := True;
+                     else
+                        if Valid then
+                           --  0 is the line that every process writes.
+                           Reported := True;
+                           if Value in Hit'Range then
+                              Hit (Value) := True;
+                           end if;
+                        end if;
+                        Value := 0;
+                        Valid := False;
+                     end if;
+                  end loop;
+               end;
+            end loop;
+            for K in Hit'Range loop
+               if Hit (K) then
+                  Append (Merged, Image (K) & ASCII.LF);
                end if;
             end loop;
-            if not Any_Hit then
-               --  The programs under test did not get the environment, or
-               --  cannot write the file.
+            Write (Join (Logs, "coverage.txt"), To_String (Merged));
+            Delete_Tree (Coverage_Dir);
+            if not Reported then
+               --  No program that contains the support unit has run, or
+               --  none could write its file.
                if Warn /= null then
-                  Warn ("the tests reported no executed code; coverage"
-                        & " analysis is off for this run");
+                  Warn ("the test programs recorded nothing about the code"
+                        & " that they execute; coverage analysis is off for"
+                        & " this run");
                end if;
                return;
             end if;
@@ -935,9 +965,11 @@ package body AdaMutant.Runner is
             declare
                Elapsed : Duration;
             begin
+               if S.Coverage_Analysis then
+                  Ada.Directories.Create_Path (Coverage_Dir);
+               end if;
                Baseline_Step ("combined-test", To_String (S.Test), 0.0,
-                              Elapsed, S.Test_Memory_Limit_Mb, Slots,
-                              Coverage => S.Coverage_Analysis);
+                              Elapsed, S.Test_Memory_Limit_Mb, Slots);
                Combined_Test_TO :=
                  Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
             end;

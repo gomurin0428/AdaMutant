@@ -938,9 +938,17 @@ procedure Unit_Tests is
              "schemata: with clause after pragmas, no line added");
       Check (Ada.Strings.Fixed.Index (Support_Body, "ADAMUTANT_MUTANT_ID") > 0
              and then Ada.Strings.Fixed.Index
-                        (Support_Body, "ADAMUTANT_COVERAGE_FILE") > 0
-             and then Ada.Strings.Fixed.Index
                         (Support_Body (Last_Site => 41), "range 0 .. 41)") > 0
+             and then Ada.Strings.Fixed.Index
+                        (Support_Body, "Folder : constant String :=" & LF
+                         & "     """";") > 0
+             and then Ada.Strings.Fixed.Index
+                        (Support_Body
+                           (Coverage_Dir => "/a b/""q""/" & Character'Val (233)
+                            & "/logs"),
+                         "     ""/a b/"" & Character'Val (34) & ""q"""
+                         & " & Character'Val (34) & ""/"""
+                         & " & Character'Val (233) & ""/logs"";") > 0
              and then Ada.Strings.Fixed.Index
                         (Support_Spec, "adamutant_schemata_active") > 0,
              "schemata: support unit");

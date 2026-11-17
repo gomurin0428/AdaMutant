@@ -166,15 +166,18 @@ When the build that contains all the mutants has a compile error, AdaMutant find
 
 ### Code that no test executes
 
-The tests cannot detect a mutant in a place that no test executes. AdaMutant does not run such a mutant and marks it as NoCoverage. Survived then means "the tests pass through the code but do not check it", NoCoverage means "the tests do not pass through the code", and the run takes less time.
+The tests cannot detect a mutant in a place that no test executes. AdaMutant does not run such a mutant and marks it as NoCoverage. In the places that are recorded (see below), Survived then means "the tests execute the code but do not check the result", NoCoverage means "the tests do not execute the code", and the run takes less time.
 
-It works as follows. In the build that contains all the mutants, the function that switches the mutants records the number of the place that it is called from. When AdaMutant runs the tests with no mutant active, it passes a file name in the environment variable `ADAMUTANT_COVERAGE_FILE`, and the test program writes the numbers of the places that it executes to that file.
+It works as follows. In the build that contains all the mutants, the function that switches the mutants records the number of the place that it is called from. It records only while no mutant is active (`ADAMUTANT_MUTANT_ID` is 0 or not set). Before it runs the mutants, AdaMutant runs the tests once with no mutant active. Each process of the test program then writes the numbers of the places that it executes to `.adamutant/logs/coverage/<process id>.txt`. The directory is built into the generated unit. The merged result stays in `.adamutant/logs/coverage.txt`.
 
 - This covers the mutants that are in the build that contains all the mutants, and StatementDeletion. A StatementDeletion mutant is not in that build, but the build records whether the statement is executed. The StatementDeletion of a statement that is not executed is not even built
 - Mutants that cannot be put together, such as those in declarations, are not covered by this and are run as before
 - When `prove` is set too, a mutant in a place that no test executes skips the tests and goes to the proof. If the proof passes as well, it is Survived
-- When the tests record no place at all, AdaMutant prints a warning and runs every mutant (the test command does not pass the environment variable on to the test program, for example)
-- Tests whose path depends on random numbers or on the time may, when a mutant runs, pass through a place that they did not pass through when the places were recorded. In that case `coverage_analysis = false` runs every mutant as before
+- A NoCoverage mutant is not compiled either. A mutant that does not compile is also NoCoverage when it is in a place that no test executes
+- When the test programs record nothing, AdaMutant prints a warning and runs every mutant (they cannot write to the directory, for example). A test program writes a first line when it starts, so executing no place is told apart from not being able to record
+- The run that records has to execute everything that the runs of the mutants execute. In the following cases a mutant that would be detected becomes NoCoverage, so set `coverage_analysis = false`
+  - Tests whose path depends on random numbers or on the time
+  - A test command that chooses the tests to run by `ADAMUTANT_MUTANT_ID` or `ADAMUTANT_MUTANT_FILE` (they are 0 and empty in the run that records)
 - The console lists the lines that no test executes under `Lines that no test executes:`. The JSON report has `coveredBy` for each mutant (`["tests"]` when the place is executed, `[]` when it is not, absent when it was not examined)
 
 There is one difference from building the mutants one at a time. The style checks are turned off in the sources that contain all the mutants, and the warnings that come from looking at the whole file (a variable is no longer used because a statement was deleted, for example) do not appear. So, in a project that treats warnings as errors (`-gnatwe`, `-gnaty`), a mutant that did not compile only because of a warning is now run instead of becoming CompileError.
@@ -182,8 +185,8 @@ There is one difference from building the mutants one at a time. The style check
 What it needs:
 
 - The main subprogram of the test program is written in Ada, and the build leaves GNAT ALI files. The function that returns the number of the active mutant is in `AdaMutant_Schemata_Support`, a unit that AdaMutant generates. Only inside the sandbox, AdaMutant puts it in the same directory as the source of the main and adds a `with` to the main. When the main cannot be found, AdaMutant prints a warning and builds every mutant one at a time
-- C's `getenv` is available (to read the environment variables). Recording the executed places also uses `fopen`, `fputs` and `fflush`
-- The test command runs the built executable as it is. `ADAMUTANT_MUTANT_ID` is the environment variable that has always been passed to the test command, and it has to reach the test program. So does `ADAMUTANT_COVERAGE_FILE`
+- C's `getenv` is available (to read the environment variable). Recording the executed places also uses `getpid`, `fopen`, `fputs` and `fflush`
+- The test command runs the built executable as it is. `ADAMUTANT_MUTANT_ID` is the environment variable that has always been passed to the test command, and it has to reach the test program
 
 ## Examples
 
