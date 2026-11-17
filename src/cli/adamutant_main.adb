@@ -171,7 +171,12 @@ procedure AdaMutant_Main is
          --  A first run has no earlier report yet.
          if not Ada.Directories.Exists (To_String (Baseline)) then
             Warn ("the baseline report " & To_String (Baseline)
-                  & " does not exist; every mutant is run");
+                  & " does not exist; no result is reused");
+         elsif Ada.Directories.Kind (To_String (Baseline))
+               not in Ada.Directories.Ordinary_File
+         then
+            raise AdaMutant.Runner.Run_Error with
+              "--baseline " & To_String (Baseline) & ": not a file";
          else
             declare
                Reused : Natural;

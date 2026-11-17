@@ -957,7 +957,7 @@ def check_baseline():
 
         # A first run has no earlier report: a warning, and everything runs.
         proc, first = run("--baseline", str(base))
-        if proc.returncode != 0 or "does not exist; every mutant is run" not in proc.stdout:
+        if proc.returncode != 0 or "does not exist; no result is reused" not in proc.stdout:
             return [f"first run: exit {proc.returncode}\n{proc.stdout}"]
         if any(reused(m) for m in first.values()):
             errors.append("first run: a result is marked as reused")
@@ -974,14 +974,12 @@ def check_baseline():
         proc, second = run("--baseline", str(base))
         if proc.returncode != 0 or "Reused " not in proc.stdout:
             return errors + [f"second run: exit {proc.returncode}\n{proc.stdout}"]
-        moved = {k: m for k, m in second.items() if "B + A" not in
-                 src.read_text().splitlines()[m["location"]["start"]["line"] - 1]}
+        moved = {k: m for k, m in second.items()
+                 if not (k.startswith("src/calculator.adb") and "B + A" in
+                         src.read_text().splitlines()[m["location"]["start"]["line"] - 1])}
         if len(moved) != len(second) - 1:
             errors.append("second run: expected one mutant on the changed line")
-        old = {(k.split()[1], k.split(" ", 2)[2], m["status"]) for k, m in first.items()}
         for k, m in second.items():
-            was_detected = any(o[0] == k.split()[1] and o[1] == k.split(" ", 2)[2]
-                               and o[2] in ("Killed", "Timeout") for o in old)
             if k not in moved:
                 if reused(m) or not ran(m) or m["status"] != "Killed":
                     errors.append(f"second run, changed line: {k} {m['status']} {m.get('statusReason')}")
@@ -1037,10 +1035,14 @@ def check_baseline():
             errors.append("third run: results of the earlier report were examined again")
 
         bad = work / "bad.json"
-        bad.write_text("{}")
-        proc, _ = run("--baseline", str(bad))
-        if proc.returncode != 1 or "--baseline" not in proc.stdout:
-            errors.append(f"bad report: exit {proc.returncode}, {proc.stdout}")
+        for text in ("{}", '{"files": {', ""):
+            bad.write_text(text)
+            proc, _ = run("--baseline", str(bad))
+            if proc.returncode != 1 or "--baseline" not in proc.stdout:
+                errors.append(f"bad report {text!r}: exit {proc.returncode}, {proc.stdout}")
+        proc, _ = run("--baseline", str(work / "src"))
+        if proc.returncode != 1 or "not a file" not in proc.stdout:
+            errors.append(f"a directory as the report: exit {proc.returncode}, {proc.stdout}")
         proc = subprocess.run([str(EXE), "list", "--baseline", str(base)], cwd=work,
                               text=True, capture_output=True)
         if proc.returncode != 1 or "run command" not in proc.stderr:

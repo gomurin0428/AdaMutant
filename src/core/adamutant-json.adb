@@ -1,4 +1,21 @@
+with Ada.Unchecked_Deallocation;
+
 package body AdaMutant.Json is
+
+   procedure Free (V : in out Value) is
+      procedure Release is new Ada.Unchecked_Deallocation (Node, Value);
+   begin
+      if V /= null then
+         for Item of V.Items loop
+            declare
+               Inner : Value := Item;
+            begin
+               Free (Inner);
+            end;
+         end loop;
+         Release (V);
+      end if;
+   end Free;
 
    function Parse (Source : String) return Value is
       P : Positive := Source'First;

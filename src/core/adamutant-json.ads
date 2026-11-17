@@ -8,7 +8,7 @@ package AdaMutant.Json is
 
    type Value is private;
    --  A value of a parsed text.  The values of a text stay allocated until
-   --  the program ends.
+   --  the value that Parse returned is given to Free.
 
    No_Value : constant Value;
    --  What Field returns for a member that an object does not have.
@@ -48,6 +48,10 @@ package AdaMutant.Json is
    function Field (V : Value; Name : String) return Value;
    --  The value of the first member Name of an object, or No_Value when
    --  there is none or V is not an object.
+
+   procedure Free (V : in out Value);
+   --  Gives back the storage of V and of everything in it; V is No_Value
+   --  afterwards.  The values taken from it must not be used any more.
 
 private
 

@@ -929,11 +929,57 @@ procedure Unit_Tests is
              Map (New_Source, Old_Source));
       Check (Map ("a" & LF & "x" & LF & "b" & LF & "y" & LF & "c" & LF,
                   "c" & LF & "a" & LF & "b" & LF & "x" & LF & "c" & LF)
-             = " 0 1 3 0 5", "line map: lines keep their order",
+             = " 0 1 0 2 5", "line map: lines keep their order",
              Map ("a" & LF & "x" & LF & "b" & LF & "y" & LF & "c" & LF,
                   "c" & LF & "a" & LF & "b" & LF & "x" & LF & "c" & LF));
       Check (Map ("", "a" & LF) = " 0" and then Map ("a" & LF, "") = "",
              "line map: empty texts");
+      --  Two blocks change places.  The lines that both have ("begin",
+      --  the return statement) are not taken for those of the other
+      --  block: the block that keeps its place among the lines that occur
+      --  once maps, the other one counts as changed.
+      Check (Map ("function Add" & LF & "begin" & LF & "   return A + B;" & LF
+                  & "end Add;" & LF & LF
+                  & "function Plus" & LF & "begin" & LF & "   return A + B;"
+                  & LF & "end Plus;" & LF,
+                  "function Plus" & LF & "begin" & LF & "   return A + B;" & LF
+                  & "end Plus;" & LF & LF
+                  & "function Add" & LF & "begin" & LF & "   return A + B;"
+                  & LF & "end Add;" & LF)
+             = " 0 0 0 0 0 1 2 3 4", "line map: blocks that change places",
+             Map ("function Add" & LF & "begin" & LF & "   return A + B;" & LF
+                  & "end Add;" & LF & LF
+                  & "function Plus" & LF & "begin" & LF & "   return A + B;"
+                  & LF & "end Plus;" & LF,
+                  "function Plus" & LF & "begin" & LF & "   return A + B;" & LF
+                  & "end Plus;" & LF & LF
+                  & "function Add" & LF & "begin" & LF & "   return A + B;"
+                  & LF & "end Add;" & LF));
+      --  Texts with no line that occurs once: only the equal lines at the
+      --  beginning and at the end map.
+      Check (Map ("x" & LF & "x" & LF & "y" & LF & "y" & LF,
+                  "x" & LF & "y" & LF & "x" & LF & "y" & LF) = " 1 0 0 4",
+             "line map: repeated lines only",
+             Map ("x" & LF & "x" & LF & "y" & LF & "y" & LF,
+                  "x" & LF & "y" & LF & "x" & LF & "y" & LF));
+      --  A long text is no problem: nothing is compared pair by pair.
+      declare
+         Long_Old, Long_New : Unbounded_String;
+         Count : Natural := 0;
+      begin
+         for K in 1 .. 6000 loop
+            Append (Long_Old, "line" & K'Image & LF);
+            Append (Long_New, (if K in 4 | 5990 then "changed" & K'Image
+                               else "line" & K'Image) & LF);
+         end loop;
+         for N of Line_Map (Lines (To_String (Long_Old)),
+                            Lines (To_String (Long_New)))
+         loop
+            Count := Count + (if N /= 0 then 1 else 0);
+         end loop;
+         Check (Count = 5998, "line map: two changes far apart in a long text",
+                Count'Image);
+      end;
 
       --  A plain run: what was detected is taken over, the rest runs.
       R := Report_Of (Unchanged => False);
@@ -971,6 +1017,82 @@ procedure Unit_Tests is
              and then R.Mutants (3).Unchanged
              and then not R.Mutants (3).Equivalent,
              "baseline: an equivalent mutant stays one");
+
+      --  A mutant that spans lines is the same only when all its lines
+      --  are unchanged and still together; odd values in a report do no
+      --  harm; a test may have the name "proof".
+      declare
+         Before : constant String :=
+           "begin" & LF & "   Call (1," & LF & "         2);" & LF & "end;" & LF;
+
+         function Report_With (Source, More : String) return String is
+           ("{""files"":{""src/p.adb"":{""source"":"
+            & AdaMutant.Reports.Json_String (Source) & ",""mutants"":["
+            & "{""mutatorName"":""StatementDeletion"",""replacement"":""null;"","
+            & """location"":{""start"":{""line"":2,""column"":4},"
+            & """end"":{""line"":3,""column"":13}},""status"":""Killed"""
+            & More & "}]}}}");
+
+         function One (Source : String; Line : Positive) return Report is
+            R : Report;
+         begin
+            R.Settings.Tests.Append
+              (AdaMutant.Config.Test_Command'
+                 (Name    => To_Unbounded_String ("proof"),
+                  Command => To_Unbounded_String ("p")));
+            R.Files.Append
+              (Source_File'(Path   => To_Unbounded_String ("src/p.adb"),
+                            Source => To_Unbounded_String (Source)));
+            R.Mutants.Append
+              (Mutant'
+                 (Id        => 1,
+                  File      => 1,
+                  Mutation  => (Kind        => Statement_Deletion,
+                                Replacement => To_Unbounded_String ("null;"),
+                                others      => <>),
+                  Start_Pos => (Line, 4),
+                  End_Pos   => (Line + 1, 13),
+                  others    => <>));
+            return R;
+         end One;
+      begin
+         R := One ("--  new" & LF & Before, 3);
+         Apply (R, Report_With
+                     (Before, ",""killedBy"":[""proof"",""unit""],"
+                      & """testsCompleted"":-3"), Reused);
+         Check (Reused = 1 and then R.Mutants (1).Status = Killed
+                and then R.Mutants (1).Killed_By = Tests
+                and then Natural (R.Mutants (1).Killers.Length) = 2
+                and then R.Mutants (1).Tests_Run = 0,
+                "baseline: a mutant of two lines, moved down",
+                Reused'Image & Statuses (R));
+         R := One ("begin" & LF & "   Call (1," & LF & "         3);" & LF
+                   & "end;" & LF, 2);
+         Apply (R, Report_With (Before, ""), Reused);
+         Check (Reused = 0, "baseline: its second line changed");
+         R := One ("begin" & LF & "   Call (1," & LF & "         --  why" & LF
+                   & "         2);" & LF & "end;" & LF, 2);
+         Apply (R, Report_With (Before, ""), Reused);
+         Check (Reused = 0, "baseline: a line added inside it");
+      end;
+      declare
+         Slow : Report := Report_Of (Unchanged => False);
+      begin
+         Apply (Slow,
+                "{""files"":{""src/p.adb"":{""source"":"
+                & AdaMutant.Reports.Json_String (New_Source) & ",""mutants"":["
+                & Old_Mutant (4, 11, 12, "ArithmeticOperator", "-",
+                              "CompileError",
+                              ",""statusReason"":""build timed out""") & ","
+                & Old_Mutant (4, 13, 14, "NumericLiteral", "0",
+                              "CompileError",
+                              ",""statusReason"":""build failed: x""")
+                & "]}}}", Reused);
+         Check (Reused = 1 and then Statuses (Slow)
+                = " Pending CompileError* Pending Pending Pending Pending",
+                "baseline: a build that timed out runs again",
+                Reused'Image & Statuses (Slow));
+      end;
 
       R := Report_Of (Unchanged => False);
       Apply (R, "{""files"":{""src/other.adb"":{""source"":"""","
