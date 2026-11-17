@@ -224,6 +224,8 @@ package body AdaMutant.Config is
             C.Test := To_Unbounded_String (String_Value);
          elsif Full = "prove" then
             C.Prove := To_Unbounded_String (String_Value);
+         elsif Full = "equivalence_build" then
+            C.Equivalence_Build := To_Unbounded_String (String_Value);
          elsif Full = "concurrency" then
             declare
                N : constant Natural := Integer_Value (1024);
@@ -394,6 +396,11 @@ package body AdaMutant.Config is
       & "build = ""gprbuild -p -q -P tests/tests.gpr""" & LF
       & "test = ""./tests/bin/test_main""" & LF
       & "# prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on""" & LF
+      & "# A build with optimization and without debug information.  A" & LF
+      & "# surviving mutant whose object files are the same as those of the" & LF
+      & "# unmodified project is an equivalent mutant and becomes Ignored." & LF
+      & "# equivalence_build = ""gprbuild -p -q -c -P tests/tests.gpr"
+      & " -cargs -O2 -g0""" & LF
       & LF
       & "# concurrency = 4" & LF
       & "timeout_factor = 1.5" & LF

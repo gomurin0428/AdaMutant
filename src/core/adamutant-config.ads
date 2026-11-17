@@ -18,6 +18,10 @@ package AdaMutant.Config is
       Build            : Unbounded_String;
       Test             : Unbounded_String;
       Prove            : Unbounded_String;
+      Equivalence_Build : Unbounded_String;
+      --  A build with optimization: a surviving mutant whose object files
+      --  come out the same as those of the unmodified project is an
+      --  equivalent mutant.  Not looked for when "".
       Concurrency      : Positive := 1;
       Timeout_Factor   : Float := 1.5;
       Timeout_Ms       : Natural := 5_000;

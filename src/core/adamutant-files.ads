@@ -39,6 +39,9 @@ package AdaMutant.Files is
 
    function Join (Dir, Relative : String) return String;
 
+   function Digest (Path : String) return String;
+   --  The SHA-256 of the content of a file, in hexadecimal.
+
    function Tail (Path : String; Max_Lines : Positive) return String;
    --  Last lines of a text file, or "" when it cannot be read.
 

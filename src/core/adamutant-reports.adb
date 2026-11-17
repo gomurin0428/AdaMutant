@@ -279,6 +279,26 @@ package body AdaMutant.Reports is
          end loop;
       end if;
 
+      if (for some M of R.Mutants => M.Equivalent) then
+         Ada.Text_IO.New_Line;
+         Ada.Text_IO.Put_Line
+           ("Equivalent mutants (same object code as the unmodified"
+            & " project, ignored):");
+         for M of R.Mutants loop
+            if M.Equivalent then
+               Ada.Text_IO.Put_Line ("  #" & Image (M.Id) & " "
+                         & To_String (R.Files (M.File).Path) & ":"
+                         & Image (M.Start_Pos.Line) & ":"
+                         & Image (M.Start_Pos.Column) & " "
+                         & AdaMutant.Mutators.Name (M.Mutation.Kind));
+               Ada.Text_IO.Put_Line
+                 ("    - " & One_Line (To_String (M.Original)));
+               Ada.Text_IO.Put_Line
+                 ("    + " & One_Line (To_String (M.Mutation.Replacement)));
+            end if;
+         end loop;
+      end if;
+
       --  The lines that no test executes, once each: there the mutation
       --  does not matter.  With a proof their mutants are not NoCoverage.
       declare

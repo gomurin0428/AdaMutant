@@ -103,6 +103,11 @@ procedure AdaMutant_Main is
       Put_Line ("warning: " & Message);
    end Warn;
 
+   procedure Note (Message : String) is
+   begin
+      Put_Line (Message);
+   end Note;
+
    procedure Progress
      (Done, Total : Natural; M : AdaMutant.Results.Mutant; File : String) is
    begin
@@ -152,7 +157,8 @@ procedure AdaMutant_Main is
                 & Natural (R.Files.Length)'Image & " files, concurrency"
                 & R.Settings.Concurrency'Image);
       Put_Line ("Building and testing the unmodified project...");
-      AdaMutant.Runner.Execute (R, Keep_Sandbox, Progress'Access, Warn'Access);
+      AdaMutant.Runner.Execute
+        (R, Keep_Sandbox, Progress'Access, Warn'Access, Note'Access);
 
       if R.Settings.Json_Report or else R.Settings.Html_Report then
          Ada.Directories.Create_Path (Report_Dir);

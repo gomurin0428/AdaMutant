@@ -50,8 +50,10 @@ SPARE = {
 }
 
 EXAMPLES = {
+    # The example has an equivalence_build command: the two survivors that
+    # are equivalent mutants become Ignored.
     "calculator": {
-        "exit": 0, "min_timeout": 1, "min_uncovered": 1,
+        "exit": 0, "min_timeout": 1, "min_uncovered": 1, "equivalent": 2,
         # Most mutants are tested in the one build that contains them all;
         # only a few are built on their own.
         "max_single_builds": 10,
@@ -293,6 +295,21 @@ EXAMPLES = {
                 "   end if;\n"
                 "end Test_Counters;\n"},
     },
+    # An equivalence_build command that fails: a warning, and the survivors
+    # stay.
+    "equivalence_fails": {
+        "exit": 0, "example": "calculator", "equivalent": 0,
+        "config": "equivalence_build = '{python} -c \"import sys; sys.exit(3)\"'\n",
+        "output": "warning: the equivalence_build command fails (exit status 3)",
+    },
+    # An equivalence_build command that compiles nothing leaves the object
+    # files of the normal build as they are.  That must not make every
+    # survivor an equivalent mutant.
+    "equivalence_noop": {
+        "exit": 0, "example": "calculator", "equivalent": 0,
+        "config": "equivalence_build = '{python} -c \"pass\"'\n",
+        "output": "warning: the equivalence_build command makes the same object files",
+    },
     # Every mutant's test first allocates 1 GiB, which only the memory limit
     # makes fail: without the limit some mutants would survive.  The test
     # keeps the allocation while it runs, so that macOS, where AdaMutant
@@ -405,6 +422,10 @@ def run_example(name, spec, update):
             if "no_reason" in spec and (logs / f"mutant-{m['id']}-build.log").exists() \
                     and spec["no_reason"] in (logs / f"mutant-{m['id']}-build.log").read_text():
                 errors.append(f"mutant {m['id']}: {spec['no_reason']} in its build log")
+        equivalent = sum(m.get("statusReason", "").startswith("equivalent mutant")
+                         and m["status"] == "Ignored" for m in mutants)
+        if equivalent != spec.get("equivalent", equivalent):
+            errors.append(f"{equivalent} equivalent mutants, expected {spec['equivalent']}")
         if len(uncovered) < spec.get("min_uncovered", 0):
             errors.append(f"{len(uncovered)} mutants without coverage, "
                           f"expected at least {spec['min_uncovered']}")

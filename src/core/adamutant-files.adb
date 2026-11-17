@@ -2,6 +2,7 @@ with Ada.Containers.Generic_Array_Sort;
 with Ada.Directories; use Ada.Directories;
 with Ada.Streams.Stream_IO;
 with GNAT.OS_Lib;
+with GNAT.SHA256;
 
 package body AdaMutant.Files is
 
@@ -23,6 +24,26 @@ package body AdaMutant.Files is
       when SIO.Name_Error | SIO.Use_Error | SIO.End_Error =>
          raise File_Error with "cannot read " & Path;
    end Read;
+
+   function Digest (Path : String) return String is
+      use Ada.Streams;
+      F       : SIO.File_Type;
+      Context : GNAT.SHA256.Context;
+      Buffer  : Stream_Element_Array (1 .. 65_536);
+      Last    : Stream_Element_Offset;
+   begin
+      SIO.Open (F, SIO.In_File, Path);
+      loop
+         SIO.Read (F, Buffer, Last);
+         exit when Last < Buffer'First;
+         GNAT.SHA256.Update (Context, Buffer (Buffer'First .. Last));
+      end loop;
+      SIO.Close (F);
+      return GNAT.SHA256.Digest (Context);
+   exception
+      when SIO.Name_Error | SIO.Use_Error | SIO.End_Error =>
+         raise File_Error with "cannot read " & Path;
+   end Digest;
 
    procedure Write (Path : String; Content : String) is
       F : SIO.File_Type;

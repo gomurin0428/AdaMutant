@@ -359,6 +359,15 @@ procedure Unit_Tests is
          Check (File_Time_Stamp (Path) = To_Ada (To_C (Stamp) + 2),
                 "rewrite moves the time stamp two seconds");
          Check (Read (Path) = "mutant", "rewrite content");
+         Write (Path, "abc");
+         Check (Digest (Path)
+                = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f"
+                  & "20015ad", "digest of a file", Digest (Path));
+         Write (Path, [1 .. 70_000 => 'a']);
+         Check (Digest (Path)
+                = "66915c0872933db504e7578828dd85b7e74a4e0a061f9756793b89c41"
+                  & "51bd4b5", "digest of a file longer than the buffer",
+                Digest (Path));
          Delete_File (Path, Deleted);
       end;
    end Test_Files;
@@ -503,6 +512,13 @@ procedure Unit_Tests is
       Check (C.Scan.Enabled (Arithmetic_Operator)
              and then not C.Scan.Enabled (Numeric_Literal), "config mutators");
       Check (C.High = 90 and then C.Break = 10, "config thresholds");
+      Check (Length (C.Equivalence_Build) = 0
+             and then To_String
+               (Parse
+                  ("build = ""b""" & LF & "test = ""t""" & LF
+                   & "equivalence_build = ""b -cargs -O2""", "/r")
+                  .Equivalence_Build) = "b -cargs -O2",
+             "config equivalence build");
       Check (C.Coverage_Analysis
              and then not Parse
                ("build = ""b""" & LF & "test = ""t""" & LF

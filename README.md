@@ -8,6 +8,7 @@ A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.
 - Mutants can be killed **by a failed GNATprove proof** as well as by a failed test (for SPARK)
 - **All the mutants are built once**, and the tests run while switching which mutant is active (mutant schemata). It is fast because it does not rebuild for every mutant
 - **Mutants in code that no test executes are not run.** AdaMutant records which places the tests of the unchanged project execute, and marks the mutants in the other places as NoCoverage
+- **Equivalent mutants are recognized automatically.** AdaMutant compiles the survivors with optimization and marks a mutant as Ignored when its object code is the same as before the change (`equivalence_build`)
 - Runs in parallel in several sandboxes. A test that times out is terminated together with its process group (its job object on Windows)
 - `test_memory_limit_mb` limits the memory of each test process (`RLIMIT_AS` on POSIX, a job object on Windows. macOS does not accept `RLIMIT_AS`, so AdaMutant checks the physical memory (phys_footprint) of the test processes every 10 milliseconds). When a mutant that changes, for example, a loop count allocates several GB, the whole machine can run out of memory during a parallel run and the whole run can crash. An allocation beyond the limit fails (`Storage_Error` in Ada) and the mutant is Killed. On macOS the test processes are terminated together as soon as the limit is exceeded, and the mutant is also Killed (the log contains `adamutant: killed, a process exceeded test_memory_limit_mb`). The tests of the unchanged project run under the same limit, so a limit that is too small is reported as an error at that point
 - Reports: a console table, a self-contained HTML file, and JSON in [mutation-testing-report-schema](https://github.com/stryker-mutator/mutation-testing-elements) v2 (the Stryker dashboard can read it)
@@ -59,6 +60,7 @@ exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr"       # required. A mutant that fails to build is CompileError
 test = "bin/run_tests"                      # Killed when the exit status is not 0
 prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on"  # Killed (by proof) when not 0
+equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # optional. The build used to recognize equivalent mutants
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
 timeout_ms = 5000
@@ -119,7 +121,7 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 | NoCoverage | The build does not compile the file, or no test executes the place (counted as not detected, and not run) |
 | CompileError | The mutant could not be built (not in the score) |
 | RuntimeError | A command could not be started, and the like (not in the score) |
-| Ignored | Disabled by a comment (not in the score) |
+| Ignored | Disabled by a comment, or found to be an equivalent mutant (not in the score) |
 
 `score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
 
@@ -131,7 +133,8 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 4. When `test` is set, make **sources that contain all the mutants**, build them once, and run only the tests for each mutant (see below). Before that, run the tests with no mutant active and record the places that they execute. The mutants in the places that they do not execute are marked NoCoverage without running the tests (see below)
 5. For the mutants that could not be put together, each worker repeats: rewrite one file → `build` → `test` → restore. The time stamps in GNAT's ALI files have a resolution of one second, and on Windows they are rounded up to an even second, so the mtime is moved forward by two seconds or more at every rewrite to make sure that the file is recompiled
 6. When `prove` is set, the mutants that the tests did not detect go to the proof one at a time (rewrite one file → `prove` → restore). The proof is not run on the sources that contain all the mutants, because it could not tell which mutant caused a failure
-7. The logs are written to `.adamutant/logs` and the reports to `report_dir`
+7. When `equivalence_build` is set, the survivors are built with that command one at a time, and a survivor whose object files are the same as before the change becomes Ignored as an equivalent mutant (see below)
+8. The logs are written to `.adamutant/logs` and the reports to `report_dir`
 
 ### Building the mutants once
 
@@ -182,6 +185,23 @@ It works as follows. In the build that contains all the mutants, the function th
 
 There is one difference from building the mutants one at a time. The style checks are turned off in the sources that contain all the mutants, and the warnings that come from looking at the whole file (a variable is no longer used because a statement was deleted, for example) do not appear. So, in a project that treats warnings as errors (`-gnatwe`, `-gnaty`), a mutant that did not compile only because of a warning is now run instead of becoming CompileError.
 
+### Equivalent mutants
+
+No test can detect a mutant that behaves exactly like the original program (an equivalent mutant). When `equivalence_build` holds a command, AdaMutant builds each survivor with that command and compares the object files with those of the unchanged project. When all of them are the same, the mutant is the same program as the unchanged project, so it becomes Ignored (with the reason `equivalent mutant: ...`) and leaves the score.
+
+```toml
+equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"
+```
+
+- Turn optimization on (`-O2`). Without it a difference such as `A > B` and `A >= B` stays in the machine code, and equivalent mutants do not come out the same
+- Leave debug information out (`-g0`). It contains column positions and the like, so equivalent mutants do not come out the same
+- Linking is not needed (`-c` for gprbuild)
+- All the files with the extension `.o` or `.obj` in the sandbox are compared
+
+A mutant that comes out "the same" is equivalent, but a mutant that comes out "different" is not necessarily non-equivalent: only those that the compiler reduces to the same code are found. The mutants found to be equivalent are listed on the console under `Equivalent mutants`. The verdict is about the program that the compiler and the switches of this command produce.
+
+If the command does not really compile a file, the object files do not change and every survivor would look equivalent. So, for each file, AdaMutant first builds one mutant that was detected (Killed) with the command and makes sure that the object files change. When they do not (up to three mutants are tried), or when there is no detected mutant, it prints a warning and does not examine the survivors of that file. When the command fails on the unchanged project, it also prints a warning and gives up.
+
 What it needs:
 
 - The main subprogram of the test program is written in Ada, and the build leaves GNAT ALI files. The function that returns the number of the active mutant is in `AdaMutant_Schemata_Support`, a unit that AdaMutant generates. Only inside the sandbox, AdaMutant puts it in the same directory as the source of the main and adds a `with` to the main. When the main cannot be found, AdaMutant prints a warning and builds every mutant one at a time
@@ -191,7 +211,7 @@ What it needs:
 
 ## Examples
 
-- [examples/calculator](examples/calculator): tests that do not check the boundary values on purpose. You can see surviving mutants and a timeout
+- [examples/calculator](examples/calculator): tests that do not check the boundary values on purpose. You can see surviving mutants, a timeout, a line that no test executes, and equivalent mutants being recognized
 - [examples/spark_counter](examples/spark_counter): no tests. The mutants are killed by the GNATprove proof alone
 
 ```sh

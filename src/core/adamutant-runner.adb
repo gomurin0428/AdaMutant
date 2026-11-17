@@ -1,4 +1,5 @@
 with Ada.Calendar; use Ada.Calendar;
+with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Exceptions;
@@ -112,6 +113,7 @@ package body AdaMutant.Runner is
                               else Null_Unbounded_String),
                            Killed_By     => None,
                            Reached       => Unknown,
+                           Equivalent    => False,
                            Elapsed       => 0.0));
                   end;
                   Next := Next + 1;
@@ -259,7 +261,8 @@ package body AdaMutant.Runner is
         (Done, Total : Natural;
          M           : AdaMutant.Results.Mutant;
          File        : String) := null;
-      Warn         : access procedure (Message : String) := null)
+      Warn         : access procedure (Message : String) := null;
+      Note         : access procedure (Message : String) := null)
    is
       S        : Configuration renames R.Settings;
       Root     : constant String := To_String (S.Root);
@@ -991,6 +994,262 @@ package body AdaMutant.Runner is
          end loop;
          Free (Schemas);
       end Run_Combined;
+      procedure Find_Equivalent is
+         --  A survivor that the equivalence_build command compiles to the
+         --  object files of the unmodified project is the same program as
+         --  the unmodified project: no test can tell the two apart.
+         package Digest_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+           (String, String);
+         use type Digest_Maps.Map;
+
+         Command : constant String := To_String (S.Equivalence_Build);
+         Log     : constant String := Join (Logs, "equivalence-build.log");
+
+         function Objects (Dir : String) return Digest_Maps.Map is
+            Result : Digest_Maps.Map;
+         begin
+            for Path of Find_Files (Dir, String_Vectors.Empty_Vector) loop
+               declare
+                  Lower : constant String :=
+                    Ada.Characters.Handling.To_Lower (Path);
+               begin
+                  if (Lower'Length > 2
+                      and then Lower (Lower'Last - 1 .. Lower'Last) = ".o")
+                    or else
+                      (Lower'Length > 4
+                       and then Lower (Lower'Last - 3 .. Lower'Last) = ".obj")
+                  then
+                     Result.Insert (Path, Digest (Join (Dir, Path)));
+                  end if;
+               end;
+            end loop;
+            return Result;
+         end Objects;
+
+         Survivors : Natural := 0;
+         Base      : Digest_Maps.Map;
+
+         --  The files that the command is known to compile.
+         Compiled : array (R.Files.First_Index .. R.Files.Last_Index)
+           of Boolean := [others => False];
+
+         type Outcome is (Failed, Same, Different);
+
+         function Build_With
+           (Slot : Positive; M : Mutant; Log_Name : String) return Outcome
+         is
+            --  What the command makes of the sources with M: nothing, the
+            --  object files of the unmodified project, or other ones.
+            Dir      : constant String := Slot_Dir (Slot);
+            Rel      : constant String := To_String (R.Files (M.File).Path);
+            Path     : constant String := Join (Dir, Rel);
+            Original : constant String := To_String (R.Files (M.File).Source);
+            B        : Run_Result;
+            Result   : Outcome;
+         begin
+            Write_Changed (Path, Apply (Original, M.Mutation));
+            B := Run (Command, Dir, Join (Logs, Log_Name), M.Id, Build_TO,
+                      Mutant_File => Rel);
+            Result :=
+              (if B.Timed_Out or else B.Exit_Code /= 0 then Failed
+               elsif Objects (Dir) = Base then Same else Different);
+            Write_Changed (Path, Original);
+            return Result;
+         end Build_With;
+
+         procedure Check_Command (F : Positive) is
+            --  A mutant that the tests or the proof detect is not the
+            --  program that the unmodified project is, so the command has
+            --  to make other object files of it.  Where it does not, it
+            --  does not compile the file (or leaves its objects somewhere
+            --  else), and identical object files would mean nothing.  A
+            --  mutant that only a proof detects may be in code that leaves
+            --  no trace in the objects, so a few are tried, those that the
+            --  tests detect first.
+            Tried : Natural := 0;
+         begin
+            for By in Tests .. Proof loop
+               for M of Work_Items.all loop
+                  exit when Tried = 3;
+                  if M.File = F and then M.Status = Killed
+                    and then M.Killed_By = By
+                  then
+                     Tried := Tried + 1;
+                     if Build_With
+                       (1, M, "equivalence-check-" & Image (M.Id) & ".log")
+                       = Different
+                     then
+                        Compiled (F) := True;
+                        return;
+                     end if;
+                  end if;
+               end loop;
+            end loop;
+         end Check_Command;
+
+         protected Survivor_Queue is
+            procedure Next (Index : out Natural);
+            procedure Fail (Message : String);
+            function Failure return String;
+         private
+            Cursor  : Natural := 0;
+            Problem : Unbounded_String;
+         end Survivor_Queue;
+
+         protected body Survivor_Queue is
+            procedure Next (Index : out Natural) is
+            begin
+               Index := 0;
+               if Length (Problem) > 0 then
+                  return;
+               end if;
+               while Cursor < Work_Items'Last loop
+                  Cursor := Cursor + 1;
+                  if Work_Items (Cursor).Status = Survived
+                    and then Compiled (Work_Items (Cursor).File)
+                  then
+                     Index := Cursor;
+                     return;
+                  end if;
+               end loop;
+            end Next;
+
+            procedure Fail (Message : String) is
+            begin
+               if Length (Problem) = 0 then
+                  Problem := To_Unbounded_String (Message);
+               end if;
+            end Fail;
+
+            function Failure return String is (To_String (Problem));
+         end Survivor_Queue;
+
+         procedure Compare (Slot : Positive; M : in out Mutant) is
+            T0 : constant Time := Clock;
+         begin
+            if Build_With
+              (Slot, M, "mutant-" & Image (M.Id) & "-equivalence.log") = Same
+            then
+               M.Status := Ignored;
+               M.Equivalent := True;
+               M.Status_Reason := To_Unbounded_String
+                 ("equivalent mutant: the object code is the same as that of"
+                  & " the unmodified project");
+            end if;
+            M.Elapsed := M.Elapsed + (Clock - T0);
+         end Compare;
+
+         task type Comparer (Slot : Positive)
+           with Storage_Size => 64 * 1024 * 1024;
+
+         task body Comparer is
+            Index : Natural;
+         begin
+            loop
+               Survivor_Queue.Next (Index);
+               exit when Index = 0;
+               Compare (Slot, Work_Items (Index));
+            end loop;
+         exception
+            when E : others =>
+               Survivor_Queue.Fail
+                 ("sandbox" & Slot'Image & ": "
+                  & Ada.Exceptions.Exception_Information (E));
+         end Comparer;
+
+         type Comparer_Access is access Comparer;
+      begin
+         for M of Work_Items.all loop
+            if M.Status = Survived then
+               Survivors := Survivors + 1;
+            end if;
+         end loop;
+         if Survivors = 0 then
+            return;
+         end if;
+         if Note /= null then
+            Note ("Looking for equivalent mutants among" & Survivors'Image
+                  & (if Survivors = 1 then " survivor..." else " survivors..."));
+         end if;
+
+         --  Every sandbox holds the unmodified sources again.  The objects
+         --  in them are what the last mutants left: the command brings
+         --  those of the first sandbox up to date, and the other sandboxes
+         --  start as copies of it.
+         declare
+            B : constant Run_Result :=
+              Run (Command, Slot_Dir (1), Log, 0, Build_TO);
+         begin
+            if B.Timed_Out or else B.Exit_Code /= 0 then
+               if Warn /= null then
+                  Warn ("the equivalence_build command "
+                        & (if B.Timed_Out then "timed out"
+                           else "fails (exit status" & B.Exit_Code'Image & ")")
+                        & " on the unmodified project (log " & Log
+                        & "); equivalent mutants are not looked for");
+               end if;
+               return;
+            end if;
+         end;
+         Base := Objects (Slot_Dir (1));
+         if Base.Is_Empty then
+            if Warn /= null then
+               Warn ("the equivalence_build command leaves no object file;"
+                     & " equivalent mutants are not looked for");
+            end if;
+            return;
+         end if;
+
+         Survivors := 0;
+         for F in Compiled'Range loop
+            declare
+               Here : Natural := 0;
+            begin
+               for M of Work_Items.all loop
+                  if M.File = F and then M.Status = Survived then
+                     Here := Here + 1;
+                  end if;
+               end loop;
+               if Here > 0 then
+                  Check_Command (F);
+                  if Compiled (F) then
+                     Survivors := Survivors + Here;
+                  elsif Warn /= null then
+                     Warn ("the equivalence_build command makes the same"
+                           & " object files of detected mutants of "
+                           & To_String (R.Files (F).Path)
+                           & ", or there is none to try; its survivors are"
+                           & " not examined");
+                  end if;
+               end if;
+            end;
+         end loop;
+         if Survivors = 0 then
+            return;
+         end if;
+
+         declare
+            Comparers : array (1 .. Natural'Min (Slots, Survivors))
+              of Comparer_Access;
+         begin
+            for Slot in 2 .. Comparers'Last loop
+               Delete_Tree (Slot_Dir (Slot));
+               Copy_Tree (Slot_Dir (1), Slot_Dir (Slot),
+                          String_Vectors.Empty_Vector);
+            end loop;
+            for K in Comparers'Range loop
+               Comparers (K) := new Comparer (K);
+            end loop;
+            for C of Comparers loop
+               while not C'Terminated loop
+                  delay 0.05;
+               end loop;
+            end loop;
+         end;
+         if Survivor_Queue.Failure /= "" then
+            raise Run_Error with Survivor_Queue.Failure;
+         end if;
+      end Find_Equivalent;
    begin
       for K in Work_Items'Range loop
          Work_Items (K) := R.Mutants (K);
@@ -1076,6 +1335,9 @@ package body AdaMutant.Runner is
          --  What is left: mutants that no schema can hold, and the proof
          --  of those that passed the tests of the combined build.
          Run_Workers (Combined_Build => False);
+         if Length (S.Equivalence_Build) > 0 then
+            Find_Equivalent;
+         end if;
       end if;
 
       for K in Work_Items'Range loop
