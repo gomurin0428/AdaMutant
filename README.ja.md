@@ -17,8 +17,8 @@ Ada / SPARK 向けのミューテーションテストツールです。.NET の
 
 ## 必要なもの
 
-- GNAT（Ada 2022 対応、GNAT 14 で確認）と GPRbuild
-- 証明で kill したい場合は GNATprove
+- GNAT（Ada 2022 対応）と GPRbuild（GNAT 16.1 と GPRbuild 26 で確認。GNAT 14 でもビルドできます）
+- 証明で kill したい場合は GNATprove（GNATprove 16.1 で確認）
 - E2E テストを動かす場合は Python 3
 
 ## ビルド
@@ -214,6 +214,7 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - 種類の名前は GNATprove のメッセージから取ります（`... might fail` の前の部分）。メッセージが引用している名前（変数や手続きの名前）は種類に含めません。初期化されていないオブジェクトについてのフロー解析のメッセージは、まとめて `initialization` です
 - 変更前のプロジェクトの証明にも出ているメッセージは数えません（同じファイルの同じ文面のメッセージを、行と桁が違っても同じものとみなします）
 - メッセージを読み取れなかったときは、これまでどおり `killedBy` は `["proof"]` です
+- GNATprove 16 は、メッセージの場所を次の行（`--> file:line:col`）に出します。AdaMutant は、この形式も、それより前の版の 1 行の形式も読みます
 
 ## 仕組み
 

@@ -197,10 +197,93 @@ package body AdaMutant.Runner is
       return "";
    end Severity_Of;
 
+   function One_Line_Messages (Log : String) return String is
+      --  Log with each message of GNATprove 16 written on one line, as
+      --  older versions write it.  GNATprove 16 puts the place on the
+      --  next line:
+      --
+      --   medium: postcondition might fail
+      --  --> p.ads:9:17
+      --
+      --  which becomes "p.ads:9:17: medium: postcondition might fail".
+      --  The other lines stay as they are.
+      Result : Unbounded_String;
+      First  : Positive := Log'First;
+      Last   : Natural;
+
+      function Trimmed (S : String) return String is
+        (Ada.Strings.Fixed.Trim (S, Ada.Strings.Both));
+
+      function Line_From (From : Positive; Stop : out Natural)
+        return String
+      is
+         --  The line that starts at From, without its end; Stop is the
+         --  position of its LF, or Log'Last.
+      begin
+         Stop := From;
+         while Stop <= Log'Last and then Log (Stop) /= ASCII.LF loop
+            Stop := Stop + 1;
+         end loop;
+         declare
+            E : Natural := Stop - 1;
+         begin
+            if E >= From and then Log (E) = ASCII.CR then
+               E := E - 1;
+            end if;
+            Stop := Natural'Min (Stop, Log'Last);
+            return Log (From .. E);
+         end;
+      end Line_From;
+
+      function Severity (L : String) return String is
+         --  "medium" for " medium: text", or "".
+         T     : constant String := Trimmed (L);
+         Colon : constant Natural := Ada.Strings.Fixed.Index (T, ": ");
+      begin
+         if Colon > T'First
+           and then T (T'First .. Colon - 1)
+                    in "high" | "medium" | "low" | "error" | "warning"
+                     | "info" | "check"
+         then
+            return T (T'First .. Colon - 1);
+         end if;
+         return "";
+      end Severity;
+   begin
+      while First <= Log'Last loop
+         declare
+            L    : constant String := Line_From (First, Last);
+            Next : Natural;
+         begin
+            if Severity (L) /= "" and then Last < Log'Last then
+               declare
+                  N : constant String := Trimmed (Line_From (Last + 1, Next));
+               begin
+                  if N'Length > 4 and then N (N'First .. N'First + 3) = "--> "
+                  then
+                     declare
+                        T : constant String := Trimmed (L);
+                     begin
+                        Append (Result, N (N'First + 4 .. N'Last) & ": " & T);
+                     end;
+                  else
+                     Append (Result, L);
+                  end if;
+               end;
+            else
+               Append (Result, L);
+            end if;
+            Append (Result, ASCII.LF);
+            First := Last + 1;
+         end;
+      end loop;
+      return To_String (Result);
+   end One_Line_Messages;
+
    function Proof_Failures (Log : String) return String_Vectors.Vector is
       Result : String_Vectors.Vector;
    begin
-      for D of AdaMutant.Schemata.Diagnostics (Log) loop
+      for D of AdaMutant.Schemata.Diagnostics (One_Line_Messages (Log)) loop
          declare
             Line  : constant String := To_String (D.Text);
             --  Without what precedes the file name: its directories, or

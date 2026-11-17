@@ -31,7 +31,9 @@ package AdaMutant.Runner is
      (Log : String) return AdaMutant.Files.String_Vectors.Vector;
    --  The messages in the text of a GNATprove log that make a proof fail:
    --  the lines "file:line:col: severity: text" whose severity is high,
-   --  medium, low or error, each from the name of its file on.
+   --  medium, low or error, each from the name of its file on.  The
+   --  messages of GNATprove 16, which puts the place on the next line
+   --  ("--> file:line:col"), are read too, as such lines.
 
    function Check_Kind (Message : String) return String;
    --  What a message of Proof_Failures is about: "postcondition" for

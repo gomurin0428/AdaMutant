@@ -480,6 +480,45 @@ procedure Unit_Tests is
                 and then Check_Kind ("p.adb:1:2: medium:") = "unknown"
                 and then Check_Kind ("p.adb:1:2: medium: ""X""") = "unknown",
                 "check kind: nothing left");
+         --  GNATprove 16 puts the place on the next line.  The place in
+         --  "possible fix" belongs to the fix, and a warning is no failure.
+         declare
+            Log16 : constant String :=
+              "Phase 2 of 3: analysis of data and information flow ..." & LF
+              & " warning: statement has no effect" & LF
+              & "--> weak.adb:10:07" & LF
+              & " medium: range check might fail, cannot prove upper bound"
+              & " for A + B" & LF
+              & "--> counters.adb:13:19" & LF
+              & "   13 |         return A + B;" & LF
+              & "      + e.g. when A = Count'Last" & LF
+              & "      + possible fix: add precondition (A <= Count'Last - B)"
+              & " to subprogram at counters.ads:11" & LF
+              & "      --> counters.ads:11:13" & LF
+              & " high: postcondition might fail, cannot prove"
+              & " Saturating_Add'Result = A + B" & ASCII.CR & LF
+              & "--> /x/y/counters.ads:13:28" & ASCII.CR & LF
+              & " medium: postcondition might fail" & LF
+              & "gnatprove: unproved check messages considered as errors" & LF
+              & " medium: overflow check might fail" & LF
+              & "--> q.adb:5:16";
+            F16 : constant String_Vectors.Vector := Proof_Failures (Log16);
+         begin
+            Check (Natural (F16.Length) = 3
+                   and then F16 (1) = "counters.adb:13:19: medium: range check"
+                                      & " might fail, cannot prove upper bound"
+                                      & " for A + B"
+                   and then F16 (2) = "counters.ads:13:28: high: postcondition"
+                                      & " might fail, cannot prove"
+                                      & " Saturating_Add'Result = A + B"
+                   and then F16 (3) = "q.adb:5:16: medium: overflow check"
+                                      & " might fail"
+                   and then Check_Kind (F16 (1)) = "range check"
+                   and then Check_Kind (F16 (2)) = "postcondition",
+                   "proof failures: GNATprove 16",
+                   F16.Length'Image
+                   & (if F16.Is_Empty then "" else " " & F16 (1)));
+         end;
          Check (Proof_Failures ("gnatprove: error" & LF).Is_Empty,
                 "proof failures: none");
       end;
