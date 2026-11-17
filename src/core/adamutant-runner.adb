@@ -116,6 +116,9 @@ package body AdaMutant.Runner is
                            Killed_By     => None,
                            Failed_Checks => String_Vectors.Empty_Vector,
                            Reached       => Unknown,
+                           Covered_By    => String_Vectors.Empty_Vector,
+                           Killers       => String_Vectors.Empty_Vector,
+                           Tests_Run     => 0,
                            Equivalent    => False,
                            Elapsed       => 0.0));
                   end;
@@ -388,9 +391,20 @@ package body AdaMutant.Runner is
       Logs     : constant String := Join (Work, "logs");
       Started  : constant Time := Clock;
       Build_TO : constant Duration := Ms (S.Build_Timeout_Ms);
-      Test_TO  : Duration := 0.0;
       Prove_TO : Duration := 0.0;
-      Has_Test : constant Boolean := Length (S.Test) > 0;
+      N_Tests  : constant Natural := Natural (S.Tests.Length);
+      Has_Test : constant Boolean := N_Tests > 0;
+      Test_TO  : array (1 .. N_Tests) of Duration := [others => 0.0];
+
+      function Test_Name (T : Positive) return String is
+        (To_String (S.Tests (T).Name));
+
+      function Test_Command (T : Positive) return String is
+        (To_String (S.Tests (T).Command));
+
+      function Test_Step (T : Positive) return String is
+        (if S.Named_Tests then "test-" & Test_Name (T) else "test");
+      --  The name of the step in the names of the logs.
       Has_Prove : constant Boolean := Length (S.Prove) > 0;
 
       --  The messages of the proof of the unmodified project that would
@@ -413,7 +427,16 @@ package body AdaMutant.Runner is
       type Flags is array (1 .. Natural (R.Mutants.Length)) of Boolean;
       Combined : Flags := [others => False];
       Tested   : Flags := [others => False];
-      Combined_Test_TO : Duration := 0.0;
+      Combined_Test_TO : array (1 .. N_Tests) of Duration := [others => 0.0];
+
+      --  Covers (T, K): test T executes the place of mutant K.  Set for
+      --  the mutants whose Reached is Covered.
+      type Cover_Matrix is
+        array (Positive range <>, Positive range <>) of Boolean;
+      type Cover_Matrix_Access is access Cover_Matrix;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (Cover_Matrix, Cover_Matrix_Access);
+      Covers : Cover_Matrix_Access;
 
       --  The number of the place of each mutant in that build (0 for a
       --  mutant in no place that the build watches), and the mutants that
@@ -603,6 +626,63 @@ package body AdaMutant.Runner is
          return Message;
       end Without_Place;
 
+      procedure Run_Tests
+        (Slot : Positive; M : in out Mutant; In_Combined : Boolean)
+      is
+         --  Runs the tests with M in the sandbox: all of them, or, where
+         --  it is known which tests execute the place of M, only those.
+         --  M stays Pending when no test detects it.
+         Rel      : constant String := To_String (R.Files (M.File).Path);
+         Failed   : Boolean := False;
+         Timed    : Boolean := False;
+         Reason   : Unbounded_String;
+      begin
+         for T in 1 .. N_Tests loop
+            if M.Reached /= Covered or else Covers (T, M.Id) then
+               declare
+                  Result : constant Run_Result :=
+                    Run (Test_Command (T), Slot_Dir (Slot),
+                         Join (Logs, "mutant-" & Image (M.Id) & "-"
+                                     & Test_Step (T) & ".log"),
+                         M.Id,
+                         (if In_Combined then Combined_Test_TO (T)
+                          else Test_TO (T)),
+                         S.Test_Memory_Limit_Mb, Rel);
+                  Who    : constant String :=
+                    (if S.Named_Tests then "test " & Test_Name (T)
+                     else "tests");
+               begin
+                  M.Tests_Run := M.Tests_Run + 1;
+                  if Result.Timed_Out or else Result.Exit_Code /= 0 then
+                     M.Killers.Append (Test_Name (T));
+                     --  The reason is that of the first test that failed,
+                     --  or else of the first that did not finish.
+                     if Result.Timed_Out then
+                        if Length (Reason) = 0 then
+                           Reason := To_Unbounded_String
+                             (Who & " did not finish within the timeout");
+                        end if;
+                        Timed := True;
+                     else
+                        if not Failed then
+                           Reason := To_Unbounded_String
+                             (Who & " failed with exit status"
+                              & Result.Exit_Code'Image);
+                        end if;
+                        Failed := True;
+                     end if;
+                     exit when S.Bail;
+                  end if;
+               end;
+            end if;
+         end loop;
+         if Failed or else Timed then
+            M.Status := (if Failed then Killed else Timeout);
+            M.Killed_By := Tests;
+            M.Status_Reason := Reason;
+         end if;
+      end Run_Tests;
+
       procedure Test_Mutant
         (Slot : Positive; M : in out Mutant; Built, Skip_Tests : Boolean)
       is
@@ -620,7 +700,7 @@ package body AdaMutant.Runner is
          function Step (Name, Command : String; Timeout : Duration)
            return Run_Result is
            (Run (Command, Dir, Log_Base & "-" & Name & ".log", M.Id, Timeout,
-                 (if Name = "test" then S.Test_Memory_Limit_Mb else 0), Rel));
+                 Mutant_File => Rel));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          if not Built then
@@ -647,22 +727,7 @@ package body AdaMutant.Runner is
          end if;
          if M.Status = Pending and then Has_Test and then not Skip_Tests
          then
-            declare
-               T : constant Run_Result :=
-                 Step ("test", To_String (S.Test), Test_TO);
-            begin
-               if T.Timed_Out then
-                  M.Status := Timeout;
-                  M.Killed_By := Tests;
-                  M.Status_Reason := To_Unbounded_String
-                    ("tests did not finish within the timeout");
-               elsif T.Exit_Code /= 0 then
-                  M.Status := Killed;
-                  M.Killed_By := Tests;
-                  M.Status_Reason := To_Unbounded_String
-                    ("tests failed with exit status" & T.Exit_Code'Image);
-               end if;
-            end;
+            Run_Tests (Slot, M, In_Combined => False);
          end if;
          if M.Status = Pending and then Has_Prove then
             Wait_For_New_Stamp (Prove_Ended (Slot));
@@ -760,22 +825,10 @@ package body AdaMutant.Runner is
          --  The build in the sandbox contains M: run its tests with M
          --  switched on.
          T0 : constant Time := Clock;
-         T  : constant Run_Result :=
-           Run (To_String (S.Test), Slot_Dir (Slot),
-                Join (Logs, "mutant-" & Image (M.Id) & "-test.log"), M.Id,
-                Combined_Test_TO, S.Test_Memory_Limit_Mb,
-                To_String (R.Files (M.File).Path));
       begin
-         if T.Timed_Out then
-            M.Status := Timeout;
-            M.Killed_By := Tests;
-            M.Status_Reason := To_Unbounded_String
-              ("tests did not finish within the timeout");
-         elsif T.Exit_Code /= 0 then
-            M.Status := Killed;
-            M.Killed_By := Tests;
-            M.Status_Reason := To_Unbounded_String
-              ("tests failed with exit status" & T.Exit_Code'Image);
+         Run_Tests (Slot, M, In_Combined => True);
+         if M.Status /= Pending then
+            null;
          elsif Has_Prove then
             Tested (Index) := True;
          else
@@ -1021,17 +1074,19 @@ package body AdaMutant.Runner is
             return Dropped;
          end Drop_Compile_Errors;
 
-         procedure Skip_Uncovered is
-            --  The tests of the unmodified project have run in the
-            --  combined build.  They cannot detect a mutant in a place that
-            --  they do not execute.
-            Hit      : Flags := [others => False];
-            Reported : Boolean := False;
-            Merged   : Unbounded_String;
-            Records  : constant String_Vectors.Vector :=
+         --  Hit (T, P): test T executed place P.  Reported: a program of
+         --  the combined build has written its record.
+         Hit      : Cover_Matrix_Access;
+         Reported : Boolean := False;
+
+         procedure Collect (T : Positive) is
+            --  Test T has just run in the combined build with no mutant
+            --  active: read what its programs recorded.
+            Records : constant String_Vectors.Vector :=
               (if Ada.Directories.Exists (Coverage_Dir)
                then Find_Files (Coverage_Dir, String_Vectors.Empty_Vector)
                else String_Vectors.Empty_Vector);
+            Merged  : Unbounded_String;
          begin
             for Name of Records loop
                declare
@@ -1041,7 +1096,7 @@ package body AdaMutant.Runner is
                begin
                   for C of Text loop
                      if C in '0' .. '9' then
-                        if Value <= Hit'Last then
+                        if Value <= Work_Items'Last then
                            Value := Value * 10
                              + (Character'Pos (C) - Character'Pos ('0'));
                         end if;
@@ -1050,8 +1105,8 @@ package body AdaMutant.Runner is
                         if Valid then
                            --  0 is the line that every process writes.
                            Reported := True;
-                           if Value in Hit'Range then
-                              Hit (Value) := True;
+                           if Value in Work_Items'Range then
+                              Hit (T, Value) := True;
                            end if;
                         end if;
                         Value := 0;
@@ -1060,21 +1115,34 @@ package body AdaMutant.Runner is
                   end loop;
                end;
             end loop;
-            for K in Hit'Range loop
-               if Hit (K) then
+            for K in Work_Items'Range loop
+               if Hit (T, K) then
                   Append (Merged, Image (K) & ASCII.LF);
                end if;
             end loop;
-            Write (Join (Logs, "coverage.txt"), To_String (Merged));
+            Write (Join (Logs,
+                         (if S.Named_Tests
+                          then "coverage-" & Test_Name (T) & ".txt"
+                          else "coverage.txt")),
+                   To_String (Merged));
             --  A program that the test command left running may still
             --  hold its file open, which stops the deletion on Windows.
-            --  Left where it is, the directory does no harm.
+            --  Left where it is, the directory does no harm: at worst the
+            --  next test seems to execute what this one executed, and
+            --  runs with more mutants than it has to.
             begin
                Delete_Tree (Coverage_Dir);
             exception
                when File_Error =>
                   null;
             end;
+         end Collect;
+
+         procedure Skip_Uncovered is
+            --  The tests of the unmodified project have run in the
+            --  combined build.  They cannot detect a mutant in a place that
+            --  they do not execute.
+         begin
             if not Reported then
                --  No program that contains the support unit has run, or
                --  none could write its file.
@@ -1083,15 +1151,24 @@ package body AdaMutant.Runner is
                         & " that they execute; coverage analysis is off for"
                         & " this run");
                end if;
+               Free (Hit);
                return;
             end if;
+            Covers := new Cover_Matrix'
+              [1 .. N_Tests => [1 .. Work_Items'Last => False]];
             for K in Work_Items'Range loop
                declare
                   M    : Mutant renames Work_Items (K);
                   Done : Natural;
                begin
                   if M.Status = Pending and then Place (K) /= 0 then
-                     if Hit (Place (K)) then
+                     for T in 1 .. N_Tests loop
+                        if Hit (T, Place (K)) then
+                           Covers (T, K) := True;
+                           M.Covered_By.Append (Test_Name (T));
+                        end if;
+                     end loop;
+                     if not M.Covered_By.Is_Empty then
                         M.Reached := Covered;
                      else
                         M.Reached := Not_Covered;
@@ -1110,6 +1187,7 @@ package body AdaMutant.Runner is
                   end if;
                end;
             end loop;
+            Free (Hit);
          end Skip_Uncovered;
 
          Any : Boolean;
@@ -1169,17 +1247,27 @@ package body AdaMutant.Runner is
             end loop;
             --  With no mutant switched on the tests must pass as before.
             --  This run also measures them: the combined build is slower.
-            declare
-               Elapsed : Duration;
-            begin
-               if S.Coverage_Analysis then
-                  Ada.Directories.Create_Path (Coverage_Dir);
-               end if;
-               Baseline_Step ("combined-test", To_String (S.Test), 0.0,
-                              Elapsed, S.Test_Memory_Limit_Mb, Slots);
-               Combined_Test_TO :=
-                 Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
-            end;
+            if S.Coverage_Analysis then
+               Hit := new Cover_Matrix'
+                 [1 .. N_Tests => [1 .. Work_Items'Last => False]];
+            end if;
+            for T in 1 .. N_Tests loop
+               declare
+                  Elapsed : Duration;
+               begin
+                  if S.Coverage_Analysis then
+                     Ada.Directories.Create_Path (Coverage_Dir);
+                  end if;
+                  Baseline_Step ("combined-" & Test_Step (T),
+                                 Test_Command (T), 0.0,
+                                 Elapsed, S.Test_Memory_Limit_Mb, Slots);
+                  Combined_Test_TO (T) :=
+                    Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+                  if S.Coverage_Analysis then
+                     Collect (T);
+                  end if;
+               end;
+            end loop;
             if S.Coverage_Analysis then
                Skip_Uncovered;
             end if;
@@ -1643,11 +1731,12 @@ package body AdaMutant.Runner is
       declare
          Elapsed : Duration;
       begin
-         if Has_Test then
-            Baseline_Step ("test", To_String (S.Test), 0.0, Elapsed,
+         for T in 1 .. N_Tests loop
+            Baseline_Step (Test_Step (T), Test_Command (T), 0.0, Elapsed,
                            S.Test_Memory_Limit_Mb, Slots);
-            Test_TO := Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
-         end if;
+            Test_TO (T) :=
+              Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+         end loop;
          if Has_Prove then
             Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed,
                            Slots => Slots);
@@ -1723,6 +1812,7 @@ package body AdaMutant.Runner is
          R.Mutants.Replace_Element (K, Work_Items (K));
       end loop;
       Free (Work_Items);
+      Free (Covers);
       R.Elapsed := Clock - Started;
       if not Keep_Sandbox then
          Delete_Tree (Sandbox);

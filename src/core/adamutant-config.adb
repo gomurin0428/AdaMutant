@@ -213,6 +213,15 @@ package body AdaMutant.Config is
          P := P + 1;
          Skip_Blanks;
 
+         if To_String (Table) = "tests" then
+            C.Tests.Append
+              (Test_Command'(Name    => To_Unbounded_String (Key),
+                             Command => To_Unbounded_String (String_Value)));
+            C.Named_Tests := True;
+            End_Of_Line;
+            return;
+         end if;
+
          if Full = "mutate" then
             C.Mutate := Array_Value;
             Have_Mutate := True;
@@ -248,6 +257,8 @@ package body AdaMutant.Config is
             C.Test_Memory_Limit_Mb :=
               Integer_Value
                 (if Standard'Address_Size = 32 then 4095 else Natural'Last);
+         elsif Full = "bail" then
+            C.Bail := Boolean_Value;
          elsif Full = "coverage_analysis" then
             C.Coverage_Analysis := Boolean_Value;
          elsif Full = "mutators" then
@@ -320,7 +331,7 @@ package body AdaMutant.Config is
                Fail ("']' is expected");
             end if;
             P := P + 1;
-            if To_String (Table) /= "thresholds" then
+            if To_String (Table) not in "thresholds" | "tests" then
                Fail ("unknown table [" & To_String (Table) & "]");
             end if;
             End_Of_Line;
@@ -361,7 +372,22 @@ package body AdaMutant.Config is
       if Length (C.Build) = 0 then
          raise Config_Error with "the 'build' command is required";
       end if;
-      if Length (C.Test) = 0 and then Length (C.Prove) = 0 then
+      if Length (C.Test) > 0 then
+         if C.Named_Tests then
+            raise Config_Error with
+              "use either the 'test' command or the [tests] table, not both";
+         end if;
+         C.Tests.Append
+           (Test_Command'(Name    => To_Unbounded_String ("tests"),
+                          Command => C.Test));
+      end if;
+      for T of C.Tests loop
+         if Length (T.Command) = 0 then
+            raise Config_Error with
+              "the command of the test '" & To_String (T.Name) & "' is empty";
+         end if;
+      end loop;
+      if C.Tests.Is_Empty and then Length (C.Prove) = 0 then
          raise Config_Error with
            "at least one of the 'test' and 'prove' commands is required";
       end if;
@@ -395,6 +421,12 @@ package body AdaMutant.Config is
       & "# A non-zero exit status of 'test' or 'prove' kills the mutant." & LF
       & "build = ""gprbuild -p -q -P tests/tests.gpr""" & LF
       & "test = ""./tests/bin/test_main""" & LF
+      & "# Instead of 'test': several test commands with names, in a [tests]" & LF
+      & "# table at the end of this file.  The report then says which tests" & LF
+      & "# execute and detect each mutant, and a mutant is only tested with" & LF
+      & "# the tests that execute its code.  bail = false runs every such" & LF
+      & "# test even after one has detected the mutant." & LF
+      & "# bail = true" & LF
       & "# prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on""" & LF
       & "# A build with optimization and without debug information.  A" & LF
       & "# surviving mutant whose object files are the same as those of the" & LF
@@ -417,6 +449,10 @@ package body AdaMutant.Config is
       & "[thresholds]" & LF
       & "high = 80" & LF
       & "low = 60" & LF
-      & "break = 0" & LF);
+      & "break = 0" & LF
+      & LF
+      & "# [tests]" & LF
+      & "# parser = ""./tests/bin/test_parser""" & LF
+      & "# lexer = ""./tests/bin/test_lexer""" & LF);
 
 end AdaMutant.Config;

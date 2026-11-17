@@ -8,6 +8,7 @@ A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.
 - Mutants can be killed **by a failed GNATprove proof** as well as by a failed test (for SPARK)
 - **All the mutants are built once**, and the tests run while switching which mutant is active (mutant schemata). It is fast because it does not rebuild for every mutant
 - **Mutants in code that no test executes are not run.** AdaMutant records which places the tests of the unchanged project execute, and marks the mutants in the other places as NoCoverage
+- **Results per test.** When several test commands are given with names, the report says which tests execute and detect each mutant, and a mutant is only tested with the tests that execute its place (`[tests]`)
 - **Equivalent mutants are recognized automatically.** AdaMutant compiles the survivors with optimization and marks a mutant as Ignored when its object code is the same as before the change (`equivalence_build`)
 - Runs in parallel in several sandboxes. A test that times out is terminated together with its process group (its job object on Windows)
 - `test_memory_limit_mb` limits the memory of each test process (`RLIMIT_AS` on POSIX, a job object on Windows. macOS does not accept `RLIMIT_AS`, so AdaMutant checks the physical memory (phys_footprint) of the test processes every 10 milliseconds). When a mutant that changes, for example, a loop count allocates several GB, the whole machine can run out of memory during a parallel run and the whole run can crash. An allocation beyond the limit fails (`Storage_Error` in Ada) and the mutant is Killed. On macOS the test processes are terminated together as soon as the limit is exceeded, and the mutant is also Killed (the log contains `adamutant: killed, a process exceeded test_memory_limit_mb`). The tests of the unchanged project run under the same limit, so a limit that is too small is reported as an error at that point
@@ -66,6 +67,7 @@ timeout_factor = 1.5                        # time limit of the tests = original
 timeout_ms = 5000
 test_memory_limit_mb = 2048                 # memory limit of each test process. The default 0 means no limit
 coverage_analysis = true                    # false also runs the mutants in code that no test executes
+bail = true                                 # false runs the remaining tests after one has detected the mutant (for [tests])
 mutators = ["ArithmeticOperator", "EqualityOperator"]  # all of them when omitted
 mutate_contracts = false                    # true also mutates aspects such as Pre/Post
 sandbox_exclude = [".git", "obj", "bin"]    # not copied into the sandboxes
@@ -75,6 +77,11 @@ report_dir = ".adamutant/reports"
 high = 80
 low = 60
 break = 0
+
+# Instead of test, several test commands with names (see below)
+# [tests]
+# parser = "bin/test_parser"
+# lexer = "bin/test_lexer"
 ```
 
 The "original time" is the slowest run when the tests (proofs) of the unmutated project run in all the sandboxes at the same time. It is measured under the same load as the parallel runs of the mutants, so tests that become slower in parallel are not reported as Timeout by mistake.
@@ -124,6 +131,35 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 | Ignored | Disabled by a comment, or found to be an equivalent mutant (not in the score) |
 
 `score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
+
+### Results per test
+
+A `[tests]` table instead of `test` gives several test commands, each with a name. The key is the name and the value is the command. A name consists of letters, digits, `_`, `-` and `.`. `test` and `[tests]` cannot be used together.
+
+```toml
+[tests]
+parser = "bin/test_parser"
+lexer = "bin/test_lexer"
+```
+
+- The tests run in the order in which they are written. All of them have to pass on the unchanged project. The time limit is measured for each test
+- A mutant is only tested with the tests that execute its place (with `coverage_analysis = true`). `coveredBy` in the JSON report names the tests that execute the place
+- `killedBy` names the tests that detected the mutant (the tests that failed or did not finish in time). `testsCompleted` is the number of tests that were run with the mutant. `testFiles` lists the tests
+- By default the run of a mutant ends with the first test that detects it. With `bail = false`, every test that executes the place runs. This takes longer, but it shows the tests that detect no mutant at all
+- The log of each test is `mutant-<number>-test-<name>.log`
+
+The console shows, for each test, the number of mutants whose place it executes (Covers) and the number of mutants it detects (Kills).
+
+```
+Test  | Covers | Kills
+----------------------
+arith |      5 |     4
+misc  |     30 |    24
+idle  |      1 |     0
+Tests that detect no mutant: idle
+```
+
+A test with many Covers and few Kills may execute the code without checking the results. With `bail = true`, Kills only counts the first test that detects each mutant.
 
 ### Which check of the proof detected a mutant
 

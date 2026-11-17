@@ -1,3 +1,4 @@
+with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with AdaMutant.Files;
 with AdaMutant.Mutators;
@@ -9,6 +10,14 @@ package AdaMutant.Config is
 
    type Percentage is range 0 .. 100;
 
+   type Test_Command is record
+      Name    : Unbounded_String;
+      Command : Unbounded_String;
+   end record;
+
+   package Test_Vectors is new Ada.Containers.Vectors
+     (Positive, Test_Command);
+
    type Configuration is record
       Root             : Unbounded_String;
       --  Directory that contains the configuration file; all paths and
@@ -17,6 +26,13 @@ package AdaMutant.Config is
       Exclude          : String_Vector;
       Build            : Unbounded_String;
       Test             : Unbounded_String;
+      Tests            : Test_Vectors.Vector;
+      --  The test commands, in the order in which they run: the entries
+      --  of the [tests] table, or Test under the name "tests".
+      Named_Tests      : Boolean := False;
+      --  Tests comes from a [tests] table.
+      Bail             : Boolean := True;
+      --  Stop testing a mutant at the first test that detects it.
       Prove            : Unbounded_String;
       Equivalence_Build : Unbounded_String;
       --  A build with optimization: a surviving mutant whose object files

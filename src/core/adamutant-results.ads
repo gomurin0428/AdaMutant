@@ -34,6 +34,13 @@ package AdaMutant.Results is
       --  could not be proved ("postcondition", "range check", ...), each
       --  once, in the order of the messages.
       Reached       : Coverage := Unknown;
+      Covered_By    : AdaMutant.Config.String_Vector;
+      --  With Reached = Covered: the names of the tests that execute the
+      --  place of the mutant.
+      Killers       : AdaMutant.Config.String_Vector;
+      --  The names of the tests that failed or did not finish in time.
+      Tests_Run     : Natural := 0;
+      --  The number of tests that were run with the mutant.
       Equivalent    : Boolean := False;
       --  Ignored because its object code is that of the unmodified
       --  project.

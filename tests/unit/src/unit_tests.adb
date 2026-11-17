@@ -659,6 +659,35 @@ procedure Unit_Tests is
       Check (C.Scan.Enabled (Arithmetic_Operator)
              and then not C.Scan.Enabled (Numeric_Literal), "config mutators");
       Check (C.High = 90 and then C.Break = 10, "config thresholds");
+      Check (Natural (C.Tests.Length) = 1
+             and then To_String (C.Tests (1).Name) = "tests"
+             and then To_String (C.Tests (1).Command) = "bin/t"
+             and then not C.Named_Tests and then C.Bail,
+             "config: the test command is the test ""tests""");
+      declare
+         N : constant Configuration := Parse
+           ("build = ""b""" & LF & "bail = false" & LF
+            & "[thresholds]" & LF & "high = 90" & LF
+            & "[tests]" & LF & "parser = ""bin/p --all""  # first" & LF
+            & "lexer-2.x = 'bin/l'" & LF, "/r");
+      begin
+         Check (Natural (N.Tests.Length) = 2
+                and then To_String (N.Tests (1).Name) = "parser"
+                and then To_String (N.Tests (1).Command) = "bin/p --all"
+                and then To_String (N.Tests (2).Name) = "lexer-2.x"
+                and then N.Named_Tests and then not N.Bail
+                and then N.High = 90,
+                "config: tests table");
+      end;
+      Rejects ("build = ""b""" & LF & "test = ""t""" & LF
+               & "[tests]" & LF & "a = ""x""",
+               "config: test and tests table");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+               & "a = ""y""", "config: duplicate test name");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = """"",
+               "config: empty test command");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF,
+               "config: empty tests table and no prove");
       Check (Length (C.Equivalence_Build) = 0
              and then To_String
                (Parse
