@@ -49,6 +49,54 @@ SPARE = {
         "end Test_Calculator;\n",
 }
 
+# Three test programs instead of one.  Test_Arith and Test_Misc check
+# different functions; Test_Idle calls Add and checks nothing.
+NAMED_TESTS = {
+    "calculator_tests.gpr":
+        "project Calculator_Tests is\n"
+        "   for Source_Dirs use (\"src\", \"tests\");\n"
+        "   for Object_Dir use \"obj\";\n"
+        "   for Exec_Dir use \"bin\";\n"
+        "   for Main use (\"test_arith.adb\", \"test_misc.adb\", \"test_idle.adb\");\n"
+        "   package Compiler is\n"
+        "      for Default_Switches (\"Ada\") use (\"-gnat2022\", \"-gnata\");\n"
+        "   end Compiler;\n"
+        "end Calculator_Tests;\n",
+    "tests/test_arith.adb":
+        "with Ada.Command_Line;\n"
+        "with Calculator; use Calculator;\n"
+        "procedure Test_Arith is\n"
+        "begin\n"
+        "   if Add (2, 3) /= 5 or else Max (1, 7) /= 7 or else Max (9, 4) /= 9 then\n"
+        "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+        "   end if;\n"
+        "end Test_Arith;\n",
+    "tests/test_misc.adb":
+        "with Ada.Command_Line;\n"
+        "with Calculator; use Calculator;\n"
+        "procedure Test_Misc is\n"
+        "begin\n"
+        "   if Clamp (-5, 0, 10) /= 0 or else Clamp (50, 0, 10) /= 10\n"
+        "     or else not Is_Even (4) or else Grade (95) /= \"A\"\n"
+        "     or else Sum_To (4) /= 10 or else Max (2, 1) /= 2\n"
+        "   then\n"
+        "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+        "   end if;\n"
+        "end Test_Misc;\n",
+    "tests/test_idle.adb":
+        "with Calculator; use Calculator;\n"
+        "procedure Test_Idle is\n"
+        "   Sum : constant Integer := Add (2, 3);\n"
+        "   pragma Unreferenced (Sum);\n"
+        "begin\n"
+        "   null;\n"
+        "end Test_Idle;\n",
+}
+NAMED_TESTS_TABLE = ("\n[tests]\n"
+                     "arith = '\"bin/test_arith\"'\n"
+                     "misc = '\"bin/test_misc\"'\n"
+                     "idle = '\"bin/test_idle\"'\n")
+
 EXAMPLES = {
     # The example has an equivalence_build command: the two survivors that
     # are equivalent mutants become Ignored.
@@ -298,6 +346,30 @@ EXAMPLES = {
                 "   end if;\n"
                 "end Test_Counters;\n"},
     },
+    # A [tests] table: the report names the tests that execute and detect
+    # each mutant, and a mutant is only tested with the tests that execute
+    # its code.  The first test that detects a mutant ends its run.
+    "named_tests": {
+        "exit": 0, "example": "calculator", "extra": NAMED_TESTS,
+        "remove": ["tests/test_calculator.adb"], "drop_keys": ["test"],
+        "config_tail": NAMED_TESTS_TABLE,
+        "tests": {"arith": {"kills": True}, "misc": {"kills": True},
+                  "idle": {"kills": False}},
+        "bail": True,
+        "output": "A mutant counts for the first test that detects it",
+    },
+    # bail = false: every test that executes a mutant runs, so a mutant
+    # that two tests detect names both, and the tests that detect nothing
+    # are listed.
+    "named_tests_all": {
+        "exit": 0, "example": "calculator", "extra": NAMED_TESTS,
+        "remove": ["tests/test_calculator.adb"], "drop_keys": ["test"],
+        "config": "bail = false\n", "config_tail": NAMED_TESTS_TABLE,
+        "tests": {"arith": {"kills": True}, "misc": {"kills": True},
+                  "idle": {"kills": False}},
+        "bail": False,
+        "output": "Tests that detect no mutant: idle",
+    },
     # Survivors in three files.  Two are equivalent mutants like those of
     # the example (in More); one is not, and shows only in the object of
     # another unit: the named number of B_Limits is used in Client.  The
@@ -453,6 +525,18 @@ DEPENDENT = {
                 "end Test_Calculator;\n"}
 
 EXAMPLES.update({
+    # A test that runs no program of the build records nothing.  What it
+    # executes is not known, so no test is left out for any mutant: there
+    # is a warning, and no mutant has coveredBy.
+    "named_tests_silent": {
+        "exit": 0, "example": "calculator", "extra": NAMED_TESTS,
+        "remove": ["tests/test_calculator.adb"], "drop_keys": ["test"],
+        "config_tail": NAMED_TESTS_TABLE + "lint = '{python} -c \"pass\"'\n",
+        "tests": {"arith": {"kills": True}, "misc": {"kills": True},
+                  "idle": {"kills": False}, "lint": {"kills": False}},
+        "bail": True, "covered_by": False,
+        "output": "warning: the programs of the tests 'lint' recorded nothing",
+    },
     # An equivalence_build command that fails: a warning, and the survivors
     # stay.
     "equivalence_fails": {
@@ -528,21 +612,25 @@ def run_example(name, spec, update):
         work = Path(tmp) / name
         shutil.copytree(ROOT / "examples" / spec.get("example", name), work,
                         ignore=shutil.ignore_patterns(".adamutant", "obj", "bin", "lib"))
+        for rel in spec.get("remove", []):
+            (work / rel).unlink()
         extra = spec.get("extra", {})
         if isinstance(extra, str):
             extra = globals()[extra]
         for rel, text in extra.items():
             (work / rel).parent.mkdir(parents=True, exist_ok=True)
             (work / rel).write_text(text)
-        if "config" in spec:
+        if "config" in spec or "config_tail" in spec or "drop_keys" in spec:
             python = (f'"{sys.executable}"' if " " in sys.executable
                       else sys.executable).replace("\\", "/")
             config = work / "adamutant.toml"
-            keys = {line.split("=")[0].strip()
-                    for line in spec["config"].splitlines()}
+            head = spec.get("config", "")
+            keys = {line.split("=")[0].strip() for line in head.splitlines()}
+            keys |= set(spec.get("drop_keys", []))
             lines = [line for line in config.read_text().splitlines(True)
                      if line.split("=")[0].strip() not in keys]
-            config.write_text(spec["config"].format(python=python) + "".join(lines))
+            config.write_text(head.format(python=python) + "".join(lines)
+                              + spec.get("config_tail", "").format(python=python))
         before = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -578,7 +666,7 @@ def run_example(name, spec, update):
         logs = work / ".adamutant" / "logs"
         uncovered = [m for m in mutants if m.get("coveredBy") == []]
         for m in uncovered:
-            if (logs / f"mutant-{m['id']}-test.log").exists():
+            if any(logs.glob(f"mutant-{m['id']}-test*.log")):
                 errors.append(f"mutant {m['id']} is not covered, but has a test log")
             for step in ("build", "prove"):
                 if m["status"] == "NoCoverage" and (logs / f"mutant-{m['id']}-{step}.log").exists():
@@ -597,6 +685,36 @@ def run_example(name, spec, update):
             if "no_reason" in spec and (logs / f"mutant-{m['id']}-build.log").exists() \
                     and spec["no_reason"] in (logs / f"mutant-{m['id']}-build.log").read_text():
                 errors.append(f"mutant {m['id']}: {spec['no_reason']} in its build log")
+        if not spec.get("covered_by", True) and any("coveredBy" in m for m in mutants):
+            errors.append("a mutant has coveredBy although the record is incomplete")
+        if "tests" in spec:
+            names = [t["id"] for f in report.get("testFiles", {}).values()
+                     for t in f["tests"]]
+            if names != list(spec["tests"]):
+                errors.append(f"testFiles has {names}, expected {list(spec['tests'])}")
+            for test, want in spec["tests"].items():
+                kills = sum(test in m.get("killedBy", []) for m in mutants)
+                if (kills > 0) != want["kills"]:
+                    errors.append(f"test {test} detects {kills} mutants")
+            for m in mutants:
+                covered = m.get("coveredBy")
+                if covered is None:
+                    continue
+                if not set(m.get("killedBy", [])) <= set(covered):
+                    errors.append(f"mutant {m['id']}: killed by {m['killedBy']}, covered by {covered}")
+                # Only the tests that execute the mutant have a log.
+                ran = sorted(p.name[len(f"mutant-{m['id']}-test-"):-len(".log")]
+                             for p in logs.glob(f"mutant-{m['id']}-test-*.log"))
+                if not set(ran) <= set(covered):
+                    errors.append(f"mutant {m['id']}: ran {ran}, covered by {covered}")
+                if m.get("testsCompleted", 0) != len(ran):
+                    errors.append(f"mutant {m['id']}: testsCompleted {m.get('testsCompleted')}, logs {ran}")
+                if spec["bail"] and len(m.get("killedBy", [])) > 1:
+                    errors.append(f"mutant {m['id']}: killed by {m['killedBy']} with bail")
+                if not spec["bail"] and m["status"] != "NoCoverage" and ran != sorted(covered):
+                    errors.append(f"mutant {m['id']}: ran {ran} without bail, covered by {covered}")
+            if not spec["bail"] and not any(len(m.get("killedBy", [])) > 1 for m in mutants):
+                errors.append("no mutant is detected by two tests")
         equivalent = sum(m.get("statusReason", "").startswith("equivalent mutant")
                          and m["status"] == "Ignored" for m in mutants)
         if equivalent != spec.get("equivalent", equivalent):

@@ -659,6 +659,62 @@ procedure Unit_Tests is
       Check (C.Scan.Enabled (Arithmetic_Operator)
              and then not C.Scan.Enabled (Numeric_Literal), "config mutators");
       Check (C.High = 90 and then C.Break = 10, "config thresholds");
+      Check (Natural (C.Tests.Length) = 1
+             and then To_String (C.Tests (1).Name) = "tests"
+             and then To_String (C.Tests (1).Command) = "bin/t"
+             and then not C.Named_Tests and then C.Bail,
+             "config: the test command is the test ""tests""");
+      declare
+         N : constant Configuration := Parse
+           ("build = ""b""" & LF & "bail = false" & LF
+            & "[thresholds]" & LF & "high = 90" & LF
+            & "[tests]" & LF & "parser = ""bin/p --all""  # first" & LF
+            & "lexer-2.x = 'bin/l'" & LF, "/r");
+      begin
+         Check (Natural (N.Tests.Length) = 2
+                and then To_String (N.Tests (1).Name) = "parser"
+                and then To_String (N.Tests (1).Command) = "bin/p --all"
+                and then To_String (N.Tests (2).Name) = "lexer-2.x"
+                and then N.Named_Tests and then not N.Bail
+                and then N.High = 90,
+                "config: tests table");
+      end;
+      Rejects ("build = ""b""" & LF & "test = ""t""" & LF
+               & "[tests]" & LF & "a = ""x""",
+               "config: test and tests table");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+               & "a = ""y""", "config: duplicate test name");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = """"",
+               "config: empty test command");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+               & "prove = ""gnatprove""", "config: a setting after [tests]");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+               & "bail = false", "config: bail after [tests]");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "Unit = ""x""" & LF
+               & "unit = ""y""", "config: test names that differ in case");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF
+               & "t" & Character'Val (233) & " = ""x""",
+               "config: a test name with other characters");
+      begin
+         declare
+            C2 : constant Configuration := Parse
+              ("build = ""b""" & LF & "[tests]" & LF
+               & "t" & Character'Val (16#C3#) & Character'Val (16#AA#)
+               & " = ""x""", "/r");
+         begin
+            Check (Length (C2.Build) = 0 and then False,
+                   "config: a test name in UTF-8", "accepted");
+         end;
+      exception
+         when E : Config_Error =>
+            Check (Ada.Strings.Fixed.Index
+                     (Ada.Exceptions.Exception_Message (E),
+                      "the name of a test") > 0,
+                   "config: a test name in UTF-8",
+                   Ada.Exceptions.Exception_Message (E));
+      end;
+      Rejects ("build = ""b""" & LF & "[tests]" & LF,
+               "config: empty tests table and no prove");
       Check (Length (C.Equivalence_Build) = 0
              and then To_String
                (Parse

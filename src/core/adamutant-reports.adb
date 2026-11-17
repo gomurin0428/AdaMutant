@@ -110,6 +110,16 @@ package body AdaMutant.Reports is
          Append (Out_Text, T);
       end Add;
 
+      function Names (List : AdaMutant.Config.String_Vector) return String is
+         Result : Unbounded_String := To_Unbounded_String ("[");
+      begin
+         for K in List.First_Index .. List.Last_Index loop
+            Append (Result, (if K > List.First_Index then "," else "")
+                    & Json_String (List (K)));
+         end loop;
+         return To_String (Result) & "]";
+      end Names;
+
       function Pos (P : AdaMutant.Positions.Position) return String is
         ("{""line"":" & Image (P.Line) & ",""column"":" & Image (P.Column)
          & "}");
@@ -118,7 +128,20 @@ package body AdaMutant.Reports is
            & Image (Integer (S.High)) & ",""low"":" & Image (Integer (S.Low))
            & "},""projectRoot"":" & Json_String (To_String (S.Root))
            & ",""framework"":{""name"":""AdaMutant"",""version"":"
-           & Json_String (AdaMutant.Version) & "},""files"":{");
+           & Json_String (AdaMutant.Version) & "}");
+      if S.Named_Tests then
+         --  The tests are the entries of the [tests] table of the
+         --  configuration.
+         Add (",""testFiles"":{""adamutant.toml"":{""tests"":[");
+         for T in S.Tests.First_Index .. S.Tests.Last_Index loop
+            Add ((if T > S.Tests.First_Index then "," else "")
+                 & "{""id"":" & Json_String (To_String (S.Tests (T).Name))
+                 & ",""name"":" & Json_String (To_String (S.Tests (T).Name))
+                 & "}");
+         end loop;
+         Add ("]}}");
+      end if;
+      Add (",""files"":{");
       for F in R.Files.First_Index .. R.Files.Last_Index loop
          if F > R.Files.First_Index then
             Add (",");
@@ -149,7 +172,7 @@ package body AdaMutant.Reports is
                           & Json_String (To_String (M.Status_Reason)));
                   end if;
                   if M.Reached = Covered then
-                     Add (",""coveredBy"":[""tests""]");
+                     Add (",""coveredBy"":" & Names (M.Covered_By));
                   elsif M.Reached = Not_Covered then
                      Add (",""coveredBy"":[]");
                   end if;
@@ -164,10 +187,16 @@ package body AdaMutant.Reports is
                              & Json_String ("proof: " & M.Failed_Checks (K)));
                      end loop;
                      Add ("]");
+                  elsif M.Killed_By = Tests and then not M.Killers.Is_Empty
+                  then
+                     Add (",""killedBy"":" & Names (M.Killers));
                   elsif M.Killed_By /= None then
                      Add (",""killedBy"":["
                           & Json_String (if M.Killed_By = Tests then "tests"
                                          else "proof") & "]");
+                  end if;
+                  if M.Tests_Run > 0 then
+                     Add (",""testsCompleted"":" & Image (M.Tests_Run));
                   end if;
                   Add (",""duration"":"
                        & Image (Integer (M.Elapsed * 1000.0)) & "}");
@@ -342,6 +371,58 @@ package body AdaMutant.Reports is
             K := Last + 1;
          end loop;
       end;
+
+      --  What each test of the [tests] table does.
+      if R.Settings.Named_Tests then
+         declare
+            S      : AdaMutant.Config.Configuration renames R.Settings;
+            Width  : Natural := 4;
+            Idle   : Unbounded_String;
+            --  Without coverage analysis it is not known what a test
+            --  executes.
+            Known  : constant Boolean :=
+              (for some M of R.Mutants => M.Reached /= Unknown);
+         begin
+            for T of S.Tests loop
+               Width := Natural'Max (Width, Length (T.Name));
+            end loop;
+            Ada.Text_IO.New_Line;
+            Ada.Text_IO.Put_Line
+              (Pad ("Test", Width, False) & " | Covers | Kills");
+            Ada.Text_IO.Put_Line ([1 .. Width + 17 => '-']);
+            for T of S.Tests loop
+               declare
+                  Name          : constant String := To_String (T.Name);
+                  Covers, Kills : Natural := 0;
+               begin
+                  for M of R.Mutants loop
+                     if M.Covered_By.Contains (Name) then
+                        Covers := Covers + 1;
+                     end if;
+                     if M.Killers.Contains (Name) then
+                        Kills := Kills + 1;
+                     end if;
+                  end loop;
+                  Ada.Text_IO.Put_Line
+                    (Pad (Name, Width, False) & " |"
+                     & Pad ((if Known then Image (Covers) else "-"), 7) & " |"
+                     & Pad (Image (Kills), 6));
+                  if Kills = 0 then
+                     Append (Idle, (if Length (Idle) > 0 then ", " else "")
+                             & Name);
+                  end if;
+               end;
+            end loop;
+            if S.Bail then
+               Ada.Text_IO.Put_Line
+                 ("A mutant counts for the first test that detects it;"
+                  & " bail = false counts every test.");
+            elsif Length (Idle) > 0 then
+               Ada.Text_IO.Put_Line
+                 ("Tests that detect no mutant: " & To_String (Idle));
+            end if;
+         end;
+      end if;
 
       --  What the proof detects the mutants with.
       declare
