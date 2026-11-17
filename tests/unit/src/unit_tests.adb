@@ -686,6 +686,15 @@ procedure Unit_Tests is
                & "a = ""y""", "config: duplicate test name");
       Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = """"",
                "config: empty test command");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+               & "prove = ""gnatprove""", "config: a setting after [tests]");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+               & "bail = false", "config: bail after [tests]");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "Unit = ""x""" & LF
+               & "unit = ""y""", "config: test names that differ in case");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF
+               & "t" & Character'Val (233) & " = ""x""",
+               "config: a test name with other characters");
       Rejects ("build = ""b""" & LF & "[tests]" & LF,
                "config: empty tests table and no prove");
       Check (Length (C.Equivalence_Build) = 0

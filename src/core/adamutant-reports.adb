@@ -378,6 +378,10 @@ package body AdaMutant.Reports is
             S      : AdaMutant.Config.Configuration renames R.Settings;
             Width  : Natural := 4;
             Idle   : Unbounded_String;
+            --  Without coverage analysis it is not known what a test
+            --  executes.
+            Known  : constant Boolean :=
+              (for some M of R.Mutants => M.Reached /= Unknown);
          begin
             for T of S.Tests loop
                Width := Natural'Max (Width, Length (T.Name));
@@ -401,7 +405,8 @@ package body AdaMutant.Reports is
                   end loop;
                   Ada.Text_IO.Put_Line
                     (Pad (Name, Width, False) & " |"
-                     & Pad (Image (Covers), 7) & " |" & Pad (Image (Kills), 6));
+                     & Pad ((if Known then Image (Covers) else "-"), 7) & " |"
+                     & Pad (Image (Kills), 6));
                   if Kills = 0 then
                      Append (Idle, (if Length (Idle) > 0 then ", " else "")
                              & Name);

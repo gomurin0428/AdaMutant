@@ -525,6 +525,18 @@ DEPENDENT = {
                 "end Test_Calculator;\n"}
 
 EXAMPLES.update({
+    # A test that runs no program of the build records nothing.  What it
+    # executes is not known, so no test is left out for any mutant: there
+    # is a warning, and no mutant has coveredBy.
+    "named_tests_silent": {
+        "exit": 0, "example": "calculator", "extra": NAMED_TESTS,
+        "remove": ["tests/test_calculator.adb"], "drop_keys": ["test"],
+        "config_tail": NAMED_TESTS_TABLE + "lint = '{python} -c \"pass\"'\n",
+        "tests": {"arith": {"kills": True}, "misc": {"kills": True},
+                  "idle": {"kills": False}, "lint": {"kills": False}},
+        "bail": True, "covered_by": False,
+        "output": "warning: the programs of the tests lint recorded nothing",
+    },
     # An equivalence_build command that fails: a warning, and the survivors
     # stay.
     "equivalence_fails": {
@@ -618,7 +630,7 @@ def run_example(name, spec, update):
             lines = [line for line in config.read_text().splitlines(True)
                      if line.split("=")[0].strip() not in keys]
             config.write_text(head.format(python=python) + "".join(lines)
-                              + spec.get("config_tail", ""))
+                              + spec.get("config_tail", "").format(python=python))
         before = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -673,6 +685,8 @@ def run_example(name, spec, update):
             if "no_reason" in spec and (logs / f"mutant-{m['id']}-build.log").exists() \
                     and spec["no_reason"] in (logs / f"mutant-{m['id']}-build.log").read_text():
                 errors.append(f"mutant {m['id']}: {spec['no_reason']} in its build log")
+        if not spec.get("covered_by", True) and any("coveredBy" in m for m in mutants):
+            errors.append("a mutant has coveredBy although the record is incomplete")
         if "tests" in spec:
             names = [t["id"] for f in report.get("testFiles", {}).values()
                      for t in f["tests"]]

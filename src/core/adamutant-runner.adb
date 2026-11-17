@@ -461,7 +461,10 @@ package body AdaMutant.Runner is
          --  slowdown of running in parallel.
          function Log (Slot : Positive) return String is
            (Join (Logs, "baseline-" & Name
-                  & (if Slot = 1 then "" else "-" & Image (Slot)) & ".log"));
+                  & (if Slot = 1 then ""
+                     --  The name of a test can end with "-2".
+                     elsif S.Named_Tests then "@" & Image (Slot)
+                     else "-" & Image (Slot)) & ".log"));
 
          Results : array (1 .. Slots) of Run_Result;
          Errors  : array (1 .. Slots) of Unbounded_String;
@@ -1074,10 +1077,10 @@ package body AdaMutant.Runner is
             return Dropped;
          end Drop_Compile_Errors;
 
-         --  Hit (T, P): test T executed place P.  Reported: a program of
+         --  Hit (T, P): test T executed place P.  Recorded (T): a program of
          --  the combined build has written its record.
          Hit      : Cover_Matrix_Access;
-         Reported : Boolean := False;
+         Recorded : array (1 .. N_Tests) of Boolean := [others => False];
 
          procedure Collect (T : Positive) is
             --  Test T has just run in the combined build with no mutant
@@ -1104,7 +1107,7 @@ package body AdaMutant.Runner is
                      else
                         if Valid then
                            --  0 is the line that every process writes.
-                           Reported := True;
+                           Recorded (T) := True;
                            if Value in Work_Items'Range then
                               Hit (T, Value) := True;
                            end if;
@@ -1142,12 +1145,24 @@ package body AdaMutant.Runner is
             --  The tests of the unmodified project have run in the
             --  combined build.  They cannot detect a mutant in a place that
             --  they do not execute.
+            Silent : Unbounded_String;
          begin
-            if not Reported then
-               --  No program that contains the support unit has run, or
-               --  none could write its file.
+            --  A test that has recorded nothing ran no program that
+            --  contains the support unit, or none that could write its
+            --  file.  What it executes is not known then, and neither is
+            --  what it needs of the other tests, so no test is left out
+            --  for any mutant.
+            for T in 1 .. N_Tests loop
+               if not Recorded (T) then
+                  Append (Silent, (if Length (Silent) > 0 then ", " else "")
+                          & Test_Name (T));
+               end if;
+            end loop;
+            if Length (Silent) > 0 then
                if Warn /= null then
-                  Warn ("the test programs recorded nothing about the code"
+                  Warn ((if not S.Named_Tests then "the test programs"
+                         else "the programs of the tests " & To_String (Silent))
+                        & " recorded nothing about the code"
                         & " that they execute; coverage analysis is off for"
                         & " this run");
                end if;

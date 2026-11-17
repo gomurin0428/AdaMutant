@@ -214,6 +214,31 @@ package body AdaMutant.Config is
          Skip_Blanks;
 
          if To_String (Table) = "tests" then
+            --  A name is part of the names of logs.
+            if (for some Ch of Key =>
+                  Ch not in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-'
+                    | '.')
+            then
+               Fail ("the name of a test consists of letters, digits, '_',"
+                     & " '-' and '.'");
+            end if;
+            --  A setting written after [tests] would be a test.
+            if Key in "mutate" | "exclude" | "build" | "test" | "prove"
+                 | "equivalence_build" | "concurrency" | "timeout_factor"
+                 | "timeout_ms" | "build_timeout_ms" | "test_memory_limit_mb"
+                 | "bail" | "coverage_analysis" | "mutators"
+                 | "exclude_mutators" | "mutate_contracts" | "sandbox_exclude"
+                 | "report_dir" | "reporters"
+            then
+               Fail ("'" & Key & "' is a setting, not a test: write the"
+                     & " settings before the tables");
+            end if;
+            for T of C.Tests loop
+               if To_Lower (To_String (T.Name)) = To_Lower (Key) then
+                  Fail ("the test '" & Key & "' and the test '"
+                        & To_String (T.Name) & "' differ only in case");
+               end if;
+            end loop;
             C.Tests.Append
               (Test_Command'(Name    => To_Unbounded_String (Key),
                              Command => To_Unbounded_String (String_Value)));
