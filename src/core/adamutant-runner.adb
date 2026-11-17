@@ -1012,7 +1012,51 @@ package body AdaMutant.Runner is
                      = Extension);
 
          function Is_Object (Path : String) return Boolean is
-           (Has_Extension (Path, ".o") or else Has_Extension (Path, ".obj"));
+           ((Has_Extension (Path, ".o") or else Has_Extension (Path, ".obj"))
+            and then
+              --  Not what the binder makes ("b__main.o", "b~main.o"): it
+              --  holds a version of every unit, which differs for every
+              --  mutant.
+              Base_Name (Path) (1 .. 2) not in "b_" | "b~");
+
+         function Dependents (Dir, Source : String) return Digest_Maps.Map is
+            --  What each GNAT ALI file under Dir says about the time stamp
+            --  and the checksum of Source, a base name in lower case: its
+            --  line "D source stamp checksum".  A unit that is compiled
+            --  after Source has changed gets another line.
+            Result : Digest_Maps.Map;
+         begin
+            for Path of Find_Files (Dir, String_Vectors.Empty_Vector) loop
+               if Has_Extension (Path, ".ali") then
+                  declare
+                     Text  : constant String := Read (Join (Dir, Path));
+                     First : Positive := Text'First;
+                     Last  : Natural;
+                  begin
+                     while First <= Text'Last loop
+                        Last := First;
+                        while Last <= Text'Last and then Text (Last) /= ASCII.LF
+                        loop
+                           Last := Last + 1;
+                        end loop;
+                        if Last - First > 2 + Source'Length
+                          and then Text (First .. First + 1) = "D "
+                          and then Ada.Characters.Handling.To_Lower
+                                     (Text (First + 2
+                                            .. First + 1 + Source'Length))
+                                   = Source
+                          and then Text (First + 2 + Source'Length)
+                                   in ' ' | ASCII.HT
+                        then
+                           Result.Include (Path, Text (First .. Last - 1));
+                        end if;
+                        First := Last + 1;
+                     end loop;
+                  end;
+               end if;
+            end loop;
+            return Result;
+         end Dependents;
 
          function Objects (Dir : String) return Digest_Maps.Map is
             Result : Digest_Maps.Map;
@@ -1042,6 +1086,13 @@ package body AdaMutant.Runner is
          Survivors : Natural := 0;
          Base      : Digest_Maps.Map;
 
+         function Examined (M : Mutant) return Boolean is
+           (M.Status = Survived and then not M.Mutation.Contract);
+         --  The survivors that can be equivalent mutants by their object
+         --  code.  A mutant of a contract leaves no trace in the objects
+         --  unless assertions are enabled, and is another contract all the
+         --  same.
+
          --  Copies of the object files of the unmodified project.
          Store : constant String := Join (Sandbox, "equivalence-base");
 
@@ -1061,6 +1112,15 @@ package body AdaMutant.Runner is
             end loop;
          end Keep_Objects;
 
+         procedure Copy_Back (Dir, Name : String) is
+         begin
+            Ada.Directories.Create_Path
+              (Ada.Directories.Containing_Directory (Join (Dir, Name)));
+            Ada.Directories.Copy_File
+              (Join (Store, Name), Join (Dir, Name),
+               "mode=overwrite,preserve=all_attributes");
+         end Copy_Back;
+
          procedure Reset_Objects (Dir : String; Now : Digest_Maps.Map) is
             --  Now is what a build with a mutant has left in Dir.  A
             --  command that only compiles what has changed since its last
@@ -1076,9 +1136,7 @@ package body AdaMutant.Runner is
                   if not Base.Contains (Name) then
                      Ada.Directories.Delete_File (Join (Dir, Name));
                   elsif Base (Name) /= Digest_Maps.Element (C) then
-                     Ada.Directories.Copy_File
-                       (Join (Store, Name), Join (Dir, Name),
-                        "mode=overwrite,preserve=all_attributes");
+                     Copy_Back (Dir, Name);
                   end if;
                end;
             end loop;
@@ -1087,9 +1145,7 @@ package body AdaMutant.Runner is
                   Name : constant String := Digest_Maps.Key (C);
                begin
                   if not Now.Contains (Name) then
-                     Ada.Directories.Copy_File
-                       (Join (Store, Name), Join (Dir, Name),
-                        "mode=overwrite,preserve=all_attributes");
+                     Copy_Back (Dir, Name);
                   end if;
                end;
             end loop;
@@ -1099,13 +1155,14 @@ package body AdaMutant.Runner is
          Compiled : array (R.Files.First_Index .. R.Files.Last_Index)
            of Boolean := [others => False];
 
-         type Outcome is (Failed, Same, Different);
+         type Outcome is (Failed, Not_Rebuilt, Same, Different);
 
          function Build_With
            (Slot : Positive; M : Mutant; Log_Name : String) return Outcome
          is
-            --  What the command makes of the sources with M: nothing, the
-            --  object files of the unmodified project, or other ones.
+            --  What the command makes of the sources with M: nothing, not
+            --  every unit that depends on the file of M anew, the object
+            --  files of the unmodified project, or other ones.
             Dir      : constant String := Slot_Dir (Slot);
             Rel      : constant String := To_String (R.Files (M.File).Path);
             Path     : constant String := Join (Dir, Rel);
@@ -1113,13 +1170,32 @@ package body AdaMutant.Runner is
             B        : Run_Result;
             Now      : Digest_Maps.Map;
             Result   : Outcome;
+            --  The units that depend on the file, as they were compiled
+            --  before.
+            Before   : constant Digest_Maps.Map :=
+              Dependents (Dir, Base_Name (Rel));
+            After    : Digest_Maps.Map;
+            Rebuilt  : Boolean;
          begin
             Write_Changed (Path, Apply (Original, M.Mutation));
             B := Run (Command, Dir, Join (Logs, Log_Name), M.Id, Build_TO,
                       Mutant_File => Rel);
             Now := Objects (Dir);
+            After := Dependents (Dir, Base_Name (Rel));
+            --  The mutant can show in the object of any unit that depends
+            --  on the file (a constant of a specification, a generic or
+            --  inlined body).  A command that has not compiled all of them
+            --  again says nothing about the mutant.
+            Rebuilt := not After.Is_Empty;
+            for C in After.Iterate loop
+               Rebuilt := Rebuilt
+                 and then (not Before.Contains (Digest_Maps.Key (C))
+                           or else Before (Digest_Maps.Key (C))
+                                   /= Digest_Maps.Element (C));
+            end loop;
             Result :=
               (if B.Timed_Out or else B.Exit_Code /= 0 then Failed
+               elsif not Rebuilt then Not_Rebuilt
                elsif Now = Base then Same else Different);
             Write_Changed (Path, Original);
             if Now /= Base then
@@ -1128,28 +1204,30 @@ package body AdaMutant.Runner is
             return Result;
          end Build_With;
 
-         procedure Check_Command (F : Positive) is
+         procedure Check_Command (F : Positive; Why : out Outcome) is
             --  A mutant that the tests or the proof detect is not the
             --  program that the unmodified project is, so the command has
             --  to make other object files of it.  Where it does not, it
             --  does not compile the file (or leaves its objects somewhere
             --  else), and identical object files would mean nothing.  A
-            --  mutant that only a proof detects may be in code that leaves
-            --  no trace in the objects, so a few are tried, those that the
-            --  tests detect first.
+            --  few mutants are tried, those that the tests detect first;
+            --  not the mutants of contracts, which leave no trace in the
+            --  objects unless assertions are enabled.  Why is the outcome
+            --  of the last one, Same when there is none to try.
             Tried : Natural := 0;
          begin
+            Why := Same;
             for By in Tests .. Proof loop
                for M of Work_Items.all loop
                   exit when Tried = 3;
                   if M.File = F and then M.Status = Killed
                     and then M.Killed_By = By
+                    and then not M.Mutation.Contract
                   then
                      Tried := Tried + 1;
-                     if Build_With
-                       (1, M, "equivalence-check-" & Image (M.Id) & ".log")
-                       = Different
-                     then
+                     Why := Build_With
+                       (1, M, "equivalence-check-" & Image (M.Id) & ".log");
+                     if Why = Different then
                         Compiled (F) := True;
                         return;
                      end if;
@@ -1176,7 +1254,7 @@ package body AdaMutant.Runner is
                end if;
                while Cursor < Work_Items'Last loop
                   Cursor := Cursor + 1;
-                  if Work_Items (Cursor).Status = Survived
+                  if Examined (Work_Items (Cursor))
                     and then Compiled (Work_Items (Cursor).File)
                   then
                      Index := Cursor;
@@ -1231,7 +1309,7 @@ package body AdaMutant.Runner is
          type Comparer_Access is access Comparer;
       begin
          for M of Work_Items.all loop
-            if M.Status = Survived then
+            if Examined (M) then
                Survivors := Survivors + 1;
             end if;
          end loop;
@@ -1277,22 +1355,33 @@ package body AdaMutant.Runner is
          for F in Compiled'Range loop
             declare
                Here : Natural := 0;
+               Why  : Outcome;
             begin
                for M of Work_Items.all loop
-                  if M.File = F and then M.Status = Survived then
+                  if M.File = F and then Examined (M) then
                      Here := Here + 1;
                   end if;
                end loop;
                if Here > 0 then
-                  Check_Command (F);
+                  Check_Command (F, Why);
                   if Compiled (F) then
                      Survivors := Survivors + Here;
                   elsif Warn /= null then
-                     Warn ("the equivalence_build command makes the same"
-                           & " object files of detected mutants of "
+                     Warn ("the equivalence_build command "
+                           & (case Why is
+                                 when Failed      =>
+                                   "fails for detected mutants of ",
+                                 when Not_Rebuilt =>
+                                   "does not compile every unit that depends"
+                                   & " on the file again for detected"
+                                   & " mutants of ",
+                                 when others      =>
+                                   "makes the same object files of detected"
+                                   & " mutants of ")
                            & To_String (R.Files (F).Path)
-                           & ", or there is none to try; its survivors are"
-                           & " not examined");
+                           & (if Why = Same
+                              then ", or there is none to try" else "")
+                           & "; its survivors are not examined");
                   end if;
                end if;
             end;
@@ -1409,7 +1498,17 @@ package body AdaMutant.Runner is
          --  of those that passed the tests of the combined build.
          Run_Workers (Combined_Build => False);
          if Length (S.Equivalence_Build) > 0 then
-            Find_Equivalent;
+            --  Whatever goes wrong here, the mutants have run: their
+            --  results stay, and so do the equivalent mutants found so far.
+            begin
+               Find_Equivalent;
+            exception
+               when E : others =>
+                  if Warn /= null then
+                     Warn ("the search for equivalent mutants has stopped: "
+                           & Ada.Exceptions.Exception_Message (E));
+                  end if;
+            end;
          end if;
       end if;
 

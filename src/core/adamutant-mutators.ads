@@ -47,9 +47,12 @@ package AdaMutant.Mutators is
       Last        : Natural := 0;
       Replacement : Unbounded_String;
       Ignored     : Boolean := False;
+      Contract    : Boolean := False;
    end record;
    --  Source (First .. Last) is replaced by Replacement.  Ignored is set when
-   --  an "adamutant:disable" comment covers the mutation.
+   --  an "adamutant:disable" comment covers the mutation, Contract when the
+   --  mutation is in an aspect or in ghost code (which the program only
+   --  contains when assertions are enabled).
 
    package Mutation_Vectors is new Ada.Containers.Vectors (Positive, Mutation);
 

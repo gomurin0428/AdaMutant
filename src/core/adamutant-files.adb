@@ -41,7 +41,11 @@ package body AdaMutant.Files is
       SIO.Close (F);
       return GNAT.SHA256.Digest (Context);
    exception
-      when SIO.Name_Error | SIO.Use_Error | SIO.End_Error =>
+      when SIO.Name_Error | SIO.Use_Error | SIO.End_Error
+         | SIO.Device_Error | SIO.Data_Error =>
+         if SIO.Is_Open (F) then
+            SIO.Close (F);
+         end if;
          raise File_Error with "cannot read " & Path;
    end Digest;
 

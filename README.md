@@ -167,6 +167,13 @@ The following are not put together, and are built one at a time as before.
 
 When the build that contains all the mutants has a compile error, AdaMutant finds which mutant the line of the error belongs to, marks that mutant as CompileError, and builds again with the rest. When the build fails at a place that is not a line of any mutant, AdaMutant exits with an error.
 
+What it needs:
+
+- The main subprogram of the test program is written in Ada, and the build leaves GNAT ALI files. The function that returns the number of the active mutant is in `AdaMutant_Schemata_Support`, a unit that AdaMutant generates. Only inside the sandbox, AdaMutant puts it in the same directory as the source of the main and adds a `with` to the main. When the main cannot be found, AdaMutant prints a warning and builds every mutant one at a time
+- C's `getenv` is available (to read the environment variable). Recording the executed places also uses `getpid`, `fopen`, `fputs` and `fflush`
+- The directory of the record is built into the generated code as an absolute path. When the test command runs test programs in another file system (a container with the project mounted somewhere else, for example), those processes cannot record. When only some of the processes cannot record, there is no warning. Set `coverage_analysis = false` for such a setup
+- The test command runs the built executable as it is. `ADAMUTANT_MUTANT_ID` is the environment variable that has always been passed to the test command, and it has to reach the test program
+
 ### Code that no test executes
 
 The tests cannot detect a mutant in a place that no test executes. AdaMutant does not run such a mutant and marks it as NoCoverage. In the places that are recorded (see below), Survived then means "the tests execute the code but do not check the result", NoCoverage means "the tests do not execute the code", and the run takes less time.
@@ -187,29 +194,31 @@ There is one difference from building the mutants one at a time. The style check
 
 ### Equivalent mutants
 
-No test can detect a mutant that behaves exactly like the original program (an equivalent mutant). When `equivalence_build` holds a command, AdaMutant builds each survivor with that command and compares the object files with those of the unchanged project. When all of them are the same, the mutant is the same program as the unchanged project, so it becomes Ignored (with the reason `equivalent mutant: ...`) and leaves the score.
+No test can detect a mutant that behaves exactly like the original program (an equivalent mutant). When `equivalence_build` holds a command, AdaMutant builds each survivor with that command and compares the object files with those of the unchanged project. When all of them are the same, the mutant is the same program as the unchanged project, so it becomes Ignored (with the reason `equivalent mutant: ...`) and leaves the score. The mutants found to be equivalent are listed on the console under `Equivalent mutants`.
 
 ```toml
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"
 ```
 
+Make the command the `build` command with only the switches for optimization and debug information changed.
+
 - Turn optimization on (`-O2`). Without it a difference such as `A > B` and `A >= B` stays in the machine code, and equivalent mutants do not come out the same
 - Leave debug information out (`-g0`). It contains column positions and the like, so equivalent mutants do not come out the same
+- Keep every other switch as in `build` (assertions on or off, suppressed checks, scenario variables and so on). The verdict is about the program that the compiler and the switches of this command produce
+- Use a command that compiles every unit that depends on the mutated file again (gprbuild with the whole project does). A mutant of a constant in a specification, of a generic body or of a body that is inlined only shows in the objects of other units. A command that only compiles the mutated file cannot be used
 - Linking is not needed (`-c` for gprbuild)
-- All the files with the extension `.o` or `.obj` in the sandbox are compared
-- Before it builds the unchanged project with this command, AdaMutant removes the object files and the ALI files in the sandbox. With the objects of `build` still there, gprbuild would not make them again although the switches differ (unless `-s` is given). Everything is compiled once more, which takes that much time
-- After each mutant is compared, the object files are put back to those of the unchanged project. So the objects of one mutant do not stay for the next comparison, even with a command that only compiles the mutated file (one that uses `ADAMUTANT_MUTANT_FILE`, for example)
 
-A mutant that comes out "the same" is equivalent, but a mutant that comes out "different" is not necessarily non-equivalent: only those that the compiler reduces to the same code are found. The mutants found to be equivalent are listed on the console under `Equivalent mutants`. The verdict is about the program that the compiler and the switches of this command produce.
+A mutant that comes out "the same" is equivalent, but a mutant that comes out "different" is not necessarily non-equivalent: only those that the compiler reduces to the same code are found.
 
-If the command does not really compile a file, the object files do not change and every survivor would look equivalent. So, for each file, AdaMutant first builds one mutant that was detected (Killed) with the command and makes sure that the object files change. When they do not (up to three mutants are tried), or when there is no detected mutant, it prints a warning and does not examine the survivors of that file. When the command fails on the unchanged project, it also prints a warning and gives up.
+To avoid a wrong verdict, AdaMutant does the following.
 
-What it needs:
-
-- The main subprogram of the test program is written in Ada, and the build leaves GNAT ALI files. The function that returns the number of the active mutant is in `AdaMutant_Schemata_Support`, a unit that AdaMutant generates. Only inside the sandbox, AdaMutant puts it in the same directory as the source of the main and adds a `with` to the main. When the main cannot be found, AdaMutant prints a warning and builds every mutant one at a time
-- C's `getenv` is available (to read the environment variable). Recording the executed places also uses `getpid`, `fopen`, `fputs` and `fflush`
-- The directory of the record is built into the generated code as an absolute path. When the test command runs test programs in another file system (a container with the project mounted somewhere else, for example), those processes cannot record. When only some of the processes cannot record, there is no warning. Set `coverage_analysis = false` for such a setup
-- The test command runs the built executable as it is. `ADAMUTANT_MUTANT_ID` is the environment variable that has always been passed to the test command, and it has to reach the test program
+- Before it builds the unchanged project with this command, it removes the object files and the ALI files in the sandbox. With the objects of `build` still there, gprbuild would not make them again although the switches differ (unless `-s` is given). Everything is compiled once more, which takes that much time
+- All the files with the extension `.o` or `.obj` in the sandbox are compared. The files that the binder makes (`b__*.o`, `b~*.o`) differ for every mutant and are not compared
+- For each file, it first builds one mutant that was detected (Killed) with the command and makes sure that the object files change. If the command does not compile the file, the object files do not change and every survivor would look equivalent. When they do not change (up to three mutants are tried), when there is no detected mutant, or when the build fails, it prints a warning and does not examine the survivors of that file
+- After it has built a mutant, it reads the GNAT ALI files and makes sure that every unit that depends on the mutated file has been compiled again. A mutant for which this is not so is not taken to be equivalent
+- After each mutant is compared, the object files are put back to those of the unchanged project
+- Mutants of contracts (aspects and ghost code) are not examined. In a build without assertions they do not show in the objects, but they are other contracts all the same (with `mutate_contracts = true`)
+- When the command fails on the unchanged project, or when reading or writing a file fails on the way, it prints a warning and gives up. The results so far stay
 
 ## Examples
 

@@ -504,7 +504,8 @@ package body AdaMutant.Mutators is
                 First       => S (From).First,
                 Last        => S (To).Last,
                 Replacement => To_Unbounded_String (Replacement),
-                Ignored     => Ignored));
+                Ignored     => Ignored,
+                Contract    => In_Aspect (A) or else In_Ghost (A)));
          end Add;
 
          function Same_Case (Model, Word : String) return String is
