@@ -91,4 +91,12 @@ package AdaMutant.Results is
    function Score_Image (C : Status_Counts) return String;
    --  "83.33" or "n/a".
 
+   Proof_Unfinished : constant String :=
+     "the proof did not finish within the timeout";
+   --  The end of the reason of a mutant that survived because its proof
+   --  ran out of time.  That is not a detection: a proof that would fail
+   --  and one that is only slow look the same.
+
+   function Proof_Timed_Out (M : Mutant) return Boolean;
+
 end AdaMutant.Results;

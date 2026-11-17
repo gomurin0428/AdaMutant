@@ -97,6 +97,9 @@ NAMED_TESTS_TABLE = ("\n[tests]\n"
                      "misc = '\"bin/test_misc\"'\n"
                      "idle = '\"bin/test_idle\"'\n")
 
+# A prove command that proves nothing and passes.
+NO_PROOF = "prove = '{python} -c \"pass\"'\n"
+
 EXAMPLES = {
     # The example has an equivalence_build command: the two survivors that
     # are equivalent mutants become Ignored.
@@ -105,11 +108,7 @@ EXAMPLES = {
         # Most mutants are tested in the one build that contains them all;
         # only a few are built on their own.
         "max_single_builds": 10,
-        # A source that the build never compiles: its mutants are NoCoverage.
-        "extra": {"src/unused.adb":
-                  "function Unused (X : Integer) return Integer is\n"
-                  "begin\n   return X + 1;\nend Unused;\n"},
-        "output": "warning: src/unused.adb is not compiled by the build command",
+        "output": "Lines that no test executes:",
     },
     # The report says which checks the proof failed on.
     "spark_counter": {"exit": 0, "killed_by": "proof",
@@ -147,13 +146,13 @@ EXAMPLES = {
                 "   end if;\n"
                 "end Test_Calculator;\n"},
     },
-    # The mutants in code that no test executes are NoCoverage, and are
-    # neither built nor tested: not even the deleted statements, which are
-    # otherwise built one at a time.  Only the three initial values of
-    # declarations, whose execution is not watched, are built.
+    # The mutants in code that no test executes are not tested: they go to
+    # the proof at once.  Only the deleted statements among them, and the
+    # three initial values of declarations, whose execution is not watched,
+    # are built on their own.
     "coverage": {
         "exit": 2, "example": "calculator", "extra": SPARE,
-        "min_uncovered": 5, "max_single_builds": 3,
+        "min_uncovered": 5, "max_single_builds": 7,
         "output": "Lines that no test executes:",
     },
     # A pure package built with optimization: the statement that is only
@@ -229,7 +228,7 @@ EXAMPLES = {
         "output": "warning: the test programs recorded nothing",
     },
     # Tests that execute none of the watched code are not a lost record:
-    # the mutants there are NoCoverage, without a warning.
+    # the mutants there are known not to be executed, without a warning.
     "coverage_none": {
         "exit": 2, "example": "calculator", "min_uncovered": 30,
         "not_output": "warning: the test programs recorded nothing",
@@ -620,11 +619,15 @@ def run_example(name, spec, update):
         for rel, text in extra.items():
             (work / rel).parent.mkdir(parents=True, exist_ok=True)
             (work / rel).write_text(text)
-        if "config" in spec or "config_tail" in spec or "drop_keys" in spec:
+        # The variants of the calculator are about the tests.  The proof of
+        # the example, which has nothing to prove, would only take time.
+        fake = (spec.get("example") == "calculator"
+                and "prove =" not in spec.get("config", ""))
+        if "config" in spec or "config_tail" in spec or "drop_keys" in spec or fake:
             python = (f'"{sys.executable}"' if " " in sys.executable
                       else sys.executable).replace("\\", "/")
             config = work / "adamutant.toml"
-            head = spec.get("config", "")
+            head = spec.get("config", "") + (NO_PROOF if fake else "")
             keys = {line.split("=")[0].strip() for line in head.splitlines()}
             keys |= set(spec.get("drop_keys", []))
             lines = [line for line in config.read_text().splitlines(True)
@@ -668,9 +671,10 @@ def run_example(name, spec, update):
         for m in uncovered:
             if any(logs.glob(f"mutant-{m['id']}-test*.log")):
                 errors.append(f"mutant {m['id']} is not covered, but has a test log")
-            for step in ("build", "prove"):
-                if m["status"] == "NoCoverage" and (logs / f"mutant-{m['id']}-{step}.log").exists():
-                    errors.append(f"mutant {m['id']} is NoCoverage, but has a {step} log")
+            # It goes to the proof instead.
+            if m["status"] != "CompileError" \
+                    and not (logs / f"mutant-{m['id']}-prove.log").exists():
+                errors.append(f"mutant {m['id']} is not covered, but has no prove log")
         if "uncovered_built" in spec:
             found = [m for p, f in report["files"].items() for m in f["mutants"]
                      if key(p, m) == spec["uncovered_built"]]
@@ -771,6 +775,16 @@ def leftover_processes(name):
             .returncode == 0]
 
 
+def no_proof(work):
+    """The calculator has nothing to prove: use a prover that only passes."""
+    python = (f'"{sys.executable}"' if " " in sys.executable
+              else sys.executable).replace("\\", "/")
+    config = work / "adamutant.toml"
+    config.write_text("".join(
+        NO_PROOF.format(python=python) if line.startswith("prove =") else line
+        for line in config.read_text().splitlines(True)))
+
+
 def git(work, *args):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
                     "-c", "commit.gpgsign=false", *args],
@@ -790,6 +804,7 @@ def check_since():
         shutil.copytree(ROOT / "examples" / "calculator", work / "p",
                         ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
         work = work / "p"
+        no_proof(work)
         src = work / "src" / "calculator.adb"
         git(work, "init", "-q", "-b", "main")
         git(work, "add", "-A")
@@ -888,10 +903,11 @@ def check_proof_log():
         python = (f'"{sys.executable}"' if " " in sys.executable
                   else sys.executable).replace("\\", "/")
         config = work / "adamutant.toml"
+        # No test detects anything, so every mutant goes to the prover.
         lines = [line for line in config.read_text().splitlines(True)
-                 if not line.startswith(("prove", "equivalence_build"))]
+                 if not line.startswith(("prove", "test", "equivalence_build"))]
         config.write_text(f"prove = '{python} fake_prove.py'\ntimeout_ms = 1000\n"
-                          + "".join(lines))
+                          f"test = '{python} -c \"pass\"'\n" + "".join(lines))
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if proc.returncode != 0:
@@ -908,8 +924,10 @@ def check_proof_log():
             "3": ("Killed", ["proof: initialization"],
                   'proof failed: counters.adb:7:8: high: "Y" is not initialized in "Init"'
                   " (and 1 more)"),
-            "4": ("Timeout", ["proof"], "proof did not finish within the timeout"),
-            "5": ("Survived", None, "proof passed"),
+            # A proof that does not finish detects nothing.
+            "4": ("Survived", None,
+                  "the tests passed, and the proof did not finish within the timeout"),
+            "5": ("Survived", None, "the tests and the proof passed"),
         }
         errors = []
         for n, want in expected.items():
@@ -919,7 +937,11 @@ def check_proof_log():
                 errors.append(f"mutant {n}: {got}, expected {want}")
         for line in ("  range check    |     1 |     0 alone",
                      "  postcondition  |     1 |     0 alone",
-                     "  initialization |     1 |     1 alone"):
+                     "  initialization |     1 |     1 alone",
+                     "Detected only by the proof (candidates for a missing test):",
+                     " (range check, postcondition)",
+                     " (initialization)",
+                     " (the proof timed out)"):
             if line not in proc.stdout:
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
@@ -959,8 +981,8 @@ def check_library():
                 "end Vend;\n",
             "vendor/src/vend.adb":
                 "package body Vend is\n"
-                "   Slack  : constant := 0;\n"
                 "   Margin : constant := 0;\n"
+                "   Slack  : constant := 0;\n"
                 "   function Padded (A : Integer) return Integer is (A + Slack);\n"
                 "   function Bigger (A, B : Integer) return Integer is\n"
                 "   begin\n"
@@ -986,16 +1008,19 @@ def check_library():
                 'mutate = ["vendor/src/*.adb"]\n'
                 'build = "gprbuild -p -q -P p.gpr"\n'
                 "test = '\"bin/test_main\"'\n"
+                "prove = '{python} -c \"pass\"'\n"
                 "concurrency = 2\n"
                 'sandbox_exclude = [".git", "obj", "bin", "vendor/obj", "vendor/lib"]\n',
         }
+        python = (f'"{sys.executable}"' if " " in sys.executable
+                  else sys.executable).replace("\\", "/")
         for rel, text in files.items():
             (work / rel).parent.mkdir(parents=True, exist_ok=True)
-            (work / rel).write_text(text)
+            (work / rel).write_text(text.replace("{python}", python))
         # The two named numbers are static, so their mutants are built one
         # by one, the first right before the second.
-        expected = {"vendor/src/vend.adb:2:25 NumericLiteral 1": "Survived",
-                    "vendor/src/vend.adb:3:25 NumericLiteral 1": "Killed",
+        expected = {"vendor/src/vend.adb:2:25 NumericLiteral 1": "Killed",
+                    "vendor/src/vend.adb:3:25 NumericLiteral 1": "Survived",
                     "vendor/src/vend.adb:4:55 ArithmeticOperator -": "Survived",
                     "vendor/src/vend.adb:7:10 ConditionalExpression True": "Killed",
                     "vendor/src/vend.adb:7:10 ConditionalExpression False": "Killed",
@@ -1007,7 +1032,8 @@ def check_library():
         # before.  A library that is then not made again would leave its
         # mutants without effect: those of the build of all the mutants in
         # about every second run, and with one sandbox the second named
-        # number would be tested with the library of the first.
+        # number would be tested with the library of the first.  (The
+        # first one is detected, so no proof runs between the two builds.)
         for attempt in range(1, 5):
             if attempt == 3:
                 config = work / "adamutant.toml"
@@ -1037,6 +1063,7 @@ def check_baseline():
                         ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
         base = work / "base.json"
         work = work / "p"
+        no_proof(work)
         src = work / "src" / "calculator.adb"
         test = work / "tests" / "test_calculator.adb"
         report = work / ".adamutant" / "reports" / "mutation-report.json"

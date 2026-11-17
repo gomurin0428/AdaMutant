@@ -422,9 +422,14 @@ package body AdaMutant.Config is
               "the command of the test '" & To_String (T.Name) & "' is empty";
          end if;
       end loop;
-      if C.Tests.Is_Empty and then Length (C.Prove) = 0 then
+      --  There is one way to run: the tests first, then the proof of the
+      --  mutants that the tests do not detect.
+      if C.Tests.Is_Empty then
          raise Config_Error with
-           "at least one of the 'test' and 'prove' commands is required";
+           "a test command is required: 'test' or a [tests] table";
+      end if;
+      if Length (C.Prove) = 0 then
+         raise Config_Error with "the 'prove' command is required";
       end if;
       if C.Low > C.High then
          raise Config_Error with
@@ -462,7 +467,9 @@ package body AdaMutant.Config is
       & "# the tests that execute its code.  bail = false runs every such" & LF
       & "# test even after one has detected the mutant." & LF
       & "# bail = true" & LF
-      & "# prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on""" & LF
+      & "# A mutant that the tests do not detect goes to the proof; a" & LF
+      & "# non-zero exit status of 'prove' kills it there." & LF
+      & "prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on""" & LF
       & "# A build with optimization and without debug information.  A" & LF
       & "# surviving mutant whose object files are the same as those of the" & LF
       & "# unmodified project is an equivalent mutant and becomes Ignored." & LF
@@ -473,7 +480,8 @@ package body AdaMutant.Config is
       & "timeout_factor = 1.5" & LF
       & "timeout_ms = 5000" & LF
       & "# test_memory_limit_mb = 2048" & LF
-      & "# Mutants in code that no test executes are not run (NoCoverage)." & LF
+      & "# Mutants in code that no test executes skip the tests and go to" & LF
+      & "# the proof at once." & LF
       & "coverage_analysis = true" & LF
       & "# mutators = [""ArithmeticOperator"", ""EqualityOperator""]" & LF
       & "# exclude_mutators = [""StringLiteral""]" & LF

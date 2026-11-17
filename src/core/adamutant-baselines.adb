@@ -193,6 +193,9 @@ package body AdaMutant.Baselines is
       end return;
    end As_In_Report;
 
+   Old_Proof_Timeout : constant String :=
+     "proof did not finish within the timeout";
+
    procedure Take (M : in out Mutant; From : AdaMutant.Json.Value) is
       --  The result that the report has in From becomes that of M.
 
@@ -256,6 +259,17 @@ package body AdaMutant.Baselines is
                end;
             end if;
          end loop;
+      end if;
+      --  An earlier version counted a proof that did not finish as a
+      --  detection.
+      if M.Status = Timeout and then Starts_With (Reason, Old_Proof_Timeout)
+      then
+         M.Status := Survived;
+         M.Status_Reason := To_Unbounded_String
+           ("the tests passed, and " & Proof_Unfinished & From_Baseline);
+         M.Killed_By := None;
+         M.Killers.Clear;
+         M.Failed_Checks.Clear;
       end if;
    end Take;
 
@@ -344,7 +358,14 @@ package body AdaMutant.Baselines is
                            begin
                               --  A build that ran out of time may only
                               --  have been slow that once.
-                              if Status in "Killed" | "Timeout"
+                              if Status = "Killed"
+                                or else
+                                  (Status = "Timeout"
+                                   and then
+                                     (M.Unchanged
+                                      or else not Starts_With
+                                        (Text_Field (Old, "statusReason"),
+                                         Old_Proof_Timeout)))
                                 or else
                                   (Status = "CompileError"
                                    and then not Starts_With

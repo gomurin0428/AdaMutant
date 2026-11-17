@@ -52,18 +52,16 @@ package AdaMutant.Runner is
          File        : String) := null;
       Warn         : access procedure (Message : String) := null;
       Note         : access procedure (Message : String) := null);
-   --  Builds and tests the unmodified project, then every pending mutant,
-   --  in copies of the project under <root>/.adamutant/sandbox.  Raises
-   --  Run_Error when the unmodified project does not build or its tests or
-   --  proof fail.  Pending mutants of files that no GNAT ALI file produced
-   --  by the unmodified build depends on get the No_Coverage status and
-   --  are reported to Warn, unless a prove command is configured.  So do,
-   --  with coverage analysis, the mutants in places that the tests of the
-   --  unmodified project do not execute; with a prove command these skip
-   --  the tests and go to the proof.
-   --  With an equivalence_build command the survivors are then built with
-   --  it, which Note announces; those whose object files are the same as
-   --  the ones the command makes of the unmodified project get the Ignored
-   --  status.
+   --  Builds, tests and proves the unmodified project, then every pending
+   --  mutant, in copies of the project under <root>/.adamutant/sandbox.
+   --  Raises Run_Error when the unmodified project does not build or its
+   --  tests or proof fail.  A mutant runs the tests first; the proof only
+   --  sees the mutants that the tests do not detect.  With coverage
+   --  analysis, a mutant in a place that the tests of the unmodified
+   --  project do not execute skips the tests and goes to the proof at
+   --  once.  With an equivalence_build command the survivors are then
+   --  built with it, which Note announces; those whose object files are
+   --  the same as the ones the command makes of the unmodified project
+   --  get the Ignored status.
 
 end AdaMutant.Runner;

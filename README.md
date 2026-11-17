@@ -2,12 +2,12 @@
 
 **English** | [日本語](README.ja.md)
 
-A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/) for .NET: it makes small changes (mutants) to the sources automatically, checks whether the tests or the GNATprove proofs detect each change, and reports the **mutation score**.
+A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/) for .NET: it makes small changes (mutants) to the sources automatically, checks whether the tests and the GNATprove proofs detect each change, and reports the **mutation score**.
 
 - A built-in lexer for Ada up to Ada 2022 (no extra dependencies such as libadalang)
-- Mutants can be killed **by a failed GNATprove proof** as well as by a failed test (for SPARK)
+- **The mutants that the tests do not detect go to the GNATprove proof** (for SPARK). The mutants that only the proof detects are listed as candidates for a missing test
 - **All the mutants are built once**, and the tests run while switching which mutant is active (mutant schemata). It is fast because it does not rebuild for every mutant
-- **Mutants in code that no test executes are not run.** AdaMutant records which places the tests of the unchanged project execute, and marks the mutants in the other places as NoCoverage
+- **Mutants in code that no test executes skip the tests and go straight to the proof.** AdaMutant records which places the tests of the unchanged project execute
 - **Results per test.** When several test commands are given with names, the report says which tests execute and detect each mutant, and a mutant is only tested with the tests that execute its place (`[tests]`)
 - **The results of an earlier run are reused.** A mutant on lines that have not changed takes its result from an earlier report (`--baseline`)
 - **Equivalent mutants are recognized automatically.** AdaMutant compiles the survivors with optimization and marks a mutant as Ignored when its object code is the same as before the change (`equivalence_build`)
@@ -15,10 +15,39 @@ A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.
 - `test_memory_limit_mb` limits the memory of each test process (`RLIMIT_AS` on POSIX, a job object on Windows. macOS does not accept `RLIMIT_AS`, so AdaMutant checks the physical memory (phys_footprint) of the test processes every 10 milliseconds). When a mutant that changes, for example, a loop count allocates several GB, the whole machine can run out of memory during a parallel run and the whole run can crash. An allocation beyond the limit fails (`Storage_Error` in Ada) and the mutant is Killed. On macOS the test processes are terminated together as soon as the limit is exceeded, and the mutant is also Killed (the log contains `adamutant: killed, a process exceeded test_memory_limit_mb`). The tests of the unchanged project run under the same limit, so a limit that is too small is reported as an error at that point
 - Reports: a console table, a self-contained HTML file, and JSON in [mutation-testing-report-schema](https://github.com/stryker-mutator/mutation-testing-elements) v2 (the Stryker dashboard can read it)
 
+## Intended workflow
+
+AdaMutant is made for projects that use both tests and the GNATprove proof. This is how it is meant to be used:
+
+1. Run AdaMutant with both the tests and the proof set up. Each mutant goes to the tests first, and only the mutants that the tests do not detect go to the proof (tests first). There is no setting to run the tests alone or the proof alone.
+2. Look at the mutants that only the proof detects as candidates for a missing test. The console lists them under `Detected only by the proof (candidates for a missing test):`.
+   - If the tests can observe the behaviour, add a test.
+   - If the tests cannot observe it, as with a branch that cannot be reached, leave it to the proof. Nothing needs to be excluded.
+3. Handle the mutants that neither the tests nor the proof detect (Survived) as before: add a test or make a contract stronger. Equivalent mutants (those whose object code is the same as before the change) are recognized and excluded automatically when `equivalence_build` is set (Ignored). The others stay Survived.
+4. A mutant whose proof runs out of time is not counted as detected. It counts as Survived and is marked `(the proof timed out)` in the list. Treat it as in 2 or 3.
+
+This is the output for [examples/spark_counter](examples/spark_counter). The test only calls `Increment`, so only the proof detects the mutants of `Saturating_Add` (candidates, as in 2). The survivor #6 is an equivalent mutant: when `A + B = Max`, both branches return `Max`. The optimized object code still differs, so it is not excluded automatically and stays Survived (as in 3).
+
+```
+Detected only by the proof (candidates for a missing test):
+  #3 src/counters.adb:10:10 ConditionalExpression (postcondition; no test executes this code)
+    - A + B > Max
+    + True
+  #5 src/counters.adb:10:12 ArithmeticOperator (range check; no test executes this code)
+    - +
+    + -
+  ...
+
+Survived mutants:
+  #6 src/counters.adb:10:16 EqualityOperator
+    - >
+    + >=
+```
+
 ## Requirements
 
 - GNAT with Ada 2022 support and GPRbuild (tested with GNAT 16.1 and GPRbuild 26; GNAT 14 builds it too)
-- GNATprove, if you want to kill mutants by proof (tested with GNATprove 16.1)
+- GNATprove (required; tested with GNATprove 16.1). GNATprove only analyses SPARK code (`SPARK_Mode`), so the proof never detects a mutant in other code
 - Python 3, to run the end-to-end tests
 
 ## Building
@@ -62,8 +91,8 @@ Exit status: 0 = success, 1 = error (a mistake in the configuration, the origina
 mutate = ["src/**/*.adb", "src/**/*.ads"]   # files to mutate
 exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr"       # required. A mutant that fails to build is CompileError
-test = "bin/run_tests"                      # Killed when the exit status is not 0
-prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on"  # Killed (by proof) when not 0
+test = "bin/run_tests"                      # required (or [tests]); Killed when the exit status is not 0
+prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on"  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # optional. The build used to recognize equivalent mutants
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
@@ -89,7 +118,7 @@ break = 0
 
 The "original time" is the slowest run when the tests (proofs) of the unmutated project run in all the sandboxes at the same time. It is measured under the same load as the parallel runs of the mutants, so tests that become slower in parallel are not reported as Timeout by mistake.
 
-At least one of `test` and `prove` is required. When both are set, the tests run first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report; it is empty in the baseline runs). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
+`build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report; it is empty in the baseline runs). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
 
 ### Reusing the results of an earlier run
 
@@ -156,8 +185,8 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 |---|---|
 | Killed | A test or a proof failed (detected) |
 | Timeout | The tests did not finish in time (counted as detected) |
-| Survived | The tests and the proof both passed (not detected) |
-| NoCoverage | The build does not compile the file, or no test executes the place (counted as not detected, and not run) |
+| Survived | The tests and the proof both passed, or the proof did not finish in time (not detected) |
+| NoCoverage | Only from a report of an earlier version reused with `--baseline` (counted as not detected). This version sends a mutant that no test executes to the proof |
 | CompileError | The mutant could not be built (not in the score) |
 | RuntimeError | A command could not be started, and the like (not in the score) |
 | Ignored | Disabled by a comment, or found to be an equivalent mutant (not in the score) |
@@ -215,19 +244,20 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - A message that the proof of the unchanged project has as well does not count (a message with the same text in the same file is taken to be the same one, whatever its line and column)
 - When no message can be read, `killedBy` is `["proof"]` as before
 - GNATprove 16 puts the place of a message on the next line (`--> file:line:col`). AdaMutant reads this format as well as the one-line format of older versions
+- The console also lists each mutant that only the proof detects under `Detected only by the proof (candidates for a missing test):`. The parentheses hold the kinds of the checks that could not be proved. A mutant in a place that no test executes also gets `no test executes this code`
+- A mutant whose proof does not finish in time is Survived (its `statusReason` ends with `the proof did not finish within the timeout`), because a proof that would fail cannot be told apart from one that is only slow. A proof Timeout in a report of an earlier version is read the same way with `--baseline`
 
 ## How it works
 
-1. Copy the original project to `.adamutant/sandbox/1`, then build it and run the tests (and the proof) once to measure how long they take. If any of them fails, stop with an error
-2. A file that does not appear in the `D` lines (the source dependencies) of the GNAT ALI files that the original build wrote cannot be detected by any test, so its mutants are not run and are reported as NoCoverage with a warning. This check is not made when there is no ALI file at all, or when `prove` is set (GNATprove may prove sources that the build does not cover). Stale ALI files only make the check more lenient (the mutants are run), so putting `obj` in `sandbox_exclude` makes it accurate
-3. Copy that state into one sandbox for each worker
-4. When `test` is set, make **sources that contain all the mutants**, build them once, and run only the tests for each mutant (see below). Before that, run the tests with no mutant active and record the places that they execute. The mutants in the places that they do not execute are marked NoCoverage without running the tests (see below)
-5. For the mutants that could not be put together, each worker repeats: rewrite one file → `build` → `test` → restore. The time stamps in GNAT's ALI files have a resolution of one second, and on Windows they are rounded up to an even second, so the mtime is moved forward by two seconds or more at every rewrite to make sure that the file is recompiled
-6. When `prove` is set, the mutants that the tests did not detect go to the proof one at a time (rewrite one file → `prove` → restore). The proof is not run on the sources that contain all the mutants, because it could not tell which mutant caused a failure
-7. When `equivalence_build` is set, the survivors are built with that command one at a time, and a survivor whose object files are the same as before the change becomes Ignored as an equivalent mutant (see below)
-8. The logs are written to `.adamutant/logs` and the reports to `report_dir`
+1. Copy the original project to `.adamutant/sandbox/1`, then build it and run the tests and the proof once to measure how long they take. If any of them fails, stop with an error
+2. Copy that state into one sandbox for each worker
+3. Make **sources that contain all the mutants**, build them once, and run only the tests for each mutant (see below). Before that, run the tests with no mutant active and record the places that they execute. The mutants in the places that they do not execute skip the tests and go to the proof (see below)
+4. For the mutants that could not be put together, each worker repeats: rewrite one file → `build` → `test` → restore. The time stamps in GNAT's ALI files have a resolution of one second, and on Windows they are rounded up to an even second, so the mtime is moved forward by two seconds or more at every rewrite to make sure that the file is recompiled
+5. The mutants that the tests did not detect go to the proof one at a time (rewrite one file → `prove` → restore). The proof is not run on the sources that contain all the mutants, because it could not tell which mutant caused a failure
+6. When `equivalence_build` is set, the survivors are built with that command one at a time, and a survivor whose object files are the same as before the change becomes Ignored as an equivalent mutant (see below)
+7. The logs are written to `.adamutant/logs` and the reports to `report_dir`
 
-Where a sandbox holds libraries after the unchanged project is built and tested (`.a`, `.lib`, `.so`, `.so.<version>`, `.dll`, `.dylib`), every later build in it, in steps 4 and 5, starts two seconds or more after the newest of them was written. gprbuild does not make a library again unless its time stamp is older than that of an object, so a mutant compiled within the same second would not get into the library, and the tests would run the code of the build before. A library that no build writes again causes no wait. AdaMutant only sees the libraries inside the sandbox: a build that writes a library to a directory outside the project is not covered, and such a directory would be shared by all the sandboxes anyway. The wait compares the time stamps of the files with the clock of this machine, so on a network file system the clock of the file server must not be two seconds or more behind.
+Where a sandbox holds libraries after the unchanged project is built and tested (`.a`, `.lib`, `.so`, `.so.<version>`, `.dll`, `.dylib`), every later build in it, in steps 3 and 4, starts two seconds or more after the newest of them was written. gprbuild does not make a library again unless its time stamp is older than that of an object, so a mutant compiled within the same second would not get into the library, and the tests would run the code of the build before. A library that no build writes again causes no wait. AdaMutant only sees the libraries inside the sandbox: a build that writes a library to a directory outside the project is not covered, and such a directory would be shared by all the sandboxes anyway. The wait compares the time stamps of the files with the clock of this machine, so on a network file system the clock of the file server must not be two seconds or more behind.
 
 ### Building the mutants once
 
@@ -269,16 +299,14 @@ What it needs:
 
 ### Code that no test executes
 
-The tests cannot detect a mutant in a place that no test executes. AdaMutant does not run such a mutant and marks it as NoCoverage. In the places that are recorded (see below), Survived then means "the tests execute the code but do not check the result", NoCoverage means "the tests do not execute the code", and the run takes less time.
+The tests cannot detect a mutant in a place that no test executes. AdaMutant skips the tests of such a mutant and sends it to the proof at once. If the proof passes too, it is Survived, with the `statusReason` `no test executes this code, and the proof passed`. The tests that are not run save time.
 
 It works as follows. In the build that contains all the mutants, the function that switches the mutants records the number of the place that it is called from. It records only while no mutant is active (`ADAMUTANT_MUTANT_ID` is 0 or not set). Before it runs the mutants, AdaMutant runs the tests once with no mutant active. Each process of the test program then writes the numbers of the places that it executes to `.adamutant/logs/coverage/<process id>.txt`. The directory is built into the generated unit. The merged result stays in `.adamutant/logs/coverage.txt` (with `[tests]`, in `coverage-<name>.txt` for each test).
 
-- This covers the mutants that are in the build that contains all the mutants, and StatementDeletion. A StatementDeletion mutant is not in that build, but the build records whether the statement is executed. The StatementDeletion of a statement that is not executed is not even built (when `prove` is set, it is built and then goes to the proof)
-- Mutants that cannot be put together, such as those in declarations, are not covered by this and are run as before
-- When `prove` is set too, a mutant in a place that no test executes skips the tests and goes to the proof. If the proof passes as well, it is Survived
-- A NoCoverage mutant is not compiled either. A mutant that does not compile is also NoCoverage when it is in a place that no test executes
+- This covers the mutants that are in the build that contains all the mutants, and StatementDeletion. A StatementDeletion mutant is not in that build, but the build records whether the statement is executed. The StatementDeletion of a statement that is not executed is built, skips the tests and goes to the proof
+- Mutants that cannot be put together, such as those in declarations, are not covered by this, and their tests run as before
 - When the test programs record nothing, AdaMutant prints a warning and runs every mutant (they cannot write to the directory, for example). A test program writes a first line when it starts, so executing no place is told apart from not being able to record
-- The run that records has to execute everything that the runs of the mutants execute. In the following cases a mutant that would be detected becomes NoCoverage, so set `coverage_analysis = false`
+- The run that records has to execute everything that the runs of the mutants execute. In the following cases the tests of a mutant that they would detect are skipped, so set `coverage_analysis = false`
   - Tests whose path depends on random numbers or on the time
   - A test command that chooses the tests to run by `ADAMUTANT_MUTANT_ID` or `ADAMUTANT_MUTANT_FILE` (they are 0 and empty in the run that records)
 - The console lists the lines that no test executes under `Lines that no test executes:`. The JSON report has `coveredBy` for each mutant (`["tests"]` when the place is executed, `[]` when it is not, absent when it was not examined; with `[tests]`, the names of the tests that execute the place)
@@ -316,7 +344,7 @@ To avoid a wrong verdict, AdaMutant does the following.
 ## Examples
 
 - [examples/calculator](examples/calculator): tests that do not check the boundary values on purpose. You can see surviving mutants, a timeout, a line that no test executes, and equivalent mutants being recognized
-- [examples/spark_counter](examples/spark_counter): no tests. The mutants are killed by the GNATprove proof alone
+- [examples/spark_counter](examples/spark_counter): the test checks only part of the behaviour, and the GNATprove proof detects the rest. It shows the list of mutants that only the proof detects
 
 ```sh
 cd examples/calculator && ../../bin/adamutant run

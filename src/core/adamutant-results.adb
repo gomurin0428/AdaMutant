@@ -47,4 +47,8 @@ package body AdaMutant.Results is
       end;
    end Score_Image;
 
+   function Proof_Timed_Out (M : Mutant) return Boolean is
+     (M.Status = Survived
+      and then Index (M.Status_Reason, Proof_Unfinished) > 0);
+
 end AdaMutant.Results;
