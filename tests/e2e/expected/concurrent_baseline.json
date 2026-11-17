@@ -22,7 +22,7 @@
  "src/calculator.adb:31:19 EqualityOperator <": "Killed",
  "src/calculator.adb:31:19 EqualityOperator >": "Survived",
  "src/calculator.adb:31:22 NumericLiteral 61": "Survived",
- "src/calculator.adb:32:17 StringLiteral \"\"": "Survived",
+ "src/calculator.adb:32:17 StringLiteral \"\"": "NoCoverage",
  "src/calculator.adb:34:14 StringLiteral \"\"": "Killed",
  "src/calculator.adb:38:26 NumericLiteral 1": "Killed",
  "src/calculator.adb:39:26 NumericLiteral 1": "Killed",

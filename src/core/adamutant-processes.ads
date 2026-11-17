@@ -16,11 +16,14 @@ package AdaMutant.Processes is
       Mutant_Id : Natural;
       Timeout   : Duration;
       Memory_Limit_Mb : Natural := 0;
-      Mutant_File : String := "") return Run_Result;
+      Mutant_File : String := "";
+      Coverage_File : String := "") return Run_Result;
    --  Runs Command with the platform shell (/bin/sh -c, or cmd.exe /c on
    --  Windows) in Directory, with stdout and stderr written to Log_File,
-   --  ADAMUTANT_MUTANT_ID set to Mutant_Id and ADAMUTANT_MUTANT_FILE set to
-   --  Mutant_File (empty, which cmd.exe treats as unset, by default).  A Timeout of 0.0 means none.
+   --  ADAMUTANT_MUTANT_ID set to Mutant_Id, ADAMUTANT_MUTANT_FILE set to
+   --  Mutant_File and ADAMUTANT_COVERAGE_FILE set to Coverage_File (both
+   --  empty, which cmd.exe treats as unset, by default).  A Timeout of 0.0
+   --  means none.
    --  A Memory_Limit_Mb other than 0 caps the memory of each process; an
    --  allocation beyond it fails (Storage_Error in Ada programs).  macOS
    --  cannot cap it, so there the process tree is killed as soon as one of

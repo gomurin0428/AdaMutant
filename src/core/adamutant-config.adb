@@ -246,6 +246,8 @@ package body AdaMutant.Config is
             C.Test_Memory_Limit_Mb :=
               Integer_Value
                 (if Standard'Address_Size = 32 then 4095 else Natural'Last);
+         elsif Full = "coverage_analysis" then
+            C.Coverage_Analysis := Boolean_Value;
          elsif Full = "mutators" then
             Mutators_List := Array_Value;
             Have_Mutators := True;
@@ -397,6 +399,8 @@ package body AdaMutant.Config is
       & "timeout_factor = 1.5" & LF
       & "timeout_ms = 5000" & LF
       & "# test_memory_limit_mb = 2048" & LF
+      & "# Mutants in code that no test executes are not run (NoCoverage)." & LF
+      & "coverage_analysis = true" & LF
       & "# mutators = [""ArithmeticOperator"", ""EqualityOperator""]" & LF
       & "# exclude_mutators = [""StringLiteral""]" & LF
       & "mutate_contracts = false" & LF

@@ -503,6 +503,11 @@ procedure Unit_Tests is
       Check (C.Scan.Enabled (Arithmetic_Operator)
              and then not C.Scan.Enabled (Numeric_Literal), "config mutators");
       Check (C.High = 90 and then C.Break = 10, "config thresholds");
+      Check (C.Coverage_Analysis
+             and then not Parse
+               ("build = ""b""" & LF & "test = ""t""" & LF
+                & "coverage_analysis = false", "/r").Coverage_Analysis,
+             "config coverage analysis");
       Rejects ("build = ""b""" & LF & "test = ""t""" & LF & "colour = 1",
                "config unknown key");
       Rejects ("test = ""t""", "config missing build");
@@ -539,9 +544,10 @@ procedure Unit_Tests is
       use AdaMutant.Schemata;
 
       Decl : constant String :=
-        "pragma Warnings (Off); function ADAMUTANT_ACTIVE_7 return"
-        & " Standard.Integer; pragma Import (C, ADAMUTANT_ACTIVE_7,"
-        & " ""adamutant_schemata_active""); pragma Warnings (On);";
+        "pragma Warnings (Off); function ADAMUTANT_ACTIVE_7 (Site :"
+        & " Standard.Integer) return Standard.Integer; pragma Import (C,"
+        & " ADAMUTANT_ACTIVE_7, ""adamutant_schemata_active"");"
+        & " pragma Warnings (On);";
 
       Candidates : Candidate_Vectors.Vector;
 
@@ -556,7 +562,8 @@ procedure Unit_Tests is
            (Candidate'(Id          => Natural (Candidates.Length) + 1,
                        First       => At_Index,
                        Last        => At_Index + Pattern'Length - 1,
-                       Replacement => To_Unbounded_String (Replacement)));
+                       Replacement => To_Unbounded_String (Replacement),
+                       Probe       => False));
       end Mutate;
 
       function Ids (S : Schema) return String is
@@ -610,7 +617,7 @@ procedure Unit_Tests is
                   & "   procedure Q (X : in out Integer) is" & LF
                   & "   begin" & LF
                   & "      " & LF
-                  & "case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "case ADAMUTANT_ACTIVE_7 (1) is" & LF
                   & "when 1 =>" & LF
                   & "X := X - 1;" & LF
                   & "when 2 =>" & LF
@@ -655,7 +662,7 @@ procedure Unit_Tests is
                   & Decl & LF
                   & LF
                   & "begin" & LF
-                  & "   if (case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "   if (case ADAMUTANT_ACTIVE_7 (1) is" & LF
                   & "when 1 => (" & LF
                   & "True" & LF
                   & ")," & LF
@@ -663,7 +670,7 @@ procedure Unit_Tests is
                   & "X > 0 and then X < 9" & LF
                   & ")) then" & LF
                   & "      null;" & LF
-                  & "   elsif (case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "   elsif (case ADAMUTANT_ACTIVE_7 (2) is" & LF
                   & "when 2 => (" & LF
                   & "X /= 0" & LF
                   & ")," & LF
@@ -672,7 +679,7 @@ procedure Unit_Tests is
                   & ")) then" & LF
                   & "      null;" & LF
                   & "   end if;" & LF
-                  & "   while (case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "   while (case ADAMUTANT_ACTIVE_7 (3) is" & LF
                   & "when 3 => (" & LF
                   & "False" & LF
                   & ")," & LF
@@ -680,7 +687,7 @@ procedure Unit_Tests is
                   & "X > 5" & LF
                   & ")) loop" & LF
                   & "      " & LF
-                  & "case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "case ADAMUTANT_ACTIVE_7 (4) is" & LF
                   & "when 4 =>" & LF
                   & "exit when True;" & LF
                   & "when others =>" & LF
@@ -727,7 +734,7 @@ procedure Unit_Tests is
                   & LF
                   & "   Limit : constant := 10;" & LF
                   & "   function Twice (X : Integer) return Integer is "
-                  & "(case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "(case ADAMUTANT_ACTIVE_7 (2) is" & LF
                   & "when 2 =>" & LF
                   & "(X / 2)" & LF
                   & "," & LF
@@ -736,7 +743,7 @@ procedure Unit_Tests is
                   & ")" & LF
                   & "     with Pre => X < Limit;" & LF
                   & "   function Pair (X : Integer) return R is "
-                  & "(case ADAMUTANT_ACTIVE_7 is" & LF
+                  & "(case ADAMUTANT_ACTIVE_7 (4) is" & LF
                   & "when 4 =>" & LF
                   & "(A => X, B => 0)" & LF
                   & "," & LF
@@ -804,6 +811,92 @@ procedure Unit_Tests is
                 Ids (S));
       end;
 
+      --  A probe: its place is watched, the mutant is not built in.
+      declare
+         Source : constant String :=
+           "procedure Q (X : in out Integer) is" & LF
+           & "begin" & LF
+           & "   X := X + 1;" & LF
+           & "   Log;" & LF
+           & "   if X > 2 then" & LF
+           & "      null;" & LF
+           & "   end if;" & LF
+           & "end Q;" & LF;
+         S : Schema;
+
+         function Sites (S : Schema) return String is
+            R : Unbounded_String;
+         begin
+            for Site of S.Sites loop
+               Append (R, Site.Id'Image & " at" & Site.Number'Image & ";");
+            end loop;
+            return To_String (R);
+         end Sites;
+      begin
+         Candidates.Clear;
+         Mutate (Source, "X := X + 1;", "null;");
+         Candidates (1).Probe := True;
+         Mutate (Source, "+", "-");
+         Mutate (Source, "Log;", "null;");
+         Candidates (3).Probe := True;
+         Mutate (Source, "2", "3");
+         Mutate (Source, "Integer", "Float");  --  in no place
+         S := Build (Source, Candidates, 7);
+         Check (To_String (S.Text) =
+                  "pragma Style_Checks (Off);" & LF
+                  & "procedure Q (X : in out Integer) is" & LF
+                  & Decl & LF
+                  & LF
+                  & "begin" & LF
+                  & "   " & LF
+                  & "case ADAMUTANT_ACTIVE_7 (1) is" & LF
+                  & "when 2 =>" & LF
+                  & "X := X - 1;" & LF
+                  & "when others =>" & LF
+                  & "X := X + 1;" & LF
+                  & "end case;" & LF
+                  & LF
+                  & "   " & LF
+                  & "case ADAMUTANT_ACTIVE_7 (3) is" & LF
+                  & "when others =>" & LF
+                  & "Log;" & LF
+                  & "end case;" & LF
+                  & LF
+                  & "   if (case ADAMUTANT_ACTIVE_7 (4) is" & LF
+                  & "when 4 => (" & LF
+                  & "X > 3" & LF
+                  & ")," & LF
+                  & "when others => (" & LF
+                  & "X > 2" & LF
+                  & ")) then" & LF
+                  & "      null;" & LF
+                  & "   end if;" & LF
+                  & "end Q;" & LF,
+                "schemata: probes", To_String (S.Text));
+         Check (Ids (S) = " 2 4", "schemata: probes are not included",
+                Ids (S));
+         Check (Sites (S) = " 1 at 1; 2 at 1; 3 at 3; 4 at 4;",
+                "schemata: places of the candidates", Sites (S));
+         --  Only the lines of the place that has no mutant belong to the
+         --  probe.
+         Check (Owners (S)
+                = " 0 0 0 0 0 0 0 2 2 0 0 0 0 0 3 3 3 3 0 0 4 4 4 0 0 0 0"
+                  & " 0 0 0",
+                "schemata: probes, owners of the lines", Owners (S));
+
+         --  Probes alone make a schema too.
+         Candidates.Clear;
+         Mutate (Source, "Log;", "null;");
+         Candidates (1).Probe := True;
+         S := Build (Source, Candidates, 7);
+         Check (S.Included.Is_Empty and then Natural (S.Sites.Length) = 1
+                and then Ada.Strings.Fixed.Index
+                           (To_String (S.Text),
+                            "case ADAMUTANT_ACTIVE_7 (1) is" & LF
+                            & "when others =>" & LF & "Log;") > 0,
+                "schemata: only a probe", To_String (S.Text));
+      end;
+
       Expect_None
         ("procedure Q is begin <<L>> X := 1; end Q;", "1",
          "a labelled statement");
@@ -844,6 +937,10 @@ procedure Unit_Tests is
                & "procedure Main is",
              "schemata: with clause after pragmas, no line added");
       Check (Ada.Strings.Fixed.Index (Support_Body, "ADAMUTANT_MUTANT_ID") > 0
+             and then Ada.Strings.Fixed.Index
+                        (Support_Body, "ADAMUTANT_COVERAGE_FILE") > 0
+             and then Ada.Strings.Fixed.Index
+                        (Support_Body (Last_Site => 41), "range 0 .. 41)") > 0
              and then Ada.Strings.Fixed.Index
                         (Support_Spec, "adamutant_schemata_active") > 0,
              "schemata: support unit");

@@ -16,9 +16,42 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EXE = ROOT / "bin" / ("adamutant.exe" if os.name == "nt" else "adamutant")
 EXPECTED = Path(__file__).resolve().parent / "expected"
+# A unit that the test program contains, with a procedure that no test
+# calls: the mutants in Reset are in code that the tests never execute.
+SPARE = {
+    "src/spare.ads":
+        "package Spare is\n"
+        "   Count : Integer := 0;\n"
+        "   function Double (X : Integer) return Integer;\n"
+        "   procedure Reset (X : out Integer);\n"
+        "end Spare;\n",
+    "src/spare.adb":
+        "package body Spare is\n"
+        "   function Double (X : Integer) return Integer is\n"
+        "   begin\n"
+        "      return X * 2;\n"
+        "   end Double;\n"
+        "   procedure Reset (X : out Integer) is\n"
+        "   begin\n"
+        "      Count := Count + 1;\n"
+        "      X := 0;\n"
+        "   end Reset;\n"
+        "end Spare;\n",
+    "tests/test_calculator.adb":
+        "with Ada.Command_Line;\n"
+        "with Calculator; use Calculator;\n"
+        "with Spare;\n"
+        "procedure Test_Calculator is\n"
+        "begin\n"
+        "   if Add (2, 3) /= 5 or else Spare.Double (4) /= 8 then\n"
+        "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+        "   end if;\n"
+        "end Test_Calculator;\n",
+}
+
 EXAMPLES = {
     "calculator": {
-        "exit": 0, "min_timeout": 1,
+        "exit": 0, "min_timeout": 1, "min_uncovered": 1,
         # Most mutants are tested in the one build that contains them all;
         # only a few are built on their own.
         "max_single_builds": 10,
@@ -60,6 +93,60 @@ EXAMPLES = {
                 "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
                 "   end if;\n"
                 "end Test_Calculator;\n"},
+    },
+    # The mutants in code that no test executes are NoCoverage, and are
+    # neither built nor tested: not even the deleted statements, which are
+    # otherwise built one at a time.  Only the three initial values of
+    # declarations, whose execution is not watched, are built.
+    "coverage": {
+        "exit": 2, "example": "calculator", "extra": SPARE,
+        "min_uncovered": 5, "max_single_builds": 3,
+        "output": "Lines that no test executes:",
+    },
+    # Without coverage analysis the same mutants are run, and survive.
+    "coverage_off": {
+        "exit": 2, "example": "calculator", "extra": SPARE,
+        "config": "coverage_analysis = false\n", "max_uncovered": 0,
+    },
+    # A test command that does not pass the environment on reports nothing:
+    # every mutant is run, as without coverage analysis.
+    "coverage_lost": {
+        "exit": 2, "example": "calculator", "max_uncovered": 0,
+        "config": "test = '{python} no_coverage_file.py'\n",
+        "extra": dict(SPARE, **{"no_coverage_file.py":
+                  "import os, subprocess, sys\n"
+                  "os.environ.pop('ADAMUTANT_COVERAGE_FILE', None)\n"
+                  "sys.exit(subprocess.call([os.path.join('bin', 'test_calculator')]))\n"}),
+        "output": "warning: the tests reported no executed code",
+    },
+    # Tests and proof together: a mutant in code that no test executes
+    # skips the tests and goes to the proof.
+    "prove_and_test": {
+        "exit": 0, "example": "spark_counter", "killed_by": "proof",
+        "min_uncovered": 1,
+        "config": "build = 'gprbuild -p -q -P counters_tests.gpr'\n"
+                  "test = '\"bin/test_counters\"'\n"
+                  "sandbox_exclude = ['.git', 'obj', 'bin']\n",
+        "extra": {
+            "counters_tests.gpr":
+                "project Counters_Tests is\n"
+                "   for Source_Dirs use (\"src\", \"tests\");\n"
+                "   for Object_Dir use \"obj\";\n"
+                "   for Exec_Dir use \"bin\";\n"
+                "   for Main use (\"test_counters.adb\");\n"
+                "   package Compiler is\n"
+                "      for Default_Switches (\"Ada\") use (\"-gnat2022\");\n"
+                "   end Compiler;\n"
+                "end Counters_Tests;\n",
+            "tests/test_counters.adb":
+                "with Ada.Command_Line;\n"
+                "with Counters;\n"
+                "procedure Test_Counters is\n"
+                "begin\n"
+                "   if Counters.Increment (4) not in 5 then\n"
+                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+                "   end if;\n"
+                "end Test_Counters;\n"},
     },
     # Every mutant's test first allocates 1 GiB, which only the memory limit
     # makes fail: without the limit some mutants would survive.  The test
@@ -112,13 +199,16 @@ def run_example(name, spec, update):
         shutil.copytree(ROOT / "examples" / spec.get("example", name), work,
                         ignore=shutil.ignore_patterns(".adamutant", "obj", "bin", "lib"))
         for rel, text in spec.get("extra", {}).items():
+            (work / rel).parent.mkdir(parents=True, exist_ok=True)
             (work / rel).write_text(text)
         if "config" in spec:
             python = (f'"{sys.executable}"' if " " in sys.executable
                       else sys.executable).replace("\\", "/")
             config = work / "adamutant.toml"
+            keys = {line.split("=")[0].strip()
+                    for line in spec["config"].splitlines()}
             lines = [line for line in config.read_text().splitlines(True)
-                     if not line.startswith("test =")]
+                     if line.split("=")[0].strip() not in keys]
             config.write_text(spec["config"].format(python=python) + "".join(lines))
         before = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
@@ -145,10 +235,24 @@ def run_example(name, spec, update):
         if "killed_by" in spec and not any(
                 spec["killed_by"] in m.get("killedBy", []) for m in mutants):
             errors.append(f"no mutant killed by {spec['killed_by']}")
+        # Mutants in code that the tests do not execute are not run.
+        logs = work / ".adamutant" / "logs"
+        uncovered = [m for m in mutants if m.get("coveredBy") == []]
+        for m in uncovered:
+            for step in ("build", "test"):
+                if (logs / f"mutant-{m['id']}-{step}.log").exists():
+                    errors.append(f"mutant {m['id']} is not covered, but has a {step} log")
+            if m["status"] == "NoCoverage" and (logs / f"mutant-{m['id']}-prove.log").exists():
+                errors.append(f"mutant {m['id']} is NoCoverage, but has a prove log")
+        if len(uncovered) < spec.get("min_uncovered", 0):
+            errors.append(f"{len(uncovered)} mutants without coverage, "
+                          f"expected at least {spec['min_uncovered']}")
+        if len(uncovered) > spec.get("max_uncovered", len(uncovered)):
+            errors.append(f"{len(uncovered)} mutants without coverage, "
+                          f"expected at most {spec['max_uncovered']}")
         if sum(m["status"] == "Timeout" for m in mutants) < spec.get("min_timeout", 0):
             errors.append("expected a Timeout mutant")
         if "max_single_builds" in spec:
-            logs = work / ".adamutant" / "logs"
             if not (logs / "combined-build.log").exists():
                 errors.append("no build that contains the mutants")
             single = len(list(logs.glob("mutant-*-build.log")))
@@ -174,8 +278,16 @@ def leftover_processes(name):
                              stdout=subprocess.PIPE, text=True).stdout
         return [line.split(",")[1].strip('"') for line in out.splitlines()
                 if line.lower().startswith(f'"{name}.exe"')]
-    return subprocess.run(["pgrep", "-f", name],
+    pids = subprocess.run(["pgrep", "-f", name],
                           stdout=subprocess.PIPE, text=True).stdout.split()
+    # A process that has ended and that its parent has not waited for yet
+    # (state Z) is not running any more.
+    return [pid for pid in pids
+            if not subprocess.run(["ps", "-o", "stat=", "-p", pid],
+                                  stdout=subprocess.PIPE, text=True)
+            .stdout.strip().startswith("Z")
+            and subprocess.run(["ps", "-p", pid], stdout=subprocess.DEVNULL)
+            .returncode == 0]
 
 
 def git(work, *args):

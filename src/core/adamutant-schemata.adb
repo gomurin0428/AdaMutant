@@ -389,7 +389,7 @@ package body AdaMutant.Schemata is
       end Region_Of;
 
       procedure Put (Text : String; Owner : Natural := 0);
-      --  Appends Text; the lines it writes on belong to mutant Owner.
+      --  Appends Text; the lines it writes on belong to candidate Owner.
 
       procedure Put (Text : String; Owner : Natural := 0) is
       begin
@@ -414,78 +414,134 @@ package body AdaMutant.Schemata is
          return Result;
       end if;
       Find_Regions (Source, S, Anchor, Regions);
-      if Anchor = 0 then
+      if Anchor = 0 or else Regions.Is_Empty then
          return Result;
       end if;
-      for C of Candidates loop
-         if Region_Of (C) /= 0 then
-            Result.Included.Append (C.Id);
+
+      declare
+         --  The region of each candidate; the number of the place that
+         --  each region is (0 when no candidate lies in it); whether a
+         --  mutant of the region is built in.
+         Of_Candidate : array
+           (Candidates.First_Index .. Candidates.Last_Index) of Natural;
+         Number       : array
+           (Regions.First_Index .. Regions.Last_Index) of Natural :=
+             [others => 0];
+         Has_Mutant   : array
+           (Regions.First_Index .. Regions.Last_Index) of Boolean :=
+             [others => False];
+
+         function Selector (R : Positive) return String is
+           (Name & " (" & Image (Number (R)) & ")");
+      begin
+         for K in Of_Candidate'Range loop
+            declare
+               C : constant Candidate := Candidates (K);
+               R : constant Natural := Region_Of (C);
+            begin
+               Of_Candidate (K) := R;
+               if R /= 0 then
+                  if Number (R) = 0 then
+                     Number (R) := C.Id;
+                  end if;
+                  Result.Sites.Append (Site'(Id => C.Id, Number => Number (R)));
+                  if not C.Probe then
+                     Has_Mutant (R) := True;
+                     Result.Included.Append (C.Id);
+                  end if;
+               end if;
+            end;
+         end loop;
+         if Result.Sites.Is_Empty then
+            return Result;
          end if;
-      end loop;
-      if Result.Included.Is_Empty then
-         return Result;
-      end if;
 
-      Put (Style_Off & LF);
-      Put (Source (Pos .. Anchor));
-      --  In a pure unit GNAT warns about the import, and about calls that
-      --  it may leave out.  Leaving out a repeated call is fine: the
-      --  result is the same for the whole run of the program.
-      Put (LF & "pragma Warnings (Off); "
-           & "function " & Name & " return Standard.Integer; "
-           & "pragma Import (C, " & Name & ", """ & Symbol & """); "
-           & "pragma Warnings (On);" & LF);
-      Pos := Anchor + 1;
+         Put (Style_Off & LF);
+         Put (Source (Pos .. Anchor));
+         --  In a pure unit GNAT warns about the import, and about calls
+         --  that it may leave out.  Leaving out a repeated call for one
+         --  place is fine: the result is the same for the whole run of the
+         --  program, and the place has been reported.
+         Put (LF & "pragma Warnings (Off); "
+              & "function " & Name & " (Site : Standard.Integer)"
+              & " return Standard.Integer; "
+              & "pragma Import (C, " & Name & ", """ & Symbol & """); "
+              & "pragma Warnings (On);" & LF);
+         Pos := Anchor + 1;
 
-      for R in Regions.First_Index .. Regions.Last_Index loop
-         declare
-            Reg  : constant Region := Regions (R);
-            Used : Boolean := False;
-            Text : constant String := Source (Reg.First .. Reg.Last);
-         begin
-            for C of Candidates loop
-               Used := Used or else Region_Of (C) = R;
-            end loop;
-            if Used then
-               Put (Source (Pos .. Reg.First - 1));
-               Pos := Reg.Last + 1;
-               case Reg.Kind is
-                  when Statement =>
-                     Put (LF & "case " & Name & " is" & LF);
-                     for C of Candidates loop
-                        if Region_Of (C) = R then
-                           Put ("when " & Image (C.Id) & " =>" & LF, C.Id);
-                           Put (Variant (Reg, C) & LF, C.Id);
-                        end if;
-                     end loop;
-                     Put ("when others =>" & LF & Text & LF
-                          & "end case;" & LF);
+         for R in Regions.First_Index .. Regions.Last_Index loop
+            if Number (R) /= 0 then
+               declare
+                  Reg   : constant Region := Regions (R);
+                  Text  : constant String := Source (Reg.First .. Reg.Last);
+                  --  The lines of a region with no mutant belong to its
+                  --  probe.
+                  Probe : constant Natural :=
+                    (if Has_Mutant (R) then 0 else Number (R));
+               begin
+                  Put (Source (Pos .. Reg.First - 1));
+                  Pos := Reg.Last + 1;
+                  case Reg.Kind is
+                     when Statement =>
+                        Put ([1 => LF]);
+                        Put ("case " & Selector (R) & " is" & LF, Probe);
+                        for K in Of_Candidate'Range loop
+                           if Of_Candidate (K) = R
+                             and then not Candidates (K).Probe
+                           then
+                              declare
+                                 C : constant Candidate := Candidates (K);
+                              begin
+                                 Put ("when " & Image (C.Id) & " =>" & LF,
+                                      C.Id);
+                                 Put (Variant (Reg, C) & LF, C.Id);
+                              end;
+                           end if;
+                        end loop;
+                        Put ("when others =>" & LF & Text & LF
+                             & "end case;" & LF, Probe);
 
-                  when Condition =>
-                     Put ("(case " & Name & " is" & LF);
-                     for C of Candidates loop
-                        if Region_Of (C) = R then
-                           Put ("when " & Image (C.Id) & " => (" & LF, C.Id);
-                           Put (Variant (Reg, C) & LF, C.Id);
-                           Put (")," & LF, C.Id);
-                        end if;
-                     end loop;
-                     Put ("when others => (" & LF & Text & LF & "))");
+                     when Condition =>
+                        Put ("(case " & Selector (R) & " is" & LF, Probe);
+                        for K in Of_Candidate'Range loop
+                           if Of_Candidate (K) = R
+                             and then not Candidates (K).Probe
+                           then
+                              declare
+                                 C : constant Candidate := Candidates (K);
+                              begin
+                                 Put ("when " & Image (C.Id) & " => (" & LF,
+                                      C.Id);
+                                 Put (Variant (Reg, C) & LF, C.Id);
+                                 Put (")," & LF, C.Id);
+                              end;
+                           end if;
+                        end loop;
+                        Put ("when others => (" & LF & Text & LF & "))",
+                             Probe);
 
-                  when Expression =>
-                     Put ("(case " & Name & " is" & LF);
-                     for C of Candidates loop
-                        if Region_Of (C) = R then
-                           Put ("when " & Image (C.Id) & " =>" & LF, C.Id);
-                           Put (Variant (Reg, C) & LF, C.Id);
-                           Put ("," & LF, C.Id);
-                        end if;
-                     end loop;
-                     Put ("when others =>" & LF & Text & LF & ")");
-               end case;
+                     when Expression =>
+                        Put ("(case " & Selector (R) & " is" & LF, Probe);
+                        for K in Of_Candidate'Range loop
+                           if Of_Candidate (K) = R
+                             and then not Candidates (K).Probe
+                           then
+                              declare
+                                 C : constant Candidate := Candidates (K);
+                              begin
+                                 Put ("when " & Image (C.Id) & " =>" & LF,
+                                      C.Id);
+                                 Put (Variant (Reg, C) & LF, C.Id);
+                                 Put ("," & LF, C.Id);
+                              end;
+                           end if;
+                        end loop;
+                        Put ("when others =>" & LF & Text & LF & ")", Probe);
+                  end case;
+               end;
             end if;
-         end;
-      end loop;
+         end loop;
+      end;
       Put (Source (Pos .. Source'Last));
 
       while Natural (Result.Owners.Length) < Line loop
@@ -503,14 +559,19 @@ package body AdaMutant.Schemata is
       & "pragma Warnings (Off);" & LF
       & "package " & Unit_Name & " is" & LF
       & "   pragma SPARK_Mode (Off);" & LF
-      & "   function Active return Standard.Integer;" & LF
+      & "   function Active (Site : Standard.Integer)" & LF
+      & "     return Standard.Integer;" & LF
       & "   pragma Export (C, Active, """ & Symbol & """);" & LF
       & "end " & Unit_Name & ";" & LF);
 
-   --  The number is read on the first call and not when the unit is
+   --  The environment is read on the first call and not when the unit is
    --  elaborated: a mutant can be in code that runs during the elaboration
-   --  of a unit that comes first.  Nothing here needs elaboration.
-   function Support_Body return String is
+   --  of a unit that comes first.  For the same reason nothing here relies
+   --  on its elaboration: should the body be elaborated after the first
+   --  calls and reset the variables, the environment is read once more and
+   --  a place may be reported twice.  The text is Ada 95, so it compiles
+   --  with whatever language version the project sets.
+   function Support_Body (Last_Site : Natural := 0) return String is
      (Style_Off & LF
       & "pragma Warnings (Off);" & LF
       & "with System;" & LF
@@ -520,38 +581,90 @@ package body AdaMutant.Schemata is
       & "   use type System.Address;" & LF
       & "   Loaded : Boolean := False;" & LF
       & "   Value  : Standard.Integer := 0;" & LF
+      & "   Stream : System.Address := System.Null_Address;" & LF
+      & "   Seen   : array (Standard.Integer range 0 .. " & Image (Last_Site)
+      & ") of Boolean :=" & LF
+      & "     (others => False);" & LF
       & "   function Getenv (Name : System.Address) return System.Address;"
       & LF
       & "   pragma Import (C, Getenv, ""getenv"");" & LF
-      & "   function Active return Standard.Integer is" & LF
+      & "   function Fopen (Path, Mode : System.Address) return System.Address;"
+      & LF
+      & "   pragma Import (C, Fopen, ""fopen"");" & LF
+      & "   function Fputs (Text, To : System.Address) return Standard.Integer;"
+      & LF
+      & "   pragma Import (C, Fputs, ""fputs"");" & LF
+      & "   function Fflush (To : System.Address) return Standard.Integer;" & LF
+      & "   pragma Import (C, Fflush, ""fflush"");" & LF
+      & "   procedure Load is" & LF
+      & "      Id_Name   : aliased constant String :=" & LF
+      & "        ""ADAMUTANT_MUTANT_ID"" & ASCII.NUL;" & LF
+      & "      File_Name : aliased constant String :=" & LF
+      & "        ""ADAMUTANT_COVERAGE_FILE"" & ASCII.NUL;" & LF
+      & "      Mode      : aliased constant String := ""a"" & ASCII.NUL;" & LF
+      & "      Where : System.Address := Getenv (Id_Name'Address);" & LF
+      & "      File  : constant System.Address := Getenv (File_Name'Address);"
+      & LF
+      & "      Found : Standard.Integer := 0;" & LF
+      & "   begin" & LF
+      & "      if Where /= System.Null_Address then" & LF
+      & "         loop" & LF
+      & "            declare" & LF
+      & "               Digit : Character;" & LF
+      & "               for Digit'Address use Where;" & LF
+      & "               pragma Import (Ada, Digit);" & LF
+      & "            begin" & LF
+      & "               exit when Digit not in '0' .. '9'" & LF
+      & "                 or else Found > 99_999_999;" & LF
+      & "               Found := Found * 10" & LF
+      & "                 + (Character'Pos (Digit) - Character'Pos ('0'));" & LF
+      & "            end;" & LF
+      & "            Where := System.Storage_Elements.""+"" (Where, 1);" & LF
+      & "         end loop;" & LF
+      & "      end if;" & LF
+      & "      if File /= System.Null_Address then" & LF
+      & "         declare" & LF
+      & "            First : Character;" & LF
+      & "            for First'Address use File;" & LF
+      & "            pragma Import (Ada, First);" & LF
+      & "         begin" & LF
+      & "            if First /= ASCII.NUL then" & LF
+      & "               Stream := Fopen (File, Mode'Address);" & LF
+      & "            end if;" & LF
+      & "         end;" & LF
+      & "      end if;" & LF
+      & "      Value := Found;" & LF
+      & "      Loaded := True;" & LF
+      & "   end Load;" & LF
+      & "   procedure Report (Site : Standard.Integer) is" & LF
+      & "      Text  : aliased String (1 .. 12);" & LF
+      & "      First : Standard.Integer := 11;" & LF
+      & "      Rest  : Standard.Integer := Site;" & LF
+      & "      Code  : Standard.Integer;" & LF
+      & "   begin" & LF
+      & "      Text (11) := ASCII.LF;" & LF
+      & "      Text (12) := ASCII.NUL;" & LF
+      & "      loop" & LF
+      & "         First := First - 1;" & LF
+      & "         Text (First) :=" & LF
+      & "           Character'Val (Character'Pos ('0') + Rest mod 10);" & LF
+      & "         Rest := Rest / 10;" & LF
+      & "         exit when Rest = 0;" & LF
+      & "      end loop;" & LF
+      & "      Code := Fputs (Text (First)'Address, Stream);" & LF
+      & "      Code := Fflush (Stream);" & LF
+      & "   end Report;" & LF
+      & "   function Active (Site : Standard.Integer)" & LF
+      & "     return Standard.Integer is" & LF
       & "   begin" & LF
       & "      if not Loaded then" & LF
-      & "         declare" & LF
-      & "            Name  : aliased constant String :=" & LF
-      & "              ""ADAMUTANT_MUTANT_ID"" & ASCII.NUL;" & LF
-      & "            Where : System.Address := Getenv (Name'Address);" & LF
-      & "            Found : Standard.Integer := 0;" & LF
-      & "         begin" & LF
-      & "            if Where /= System.Null_Address then" & LF
-      & "               loop" & LF
-      & "                  declare" & LF
-      & "                     Digit : Character;" & LF
-      & "                     for Digit'Address use Where;" & LF
-      & "                     pragma Import (Ada, Digit);" & LF
-      & "                  begin" & LF
-      & "                     exit when Digit not in '0' .. '9'" & LF
-      & "                       or else Found > 99_999_999;" & LF
-      & "                     Found := Found * 10" & LF
-      & "                       + (Character'Pos (Digit) - Character'Pos ('0'));"
-      & LF
-      & "                  end;" & LF
-      & "                  Where := System.Storage_Elements.""+"" (Where, 1);"
-      & LF
-      & "               end loop;" & LF
-      & "            end if;" & LF
-      & "            Value := Found;" & LF
-      & "            Loaded := True;" & LF
-      & "         end;" & LF
+      & "         Load;" & LF
+      & "      end if;" & LF
+      & "      if Stream /= System.Null_Address" & LF
+      & "        and then Site in Seen'Range and then not Seen (Site)" & LF
+      & "      then" & LF
+      & "         Seen (Site) := True;" & LF
+      & "         Report (Site);" & LF
       & "      end if;" & LF
       & "      return Value;" & LF
       & "   end Active;" & LF

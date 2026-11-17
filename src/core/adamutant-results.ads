@@ -16,6 +16,9 @@ package AdaMutant.Results is
 
    type Detector is (None, Tests, Proof);
 
+   type Coverage is (Unknown, Covered, Not_Covered);
+   --  Whether the unmodified tests execute the place of a mutant.
+
    type Mutant is record
       Id            : Positive := 1;
       File          : Positive := 1;
@@ -26,6 +29,7 @@ package AdaMutant.Results is
       Status        : Mutant_Status := Pending;
       Status_Reason : Unbounded_String;
       Killed_By     : Detector := None;
+      Reached       : Coverage := Unknown;
       Elapsed       : Duration := 0.0;
    end record;
 
