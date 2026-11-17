@@ -103,8 +103,7 @@ package body AdaMutant.Runner is
                   end if;
                   Found := Find (Source, Options);
                exception
-                  when E : AdaMutant.Lexer.Lexical_Error
-                    | AdaMutant.Mutators.Directive_Error =>
+                  when E : AdaMutant.Lexer.Lexical_Error =>
                      Fail (Path & ": " & Ada.Exceptions.Exception_Message (E));
                end;
                R.Files.Append
@@ -117,7 +116,7 @@ package body AdaMutant.Runner is
                      End_Pos   : constant AdaMutant.Positions.Position :=
                        AdaMutant.Positions.Of_Offset (Source, M.Last + 1);
                      Unchanged : constant Boolean :=
-                       Since /= "" and then not M.Ignored
+                       Since /= ""
                        and then not AdaMutant.Changes.Touches
                          (Changes, Path, Start_Pos.Line, End_Pos.Line);
                   begin
@@ -130,13 +129,10 @@ package body AdaMutant.Runner is
                            End_Pos       => End_Pos,
                            Original      => To_Unbounded_String
                              (Source (M.First .. M.Last)),
-                           Status        => (if M.Ignored or else Unchanged
+                           Status        => (if Unchanged
                                              then Ignored else Pending),
                            Status_Reason =>
-                             (if M.Ignored then
-                                To_Unbounded_String
-                                  ("disabled by an adamutant comment")
-                              elsif Unchanged then
+                             (if Unchanged then
                                 To_Unbounded_String
                                   ("unchanged since " & Since)
                               else Null_Unbounded_String),

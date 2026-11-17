@@ -187,18 +187,7 @@ break = 0
 
 `with`/`use` 節、`pragma`、表現節（`for X'Size use ...`）、`digits`/`delta` は変異させません。サブプログラムの仮引数の既定値も、宣言と本体で一致していないとコンパイルできない（完全準拠）ため変異させません（`is null`、`is abstract`、式関数、ジェネリック仮サブプログラムの既定値は変異させます）。アスペクト（`Pre`, `Post`, `Type_Invariant` など）とゴーストコード（`Ghost` アスペクト付きで宣言されたサブプログラム・オブジェクト・型の宣言と本体、およびそれらを呼び出す・代入する文）は `mutate_contracts = true` のときだけ変異させます。ゴーストの名前は変異対象の `.adb` と、同じ名前の `.ads` から集めます。
 
-### コメントで無効化
-
-```ada
---  adamutant:disable-next-line EqualityOperator: 等価ミュータント
-if A + B > Max then
-
---  adamutant:disable StatementDeletion, StringLiteral
-Log ("...");
---  adamutant:enable
-```
-
-名前を省略するか `all` ですべてのミュータント。無効化されたものは `Ignored` としてレポートに残り、スコアには含まれません。
+ミュータントを無効にするコメントはありません。テストで観測できないミュータントは証明に任せ（[想定している使い方](#想定している使い方)）、等価ミュータントは `equivalence_build` で見分けます。
 
 ## 状態とスコア
 
@@ -210,7 +199,7 @@ Log ("...");
 | NoCoverage | 今の版では使わない。どのテストも実行しないミュータントも証明にかける（未検出扱い） |
 | CompileError | ミュータントがビルドできなかった（スコア対象外） |
 | RuntimeError | コマンドを起動できなかったなど（スコア対象外） |
-| Ignored | コメントで無効化、または等価ミュータントと判定（スコア対象外） |
+| Ignored | 等価ミュータントと判定した、または `--since` のリビジョンから変わっていない行にある（スコア対象外） |
 
 `スコア = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
 

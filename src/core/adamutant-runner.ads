@@ -25,11 +25,10 @@ package AdaMutant.Runner is
       Unchanged_Files : Boolean := False)
       return AdaMutant.Results.Report;
    --  Mutants of the files selected by the configuration (and by Only, a
-   --  list of globs, when it is not empty).  Mutants covered by adamutant
-   --  directives get the Ignored status, the others Pending.  A Since other
-   --  than "" is a git revision: only files changed since its merge base
-   --  with HEAD are scanned, and their mutants on unchanged lines get the
-   --  Ignored status.  With Unchanged_Files the files that have not
+   --  list of globs, when it is not empty), with the Pending status except
+   --  as follows.  A Since other than "" is a git revision: only files
+   --  changed since its merge base with HEAD are scanned, and their
+   --  mutants on unchanged lines get the Ignored status.  With Unchanged_Files the files that have not
    --  changed are scanned too, and all their mutants get the Ignored
    --  status: the report is then complete, for the results of an earlier
    --  run to be filled in.  Raises Run_Error when git fails.
