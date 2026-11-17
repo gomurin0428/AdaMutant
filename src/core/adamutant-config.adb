@@ -227,6 +227,11 @@ package body AdaMutant.Config is
                Fail ("the name of a test consists of letters, digits, '_',"
                      & " '-' and '.'");
             end if;
+            --  The reports give this name to the proof.
+            if To_Lower (Key) = "proof" then
+               Fail ("'" & Key & "' cannot be the name of a test: the"
+                     & " reports use this name for the proof");
+            end if;
             --  A setting written after [tests] would be a test.
             if Key in "mutate" | "exclude" | "build" | "test" | "prove"
                  | "equivalence_build" | "concurrency" | "timeout_factor"

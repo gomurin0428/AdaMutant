@@ -4,7 +4,6 @@ with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Hash;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
-with AdaMutant.Config;
 with AdaMutant.Json;
 with AdaMutant.Mutators;
 with AdaMutant.Reports;
@@ -183,15 +182,20 @@ package body AdaMutant.Baselines is
      (S'Length >= Prefix'Length
       and then S (S'First .. S'First + Prefix'Length - 1) = Prefix);
 
-   procedure Take
-     (M        : in out Mutant;
-      From     : AdaMutant.Json.Value;
-      Settings : AdaMutant.Config.Configuration)
-   is
+   function As_In_Report (S : String) return String is
+      --  S as a report holds it and a reader of the report gets it back:
+      --  bytes that are not UTF-8 are read as Latin-1.
+      V : AdaMutant.Json.Value :=
+        AdaMutant.Json.Parse (AdaMutant.Reports.Json_String (S));
+   begin
+      return Result : constant String := AdaMutant.Json.Text_Of (V) do
+         AdaMutant.Json.Free (V);
+      end return;
+   end As_In_Report;
+
+   procedure Take (M : in out Mutant; From : AdaMutant.Json.Value) is
       --  The result that the report has in From becomes that of M.
 
-      function Is_Test (Name : String) return Boolean is
-        (for some T of Settings.Tests => To_String (T.Name) = Name);
       use AdaMutant.Json;
       Status  : constant String := Text_Field (From, "status");
       Reason  : constant String := Text_Field (From, "statusReason");
@@ -238,11 +242,9 @@ package body AdaMutant.Baselines is
                declare
                   Who : constant String := Text_Of (Element (Killers, K));
                begin
-                  --  A test may have the name "proof".
-                  if Is_Test (Who) then
-                     M.Killed_By := Tests;
-                     M.Killers.Append (Who);
-                  elsif Who = "proof" then
+                  --  No test has the name "proof", and no name of a
+                  --  test has a colon.
+                  if Who = "proof" then
                      M.Killed_By := Proof;
                   elsif Starts_With (Who, "proof: ") then
                      M.Killed_By := Proof;
@@ -278,9 +280,8 @@ package body AdaMutant.Baselines is
             --  The source as the report would hold it, so that it
             --  compares with the source in the report whatever its
             --  encoding.
-            Now  : constant String := Text_Of
-              (Parse (AdaMutant.Reports.Json_String
-                        (To_String (R.Files (F).Source))));
+            Now  : constant String :=
+              As_In_Report (To_String (R.Files (F).Source));
             Map  : constant Line_Numbers := Line_Map
               (Lines (Old_Source), Lines (Now));
             Olds : Value_Maps.Map;
@@ -332,7 +333,8 @@ package body AdaMutant.Baselines is
                            First + (M.End_Pos.Line - M.Start_Pos.Line),
                            M.End_Pos.Column,
                            AdaMutant.Mutators.Name (M.Mutation.Kind),
-                           To_String (M.Mutation.Replacement));
+                           As_In_Report
+                             (To_String (M.Mutation.Replacement)));
                      begin
                         if Olds.Contains (Id) then
                            declare
@@ -360,7 +362,7 @@ package body AdaMutant.Baselines is
                                               (Old, "statusReason"),
                                             "equivalent mutant"))))
                               then
-                                 Take (M, Old, R.Settings);
+                                 Take (M, Old);
                                  R.Mutants.Replace_Element (K, M);
                                  Reused := Reused + 1;
                               end if;

@@ -166,7 +166,7 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 
 ### Results per test
 
-A `[tests]` table instead of `test` gives several test commands, each with a name. The key is the name and the value is the command. A name consists of letters, digits, `_`, `-` and `.`. It cannot be the name of a setting (`build`, `test`, `prove` and so on), and two names cannot differ only in case. Write `[tests]` after the settings. `test` and `[tests]` cannot be used together.
+A `[tests]` table instead of `test` gives several test commands, each with a name. The key is the name and the value is the command. A name consists of letters, digits, `_`, `-` and `.`. It cannot be the name of a setting (`build`, `test`, `prove` and so on) or `proof`, which the reports use for the proof, and two names cannot differ only in case. Write `[tests]` after the settings. `test` and `[tests]` cannot be used together.
 
 ```toml
 [tests]

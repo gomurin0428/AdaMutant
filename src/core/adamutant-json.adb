@@ -164,6 +164,17 @@ package body AdaMutant.Json is
          return R;
       end String_Text;
 
+      procedure Digits_Here is
+         --  One digit or more.
+      begin
+         if Cur not in '0' .. '9' then
+            Fail ("a digit is expected");
+         end if;
+         while Cur in '0' .. '9' loop
+            P := P + 1;
+         end loop;
+      end Digits_Here;
+
       function Any (Depth : Natural) return Value is
          Result : constant Value := new Node;
       begin
@@ -222,11 +233,29 @@ package body AdaMutant.Json is
                declare
                   Start : constant Positive := P;
                begin
-                  while not At_End
-                    and then Cur in '-' | '+' | '.' | 'e' | 'E' | '0' .. '9'
-                  loop
+                  if Cur = '-' then
                      P := P + 1;
-                  end loop;
+                  end if;
+                  --  No digit follows a leading zero.
+                  if Cur = '0' then
+                     P := P + 1;
+                  else
+                     Digits_Here;
+                  end if;
+                  if Cur = '.' then
+                     P := P + 1;
+                     Digits_Here;
+                  end if;
+                  if Cur in 'e' | 'E' then
+                     P := P + 1;
+                     if Cur in '+' | '-' then
+                        P := P + 1;
+                     end if;
+                     Digits_Here;
+                  end if;
+                  if Cur in '0' .. '9' | '.' | 'e' | 'E' | '+' | '-' then
+                     Fail ("not a number");
+                  end if;
                   Result.What := Number;
                   Result.Image :=
                     To_Unbounded_String (Source (Start .. P - 1));

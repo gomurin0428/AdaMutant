@@ -718,6 +718,8 @@ procedure Unit_Tests is
       end;
       Rejects ("build = ""b""" & LF & "[tests]" & LF,
                "config: empty tests table and no prove");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "Proof = ""x""" & LF,
+               "config: a test with the name of the proof");
       Check (Length (C.Equivalence_Build) = 0
              and then To_String
                (Parse
@@ -815,6 +817,25 @@ procedure Unit_Tests is
       Rejects ("""abc", "json: unterminated string");
       Rejects ("{} x", "json: text after the value");
       Rejects ("", "json: empty text");
+      Rejects ("{""x"":-}", "json: a sign without digits");
+      Rejects ("1e", "json: an exponent without digits");
+      Rejects ("[1e+]", "json: an exponent with a sign only");
+      Rejects ("01", "json: a digit after a leading zero");
+      Rejects ("1..2", "json: two points");
+      Rejects ("1.", "json: a point without digits");
+      Rejects ("[.5]", "json: a point without a digit before");
+      Rejects ("[+1]", "json: a plus sign");
+      Rejects ("[1-2]", "json: a sign inside");
+      declare
+         N : Value := Parse ("[0, -0, 10, 1.5, 0.25e+1, 2E-3, 1e5]");
+      begin
+         Check (Length (N) = 7 and then Integer_Of (Element (N, 1), 9) = 0
+                and then Integer_Of (Element (N, 3), 9) = 10
+                and then Kind_Of (Element (N, 7)) = Number,
+                "json: the forms of a number");
+         Free (N);
+         Check (N = No_Value, "json: free");
+      end;
    end Test_Json_Reader;
 
    procedure Test_Baselines is
@@ -1020,7 +1041,7 @@ procedure Unit_Tests is
 
       --  A mutant that spans lines is the same only when all its lines
       --  are unchanged and still together; odd values in a report do no
-      --  harm; a test may have the name "proof".
+      --  harm; "proof" is the proof, never a test.
       declare
          Before : constant String :=
            "begin" & LF & "   Call (1," & LF & "         2);" & LF & "end;" & LF;
@@ -1036,10 +1057,6 @@ procedure Unit_Tests is
          function One (Source : String; Line : Positive) return Report is
             R : Report;
          begin
-            R.Settings.Tests.Append
-              (AdaMutant.Config.Test_Command'
-                 (Name    => To_Unbounded_String ("proof"),
-                  Command => To_Unbounded_String ("p")));
             R.Files.Append
               (Source_File'(Path   => To_Unbounded_String ("src/p.adb"),
                             Source => To_Unbounded_String (Source)));
@@ -1062,10 +1079,16 @@ procedure Unit_Tests is
                       & """testsCompleted"":-3"), Reused);
          Check (Reused = 1 and then R.Mutants (1).Status = Killed
                 and then R.Mutants (1).Killed_By = Tests
-                and then Natural (R.Mutants (1).Killers.Length) = 2
+                and then Natural (R.Mutants (1).Killers.Length) = 1
+                and then R.Mutants (1).Killers (1) = "unit"
                 and then R.Mutants (1).Tests_Run = 0,
                 "baseline: a mutant of two lines, moved down",
                 Reused'Image & Statuses (R));
+         R := One (Before, 2);
+         Apply (R, Report_With (Before, ",""killedBy"":[""proof""]"), Reused);
+         Check (Reused = 1 and then R.Mutants (1).Killed_By = Proof
+                and then R.Mutants (1).Killers.Is_Empty,
+                "baseline: ""proof"" alone is the proof");
          R := One ("begin" & LF & "   Call (1," & LF & "         3);" & LF
                    & "end;" & LF, 2);
          Apply (R, Report_With (Before, ""), Reused);
@@ -1074,6 +1097,40 @@ procedure Unit_Tests is
                    & "         2);" & LF & "end;" & LF, 2);
          Apply (R, Report_With (Before, ""), Reused);
          Check (Reused = 0, "baseline: a line added inside it");
+      end;
+      --  A replacement with a byte that is not UTF-8: the report holds
+      --  it as Latin-1 text, and it is still found.
+      declare
+         E_Acute : constant String := "" & Character'Val (16#E9#);
+         Source  : constant String :=
+           "X := S = """ & E_Acute & """ and then A and then B;" & LF;
+         Changed : constant String :=
+           "S = """ & E_Acute & """ or else A";
+         Latin   : Report;
+      begin
+         Latin.Files.Append
+           (Source_File'(Path   => To_Unbounded_String ("src/p.adb"),
+                         Source => To_Unbounded_String (Source)));
+         Latin.Mutants.Append
+           (Mutant'
+              (Id        => 1,
+               File      => 1,
+               Mutation  => (Kind        => Logical_Operator,
+                             Replacement => To_Unbounded_String (Changed),
+                             others      => <>),
+               Start_Pos => (1, 6),
+               End_Pos   => (1, 23),
+               others    => <>));
+         Apply (Latin,
+                "{""files"":{""src/p.adb"":{""source"":"
+                & AdaMutant.Reports.Json_String (Source) & ",""mutants"":["
+                & "{""mutatorName"":""LogicalOperator"",""replacement"":"
+                & AdaMutant.Reports.Json_String (Changed)
+                & ",""location"":{""start"":{""line"":1,""column"":6},"
+                & """end"":{""line"":1,""column"":23}},""status"":""Killed""}"
+                & "]}}}", Reused);
+         Check (Reused = 1 and then Latin.Mutants (1).Status = Killed,
+                "baseline: a replacement in Latin-1 is found", Reused'Image);
       end;
       declare
          Slow : Report := Report_Of (Unchanged => False);
