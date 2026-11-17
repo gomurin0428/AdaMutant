@@ -441,7 +441,7 @@ procedure Unit_Tests is
          Check (Check_Kind
                   ("p.adb:1:2: high: ""G"" must be listed in the Global"
                    & " aspect of ""Use_Global"" (SPARK RM 6.1.4(15))")
-                = "must be listed in the Global aspect of",
+                = "Global aspect",
                 "check kind: Global aspect",
                 Check_Kind
                   ("p.adb:1:2: high: ""G"" must be listed in the Global"
@@ -456,7 +456,10 @@ procedure Unit_Tests is
          Check (Check_Kind
                   ("p.adb:1:2: high: formal parameter ""X"" and global ""G"""
                    & " are aliased (SPARK RM 6.4.2)")
-                = "formal parameter and global are aliased",
+                = "aliasing"
+                and then Check_Kind
+                  ("p.adb:1:2: medium: formal parameters ""X"" and ""Y"" might"
+                   & " be aliased (SPARK RM 6.4.2)") = "aliasing",
                 "check kind: aliasing",
                 Check_Kind
                   ("p.adb:1:2: high: formal parameter ""X"" and global ""G"""
@@ -464,7 +467,11 @@ procedure Unit_Tests is
          Check (Check_Kind
                   ("p.adb:1:2: medium: aspect Always_Terminates on ""Loops"""
                    & " could be incorrect, loop might be nonterminating")
-                = "aspect Always_Terminates on could be incorrect",
+                = "termination"
+                and then Check_Kind
+                  ("p.adb:1:2: medium: all paths in ""Asserts"" raise"
+                   & " exceptions or do not terminate normally")
+                  = "termination",
                 "check kind: termination");
          Check (Check_Kind ("p.adb:1:2: medium: , x") = "unknown"
                 and then Check_Kind ("p.adb:1:2: medium:") = "unknown"

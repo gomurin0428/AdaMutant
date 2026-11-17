@@ -737,7 +737,9 @@ def check_proof_log():
         (work / "fake_prove.py").write_text(
             "import os, sys, time\n"
             "n = os.environ.get('ADAMUTANT_MUTANT_ID', '0')\n"
-            "print('counters.adb:1:1: low: overflow check might fail')\n"
+            "# The unmodified project has this message too; a mutant moves it.\n"
+            "print('counters.adb:%s:1: low: overflow check might fail'\n"
+            "      % (1 if n == '0' else 2))\n"
             "if n == '1':\n"
             "    sys.exit(1)\n"
             "if n == '2':\n"

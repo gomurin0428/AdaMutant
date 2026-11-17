@@ -251,6 +251,19 @@ package body AdaMutant.Runner is
             --  '"X" might not be initialized', '"X" is not initialized in
             --  "P"', '"B" constituent of "S" is not initialized'.
             return "initialization";
+         elsif Index (Kind, "aliased") > 0 then
+            --  'formal parameters "X" and "Y" might be aliased', 'formal
+            --  parameter "X" and global "G" are aliased'.
+            return "aliasing";
+         elsif Index (Kind, "Always_Terminates") > 0
+           or else Index (Kind, "terminat") > 0
+         then
+            --  'aspect Always_Terminates on "P" could be incorrect', 'all
+            --  paths in "P" raise exceptions or do not terminate normally'.
+            return "termination";
+         elsif Index (Kind, "Global aspect") > 0 then
+            --  '"G" must be listed in the Global aspect of "P"'.
+            return "Global aspect";
          elsif Might > 0 then
             return Text (Text'First .. Text'First + Might - 2);
          else
@@ -381,8 +394,9 @@ package body AdaMutant.Runner is
       Has_Prove : constant Boolean := Length (S.Prove) > 0;
 
       --  The messages of the proof of the unmodified project that would
-      --  count as failures.  The proof passes all the same when the
-      --  command does not treat them as errors.
+      --  count as failures, without their lines and columns.  The proof
+      --  passes all the same when the command does not treat them as
+      --  errors.
       Baseline_Failures : String_Vectors.Vector;
 
       type Mutant_Array is array (Positive range <>) of Mutant;
@@ -555,6 +569,40 @@ package body AdaMutant.Runner is
          delay until Last - (Seconds (Last) - Whole) + 2.0;
       end Wait_For_New_Stamp;
 
+      protected Output is
+         entry Seize;
+         procedure Release;
+      private
+         Busy : Boolean := False;
+      end Output;
+
+      protected body Output is
+         entry Seize when not Busy is
+         begin
+            Busy := True;
+         end Seize;
+
+         procedure Release is
+         begin
+            Busy := False;
+         end Release;
+      end Output;
+
+      function Without_Place (Message : String) return String is
+         --  A message of Proof_Failures without its line and column: the
+         --  mutant may have moved what follows it in the file.
+         First : Positive;
+         Sev   : constant String := Severity_Of (Message, First);
+      begin
+         for K in Message'Range loop
+            if Message (K) = ':' then
+               return Message (Message'First .. K) & " " & Sev & ": "
+                 & Message (First .. Message'Last);
+            end if;
+         end loop;
+         return Message;
+      end Without_Place;
+
       procedure Test_Mutant
         (Slot : Positive; M : in out Mutant; Built, Skip_Tests : Boolean)
       is
@@ -638,14 +686,24 @@ package body AdaMutant.Runner is
                   begin
                      declare
                         Failures : String_Vectors.Vector;
+                        Known    : String_Vectors.Vector := Baseline_Failures;
                      begin
                         --  A message that the unmodified project has as
-                        --  well is not what stops the mutant.
+                        --  well is not what stops the mutant: each of
+                        --  those accounts for one message of the mutant
+                        --  with the same text in the same file.
                         for F of Proof_Failures (Read (Log_Base & "-prove.log"))
                         loop
-                           if not Baseline_Failures.Contains (F) then
-                              Failures.Append (F);
-                           end if;
+                           declare
+                              Found : constant Natural :=
+                                Known.Find_Index (Without_Place (F));
+                           begin
+                              if Found = 0 then
+                                 Failures.Append (F);
+                              else
+                                 Known.Delete (Found);
+                              end if;
+                           end;
                         end loop;
                         for F of Failures loop
                            if not M.Failed_Checks.Contains (Check_Kind (F))
@@ -664,8 +722,22 @@ package body AdaMutant.Runner is
                         end if;
                      end;
                   exception
-                     when others =>
+                     when E : others =>
                         M.Failed_Checks.Clear;
+                        if Warn /= null then
+                           Output.Seize;
+                           begin
+                              Warn ("cannot read the proof log of mutant "
+                                    & Image (M.Id) & " ("
+                                    & Ada.Exceptions.Exception_Message (E)
+                                    & "); the failed checks are not reported");
+                           exception
+                              when others =>
+                                 Output.Release;
+                                 raise;
+                           end;
+                           Output.Release;
+                        end if;
                   end;
                end if;
             end;
@@ -712,25 +784,6 @@ package body AdaMutant.Runner is
          end if;
          M.Elapsed := Clock - T0;
       end Test_Combined;
-
-      protected Output is
-         entry Seize;
-         procedure Release;
-      private
-         Busy : Boolean := False;
-      end Output;
-
-      protected body Output is
-         entry Seize when not Busy is
-         begin
-            Busy := True;
-         end Seize;
-
-         procedure Release is
-         begin
-            Busy := False;
-         end Release;
-      end Output;
 
       task type Worker (Slot : Positive; Combined_Build : Boolean)
         with Storage_Size => 64 * 1024 * 1024;
@@ -1601,8 +1654,10 @@ package body AdaMutant.Runner is
             Prove_Ended := [others => Clock];
             Prove_TO :=
               Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
-            Baseline_Failures :=
-              Proof_Failures (Read (Join (Logs, "baseline-prove.log")));
+            for F of Proof_Failures (Read (Join (Logs, "baseline-prove.log")))
+            loop
+               Baseline_Failures.Append (Without_Place (F));
+            end loop;
          end if;
       end;
 
