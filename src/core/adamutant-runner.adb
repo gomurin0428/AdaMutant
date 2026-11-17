@@ -3,6 +3,7 @@ with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Exceptions;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 with AdaMutant.Changes;
@@ -588,18 +589,16 @@ package body AdaMutant.Runner is
       Prove_Ended : array (1 .. Positive'Max (1, S.Concurrency)) of Time :=
         [others => Started];
 
-      --  The build command makes libraries, and when the last build of
-      --  each sandbox ended.  gprbuild takes a library to be up to date
-      --  when its time stamp is not older than those of its objects, and
-      --  time stamps have whole-second resolution: an object compiled in
-      --  the second in which the library was made does not get into it,
-      --  and the tests then run the library of the build before.  So,
-      --  where there are libraries, a build starts in a later second than
-      --  the one in which the build before it ended (see
-      --  Wait_For_New_Stamp).
-      Has_Libraries : Boolean := False;
-      Build_Ended   : array (1 .. Positive'Max (1, S.Concurrency)) of Time :=
-        [others => Started];
+      --  The libraries that a sandbox holds after the first build, as
+      --  relative paths.  gprbuild takes a library to be up to date when
+      --  its time stamp is not older than those of its objects, and time
+      --  stamps have whole-second resolution: an object compiled in the
+      --  second in which the library was made does not get into it, and
+      --  the tests then run the library of the build before.  So a build
+      --  starts two seconds after the newest of the libraries was written
+      --  (see Wait_For_Libraries).  A library that no build writes again
+      --  costs no wait.
+      Libraries : String_Vectors.Vector;
 
       --  GNATprove skips its proof phase when the files it regenerates get
       --  the same time stamp as the previous run's results.  Time stamps
@@ -611,6 +610,11 @@ package body AdaMutant.Runner is
       begin
          delay until Last - (Seconds (Last) - Whole) + 2.0;
       end Wait_For_New_Stamp;
+
+      procedure Wait_For_Libraries (Slot : Positive) is
+      begin
+         AdaMutant.Files.Wait_Past_Stamps (Slot_Dir (Slot), Libraries);
+      end Wait_For_Libraries;
 
       protected Output is
          entry Seize;
@@ -724,14 +728,11 @@ package body AdaMutant.Runner is
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          if not Built then
-            if Has_Libraries then
-               Wait_For_New_Stamp (Build_Ended (Slot));
-            end if;
+            Wait_For_Libraries (Slot);
             declare
                B : constant Run_Result :=
                  Step ("build", To_String (S.Build), Build_TO);
             begin
-               Build_Ended (Slot) := Clock;
                if B.Timed_Out then
                   M.Status := Compile_Error;
                   M.Status_Reason := To_Unbounded_String ("build timed out");
@@ -1259,15 +1260,11 @@ package body AdaMutant.Runner is
             end loop;
             exit when not Any;
             Write_Sources (1, Restore => False);
-            if Has_Libraries then
-               Wait_For_New_Stamp (Build_Ended (1));
-            end if;
+            Wait_For_Libraries (1);
             declare
                B : constant Run_Result :=
                  Run (To_String (S.Build), Slot_Dir (1), Log, 0, Build_TO);
             begin
-               --  The other sandboxes become copies of this one.
-               Build_Ended := [others => Clock];
                exit when not B.Timed_Out and then B.Exit_Code = 0;
                if B.Timed_Out then
                   raise Run_Error with
@@ -1775,7 +1772,6 @@ package body AdaMutant.Runner is
       begin
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
       end;
-      Build_Ended := [others => Clock];
       for Path of Find_Files (Slot_Dir (1), String_Vectors.Empty_Vector) loop
          declare
             Name : constant String := Base_Name (Path);
@@ -1785,10 +1781,14 @@ package body AdaMutant.Runner is
                and then Name (Name'Last - Extension'Length + 1 .. Name'Last)
                         = Extension);
          begin
-            Has_Libraries := Has_Libraries
-              or else Ends_With (".a") or else Ends_With (".lib")
+            --  A shared library may have a version after ".so".
+            if Ends_With (".a") or else Ends_With (".lib")
               or else Ends_With (".so") or else Ends_With (".dll")
-              or else Ends_With (".dylib");
+              or else Ends_With (".dylib")
+              or else Ada.Strings.Fixed.Index (Name, ".so.") > 0
+            then
+               Libraries.Append (Path);
+            end if;
          end;
       end loop;
 

@@ -946,13 +946,17 @@ def check_library():
                 "end Vendor;\n",
             "vendor/src/vend.ads":
                 "package Vend is\n"
+                "   function Padded (A : Integer) return Integer;\n"
                 "   function Bigger (A, B : Integer) return Integer;\n"
                 "end Vend;\n",
             "vendor/src/vend.adb":
                 "package body Vend is\n"
+                "   Slack  : constant := 0;\n"
+                "   Margin : constant := 0;\n"
+                "   function Padded (A : Integer) return Integer is (A + Slack);\n"
                 "   function Bigger (A, B : Integer) return Integer is\n"
                 "   begin\n"
-                "      if A > B then\n"
+                "      if A > B + Margin then\n"
                 "         return A;\n"
                 "      else\n"
                 "         return B;\n"
@@ -964,7 +968,9 @@ def check_library():
                 "with Vend;\n"
                 "procedure Test_Main is\n"
                 "begin\n"
-                "   if Vend.Bigger (1, 7) /= 7 or else Vend.Bigger (9, 4) /= 9 then\n"
+                "   if Vend.Bigger (1, 7) /= 7 or else Vend.Bigger (9, 4) /= 9\n"
+                "     or else Vend.Bigger (5, 4) /= 5 or else Vend.Padded (3) < 3\n"
+                "   then\n"
                 "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
                 "   end if;\n"
                 "end Test_Main;\n",
@@ -978,15 +984,27 @@ def check_library():
         for rel, text in files.items():
             (work / rel).parent.mkdir(parents=True, exist_ok=True)
             (work / rel).write_text(text)
-        expected = {"vendor/src/vend.adb:4:10 ConditionalExpression True": "Killed",
-                    "vendor/src/vend.adb:4:10 ConditionalExpression False": "Killed",
-                    "vendor/src/vend.adb:4:12 EqualityOperator >=": "Survived",
-                    "vendor/src/vend.adb:4:12 EqualityOperator <=": "Killed"}
+        # The two named numbers are static, so their mutants are built one
+        # by one, the first right before the second.
+        expected = {"vendor/src/vend.adb:2:25 NumericLiteral 1": "Survived",
+                    "vendor/src/vend.adb:3:25 NumericLiteral 1": "Killed",
+                    "vendor/src/vend.adb:4:55 ArithmeticOperator -": "Survived",
+                    "vendor/src/vend.adb:7:10 ConditionalExpression True": "Killed",
+                    "vendor/src/vend.adb:7:10 ConditionalExpression False": "Killed",
+                    "vendor/src/vend.adb:7:12 EqualityOperator >=": "Survived",
+                    "vendor/src/vend.adb:7:12 EqualityOperator <=": "Killed",
+                    "vendor/src/vend.adb:7:16 ArithmeticOperator -": "Survived"}
         errors = []
         # The objects of a mutant are compiled within a second of the build
         # before.  A library that is then not made again would leave its
-        # mutants without effect, in about every second run.
+        # mutants without effect: those of the build of all the mutants in
+        # about every second run, and with one sandbox the second named
+        # number would be tested with the library of the first.
         for attempt in range(1, 5):
+            if attempt == 3:
+                config = work / "adamutant.toml"
+                config.write_text(config.read_text().replace(
+                    "concurrency = 2", "concurrency = 1"))
             proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             report = work / ".adamutant" / "reports" / "mutation-report.json"

@@ -80,6 +80,35 @@ package body AdaMutant.Files is
       end if;
    end Write_Changed;
 
+   procedure Wait_Past_Stamps (Dir : String; Relative : String_Vectors.Vector)
+   is
+      use GNAT.OS_Lib;
+
+      function Now return Long_Long_Integer is
+        (Long_Long_Integer (To_C (Current_Time)));
+
+      Newest : Long_Long_Integer := Long_Long_Integer'First;
+      Start  : constant Long_Long_Integer := Now;
+   begin
+      for Name of Relative loop
+         declare
+            Stamp : constant OS_Time := File_Time_Stamp (Join (Dir, Name));
+         begin
+            if Stamp /= Invalid_Time then
+               Newest := Long_Long_Integer'Max
+                 (Newest, Long_Long_Integer (To_C (Stamp)));
+            end if;
+         end;
+      end loop;
+      if Newest = Long_Long_Integer'First then
+         return;
+      end if;
+      Newest := Long_Long_Integer'Min (Newest, Start);
+      while Now < Newest + 2 loop
+         delay 0.05;
+      end loop;
+   end Wait_Past_Stamps;
+
    function Glob_Match (Pattern, Path : String) return Boolean is
       function M (P : Positive; S : Positive) return Boolean is
       begin

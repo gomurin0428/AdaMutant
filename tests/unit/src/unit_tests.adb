@@ -509,6 +509,40 @@ procedure Unit_Tests is
          Check (File_Time_Stamp (Path) = To_Ada (To_C (Stamp) + 2),
                 "rewrite moves the time stamp two seconds");
          Check (Read (Path) = "mutant", "rewrite content");
+         --  A wait for the time stamp of a file: none for an old file or
+         --  a file that does not exist, two seconds for a new one, and a
+         --  time stamp in the future counts as now.
+         declare
+            Names : String_Vectors.Vector;
+            Start : OS_Time;
+         begin
+            Names.Append (Path);
+            Names.Append ("none.txt");
+            Write (Path, "x");
+            Set_File_Last_Modify_Time_Stamp
+              (Path, To_Ada (To_C (Current_Time) - 100));
+            Start := Current_Time;
+            Wait_Past_Stamps (".", Names);
+            Check (To_C (Current_Time) - To_C (Start) <= 1,
+                   "no wait for an old file");
+            Write (Path, "y");
+            Start := File_Time_Stamp (Path);
+            Wait_Past_Stamps (".", Names);
+            Check (To_C (Current_Time) - To_C (Start) in 2 .. 3,
+                   "a wait of two seconds for a new file");
+            Set_File_Last_Modify_Time_Stamp
+              (Path, To_Ada (To_C (Current_Time) + 1000));
+            Start := Current_Time;
+            Wait_Past_Stamps (".", Names);
+            Check (To_C (Current_Time) - To_C (Start) in 2 .. 3,
+                   "a time stamp in the future counts as now");
+            Names.Clear;
+            Names.Append ("none.txt");
+            Start := Current_Time;
+            Wait_Past_Stamps (".", Names);
+            Check (To_C (Current_Time) - To_C (Start) <= 1,
+                   "no wait for a file that does not exist");
+         end;
          Write (Path, "abc");
          Check (Digest (Path)
                 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f"
