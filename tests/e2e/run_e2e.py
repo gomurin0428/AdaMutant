@@ -103,6 +103,60 @@ EXAMPLES = {
         "min_uncovered": 5, "max_single_builds": 3,
         "output": "Lines that no test executes:",
     },
+    # A pure package built with optimization: the statement that is only
+    # watched (it has no mutant but its deletion) is executed by the test,
+    # so its deletion is run, and detected.
+    "coverage_pure": {
+        "exit": 0, "example": "calculator",
+        "expect": {"src/pure_pkg.adb:5:7 StatementDeletion null;": "Killed"},
+        "extra": {
+            "calculator_tests.gpr":
+                "project Calculator_Tests is\n"
+                "   for Source_Dirs use (\"src\", \"tests\");\n"
+                "   for Object_Dir use \"obj\";\n"
+                "   for Exec_Dir use \"bin\";\n"
+                "   for Main use (\"test_calculator.adb\");\n"
+                "   package Compiler is\n"
+                "      for Default_Switches (\"Ada\") use (\"-gnat2022\", \"-gnata\", \"-O2\", \"-gnatn\");\n"
+                "   end Compiler;\n"
+                "end Calculator_Tests;\n",
+            "src/pure_pkg.ads":
+                "package Pure_Pkg with Pure is\n"
+                "   procedure Copy (From : Integer; To : in out Integer);\n"
+                "   function Next (X : Integer) return Integer;\n"
+                "end Pure_Pkg;\n",
+            "src/pure_pkg.adb":
+                "package body Pure_Pkg is\n"
+                "   procedure Copy (From : Integer; To : in out Integer) is\n"
+                "   begin\n"
+                "      --  Only its deletion can be mutated.\n"
+                "      To := From;\n"
+                "   end Copy;\n"
+                "   function Next (X : Integer) return Integer is\n"
+                "   begin\n"
+                "      return X + 1;\n"
+                "   end Next;\n"
+                "end Pure_Pkg;\n",
+            "tests/test_calculator.adb":
+                "with Ada.Command_Line;\n"
+                "with Calculator; use Calculator;\n"
+                "with Pure_Pkg;\n"
+                "procedure Test_Calculator is\n"
+                "   Copied : Integer := 0;\n"
+                "begin\n"
+                "   Pure_Pkg.Copy (7, Copied);\n"
+                "   if Add (2, 3) /= 5 or else Max (1, 7) /= 7\n"
+                "     or else Max (9, 4) /= 9 or else not Is_Even (4)\n"
+                "     or else Clamp (5, 0, 10) /= 5 or else Clamp (-5, 0, 10) /= 0\n"
+                "     or else Clamp (50, 0, 10) /= 10 or else Grade (95) /= \"A\"\n"
+                "     or else Grade (70) /= \"B\" or else Grade (10) /= \"C\"\n"
+                "     or else Sum_To (4) /= 10 or else Copied /= 7\n"
+                "     or else Pure_Pkg.Next (1) /= 2\n"
+                "   then\n"
+                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+                "   end if;\n"
+                "end Test_Calculator;\n"},
+    },
     # Without coverage analysis the same mutants are run, and survive.
     "coverage_off": {
         "exit": 2, "example": "calculator", "extra": SPARE,
@@ -342,6 +396,9 @@ def run_example(name, spec, update):
                 errors.append(f"{single} mutants were built on their own, "
                               f"expected at most {spec['max_single_builds']}")
 
+        for k, want in spec.get("expect", {}).items():
+            if actual.get(k) != want:
+                errors.append(f"{k}: expected {want}, got {actual.get(k)}")
         expected_file = EXPECTED / f"{name}.json"
         if update:
             EXPECTED.mkdir(exist_ok=True)

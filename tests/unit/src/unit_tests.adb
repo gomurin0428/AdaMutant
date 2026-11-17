@@ -858,6 +858,7 @@ procedure Unit_Tests is
                   & LF
                   & "   " & LF
                   & "case ADAMUTANT_ACTIVE_7 (3) is" & LF
+                  & "when -1 => raise Program_Error;" & LF
                   & "when others =>" & LF
                   & "Log;" & LF
                   & "end case;" & LF
@@ -880,8 +881,8 @@ procedure Unit_Tests is
          --  Only the lines of the place that has no mutant belong to the
          --  probe.
          Check (Owners (S)
-                = " 0 0 0 0 0 0 0 2 2 0 0 0 0 0 3 3 3 3 0 0 4 4 4 0 0 0 0"
-                  & " 0 0 0",
+                = " 0 0 0 0 0 0 0 2 2 0 0 0 0 0 3 3 3 3 3 0 0 4 4 4 0 0 0"
+                  & " 0 0 0 0",
                 "schemata: probes, owners of the lines", Owners (S));
 
          --  Probes alone make a schema too.
@@ -893,6 +894,7 @@ procedure Unit_Tests is
                 and then Ada.Strings.Fixed.Index
                            (To_String (S.Text),
                             "case ADAMUTANT_ACTIVE_7 (1) is" & LF
+                            & "when -1 => raise Program_Error;" & LF
                             & "when others =>" & LF & "Log;") > 0,
                 "schemata: only a probe", To_String (S.Text));
       end;

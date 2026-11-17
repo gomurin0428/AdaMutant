@@ -476,7 +476,13 @@ package body AdaMutant.Schemata is
                   Reg   : constant Region := Regions (R);
                   Text  : constant String := Source (Reg.First .. Reg.Last);
                   --  The lines of a region with no mutant belong to its
-                  --  probe.
+                  --  probe.  Such a region gets an alternative for a number
+                  --  that the selector never returns, so that what the
+                  --  program does depends on the result of the call there
+                  --  as well: a compiler may leave out a call of a
+                  --  subprogram of a pure unit when its result is not
+                  --  needed (Ada RM 10.2.1 (18/3)), and the place would not
+                  --  be recorded.
                   Probe : constant Natural :=
                     (if Has_Mutant (R) then 0 else Number (R));
                begin
@@ -486,6 +492,9 @@ package body AdaMutant.Schemata is
                      when Statement =>
                         Put ([1 => LF]);
                         Put ("case " & Selector (R) & " is" & LF, Probe);
+                        if Probe /= 0 then
+                           Put ("when -1 => raise Program_Error;" & LF, Probe);
+                        end if;
                         for K in Of_Candidate'Range loop
                            if Of_Candidate (K) = R
                              and then not Candidates (K).Probe
@@ -504,6 +513,10 @@ package body AdaMutant.Schemata is
 
                      when Condition =>
                         Put ("(case " & Selector (R) & " is" & LF, Probe);
+                        if Probe /= 0 then
+                           Put ("when -1 => (raise Program_Error)," & LF,
+                                Probe);
+                        end if;
                         for K in Of_Candidate'Range loop
                            if Of_Candidate (K) = R
                              and then not Candidates (K).Probe
@@ -523,6 +536,10 @@ package body AdaMutant.Schemata is
 
                      when Expression =>
                         Put ("(case " & Selector (R) & " is" & LF, Probe);
+                        if Probe /= 0 then
+                           Put ("when -1 => (raise Program_Error)," & LF,
+                                Probe);
+                        end if;
                         for K in Of_Candidate'Range loop
                            if Of_Candidate (K) = R
                              and then not Candidates (K).Probe
