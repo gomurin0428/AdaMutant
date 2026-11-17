@@ -482,7 +482,11 @@ package body AdaMutant.Schemata is
                   --  as well: a compiler may leave out a call of a
                   --  subprogram of a pure unit when its result is not
                   --  needed (Ada RM 10.2.1 (18/3)), and the place would not
-                  --  be recorded.
+                  --  be recorded.  For a statement the alternative is a
+                  --  null statement.  Raising an exception there draws a
+                  --  warning under No_Exception_Propagation, and a pragma
+                  --  Warnings around it would end a region that the source
+                  --  has opened with a pragma Warnings (Off) of its own.
                   Probe : constant Natural :=
                     (if Has_Mutant (R) then 0 else Number (R));
                begin
@@ -493,11 +497,7 @@ package body AdaMutant.Schemata is
                         Put ([1 => LF]);
                         Put ("case " & Selector (R) & " is" & LF, Probe);
                         if Probe /= 0 then
-                           --  The compiler may warn that nothing handles
-                           --  the exception (No_Exception_Propagation).
-                           Put ("when -1 => pragma Warnings (Off);"
-                                & " raise Program_Error;"
-                                & " pragma Warnings (On);" & LF, Probe);
+                           Put ("when -1 => null;" & LF, Probe);
                         end if;
                         for K in Of_Candidate'Range loop
                            if Of_Candidate (K) = R

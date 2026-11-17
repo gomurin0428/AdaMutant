@@ -858,8 +858,7 @@ procedure Unit_Tests is
                   & LF
                   & "   " & LF
                   & "case ADAMUTANT_ACTIVE_7 (3) is" & LF
-                  & "when -1 => pragma Warnings (Off); raise Program_Error;"
-                  & " pragma Warnings (On);" & LF
+                  & "when -1 => null;" & LF
                   & "when others =>" & LF
                   & "Log;" & LF
                   & "end case;" & LF
@@ -895,8 +894,7 @@ procedure Unit_Tests is
                 and then Ada.Strings.Fixed.Index
                            (To_String (S.Text),
                             "case ADAMUTANT_ACTIVE_7 (1) is" & LF
-                            & "when -1 => pragma Warnings (Off); raise Program_Error;"
-                  & " pragma Warnings (On);" & LF
+                            & "when -1 => null;" & LF
                             & "when others =>" & LF & "Log;") > 0,
                 "schemata: only a probe", To_String (S.Text));
       end;
