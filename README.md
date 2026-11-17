@@ -135,9 +135,11 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
   postcondition |     5 |     2 alone
 ```
 
-`alone` is the number of mutants that only that kind of check detected. A mutant that only a range check or an overflow check detected was not detected by a contract such as a postcondition, so these point to places where the contracts are weak.
+`alone` is the number of mutants that only that kind of check detected. A mutant that only a range check or an overflow check detected may be a reason to look at the contracts again, but it does not show by itself that a contract is weak. GNATprove proves the code after a check on the assumption that the check holds. So the inputs for which the mutant goes wrong may stop at the run-time check and never reach the proof of the postcondition. The two mutants that only `range check` detects in the example above are mutants of a function whose postcondition determines the result completely.
 
-The names of the kinds come from the messages of GNATprove (the part before `... might fail`). When no message can be read, `killedBy` is `["proof"]` as before.
+- The names of the kinds come from the messages of GNATprove (the part before `... might fail`). The names that a message quotes (of variables and subprograms) are not part of the kind. The messages of the flow analysis about objects that are not initialized are one kind, `initialization`
+- A message that the proof of the unchanged project has as well does not count
+- When no message can be read, `killedBy` is `["proof"]` as before
 
 ## How it works
 

@@ -343,8 +343,7 @@ package body AdaMutant.Reports is
          end loop;
       end;
 
-      --  What the proof detects the mutants with.  A mutant that only a
-      --  run-time check stops was not stopped by a contract.
+      --  What the proof detects the mutants with.
       declare
          Kinds  : AdaMutant.Config.String_Vector;
          Width  : Natural := 0;

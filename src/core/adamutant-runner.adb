@@ -161,7 +161,7 @@ package body AdaMutant.Runner is
    function Severity_Of (Message : String; Text_First : out Positive)
      return String
    is
-      --  The severity of a "file:line:col: severity: text" line and the
+      --  The severity of a "file:line:col: severity: text" message and the
       --  start of its text, or "".
       Colons : Natural := 0;
       First  : Natural := 0;
@@ -170,12 +170,7 @@ package body AdaMutant.Runner is
       for K in Message'Range loop
          if Message (K) = ':' then
             Colons := Colons + 1;
-            --  A drive letter ("C:\dir\p.adb:1:2: ...") has its own colon.
-            if Colons = 1 and then K = Message'First + 1
-              and then K < Message'Last and then Message (K + 1) in '/' | '\'
-            then
-               Colons := 0;
-            elsif Colons = 3 then
+            if Colons = 3 then
                First := K + 1;
             elsif Colons = 4 then
                while First < K and then Message (First) = ' ' loop
@@ -200,12 +195,16 @@ package body AdaMutant.Runner is
       for D of AdaMutant.Schemata.Diagnostics (Log) loop
          declare
             Line  : constant String := To_String (D.Text);
+            --  Without what precedes the file name: its directories, or
+            --  what a wrapper of the prover puts in front of the line.
+            Text  : constant String :=
+              Line (Line'First + D.Name_First - 1 .. Line'Last);
             First : Positive;
-            Sev   : constant String := Severity_Of (Line, First);
+            Sev   : constant String := Severity_Of (Text, First);
             pragma Unreferenced (First);
          begin
             if Sev in "high" | "medium" | "low" | "error" then
-               Result.Append (Line);
+               Result.Append (Text);
             end if;
          end;
       end loop;
@@ -215,44 +214,47 @@ package body AdaMutant.Runner is
    function Check_Kind (Message : String) return String is
       First : Positive;
       Sev   : constant String := Severity_Of (Message, First);
-
-      function Up_To_Comma (Text : String) return String is
-      begin
-         for K in Text'Range loop
-            if Text (K) = ',' then
-               return Text (Text'First .. K - 1);
-            end if;
-         end loop;
-         return Text;
-      end Up_To_Comma;
+      Kind  : Unbounded_String;
+      Quote : Boolean := False;
    begin
-      if Sev = "error" or else First > Message'Last then
+      if Sev = "error" then
          return "error";
       end if;
+      --  The text without the names that it quotes, up to its first comma
+      --  or to a reference to the SPARK RM: a kind has to be the same for
+      --  every subprogram and object.
+      for K in First .. Message'Last loop
+         exit when not Quote
+           and then (Message (K) = ','
+                     or else (K + 9 <= Message'Last
+                              and then Message (K .. K + 9) = "(SPARK RM "));
+         if Message (K) = '"' then
+            Quote := not Quote;
+         elsif not Quote
+           and then (Message (K) not in ' ' | ASCII.HT
+                     or else (Length (Kind) > 0
+                              and then Element (Kind, Length (Kind)) /= ' '))
+         then
+            Append (Kind, (if Message (K) = ASCII.HT then ' ' else Message (K)));
+         end if;
+      end loop;
+      while Length (Kind) > 0 and then Element (Kind, Length (Kind)) = ' ' loop
+         Delete (Kind, Length (Kind), Length (Kind));
+      end loop;
       declare
-         Text  : constant String := Message (First .. Message'Last);
-         Might : constant Natural :=
-           Index (To_Unbounded_String (Text), " might ");
+         Text  : constant String := To_String (Kind);
+         Might : constant Natural := Index (Kind, " might ");
       begin
-         if Text (Text'First) = '"' then
-            --  Flow analysis: '"X" might not be initialized'.
-            for K in Text'First + 1 .. Text'Last loop
-               if Text (K) = '"' then
-                  declare
-                     Rest : constant String :=
-                       Up_To_Comma (Text (K + 1 .. Text'Last));
-                  begin
-                     return
-                       (if Rest'Length > 1
-                        then Rest (Rest'First + 1 .. Rest'Last) else Text);
-                  end;
-               end if;
-            end loop;
-            return Text;
+         if Text = "" then
+            return "unknown";
+         elsif Index (Kind, "initialized") > 0 then
+            --  '"X" might not be initialized', '"X" is not initialized in
+            --  "P"', '"B" constituent of "S" is not initialized'.
+            return "initialization";
          elsif Might > 0 then
             return Text (Text'First .. Text'First + Might - 2);
          else
-            return Up_To_Comma (Text);
+            return Text;
          end if;
       end;
    end Check_Kind;
@@ -377,6 +379,11 @@ package body AdaMutant.Runner is
       Prove_TO : Duration := 0.0;
       Has_Test : constant Boolean := Length (S.Test) > 0;
       Has_Prove : constant Boolean := Length (S.Prove) > 0;
+
+      --  The messages of the proof of the unmodified project that would
+      --  count as failures.  The proof passes all the same when the
+      --  command does not treat them as errors.
+      Baseline_Failures : String_Vectors.Vector;
 
       type Mutant_Array is array (Positive range <>) of Mutant;
       type Mutant_Array_Access is access Mutant_Array;
@@ -624,24 +631,41 @@ package body AdaMutant.Runner is
                elsif P.Exit_Code /= 0 then
                   M.Status := Killed;
                   M.Killed_By := Proof;
-                  declare
-                     Failures : constant String_Vectors.Vector :=
-                       Proof_Failures (Read (Log_Base & "-prove.log"));
+                  M.Status_Reason := To_Unbounded_String
+                    ("proof failed with exit status" & P.Exit_Code'Image);
+                  --  What the log says is an addition: when it cannot be
+                  --  read, the mutant is detected all the same.
                   begin
-                     for F of Failures loop
-                        if not M.Failed_Checks.Contains (Check_Kind (F)) then
-                           M.Failed_Checks.Append (Check_Kind (F));
+                     declare
+                        Failures : String_Vectors.Vector;
+                     begin
+                        --  A message that the unmodified project has as
+                        --  well is not what stops the mutant.
+                        for F of Proof_Failures (Read (Log_Base & "-prove.log"))
+                        loop
+                           if not Baseline_Failures.Contains (F) then
+                              Failures.Append (F);
+                           end if;
+                        end loop;
+                        for F of Failures loop
+                           if not M.Failed_Checks.Contains (Check_Kind (F))
+                           then
+                              M.Failed_Checks.Append (Check_Kind (F));
+                           end if;
+                        end loop;
+                        if not Failures.Is_Empty then
+                           M.Status_Reason := To_Unbounded_String
+                             ("proof failed: " & Failures.First_Element
+                              & (if Natural (Failures.Length) > 1
+                                 then " (and" & Natural'Image
+                                        (Natural (Failures.Length) - 1)
+                                      & " more)"
+                                 else ""));
                         end if;
-                     end loop;
-                     M.Status_Reason := To_Unbounded_String
-                       (if Failures.Is_Empty then
-                           "proof failed with exit status" & P.Exit_Code'Image
-                        else
-                           "proof failed: " & Failures.First_Element
-                           & (if Natural (Failures.Length) > 1
-                              then " (and" & Natural'Image
-                                     (Natural (Failures.Length) - 1) & " more)"
-                              else ""));
+                     end;
+                  exception
+                     when others =>
+                        M.Failed_Checks.Clear;
                   end;
                end if;
             end;
@@ -1577,6 +1601,8 @@ package body AdaMutant.Runner is
             Prove_Ended := [others => Clock];
             Prove_TO :=
               Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+            Baseline_Failures :=
+              Proof_Failures (Read (Join (Logs, "baseline-prove.log")));
          end if;
       end;
 

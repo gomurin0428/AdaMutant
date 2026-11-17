@@ -839,6 +839,7 @@ package body AdaMutant.Schemata is
                      --  day ("12:30:15:") has none.
                      if Start < I
                        and then (for some C of L (Start .. I - 1) => C = '.')
+                       and then (for some C of L (I + 1 .. A) => C /= '0')
                      then
                         Result.Append
                           (Diagnostic'
@@ -846,7 +847,8 @@ package body AdaMutant.Schemata is
                                 (Ada.Characters.Handling.To_Lower
                                    (L (Start .. I - 1))),
                               Line => Positive'Value (L (I + 1 .. A)),
-                              Text => To_Unbounded_String (L)));
+                              Text => To_Unbounded_String (L),
+                              Name_First => Start - L'First + 1));
                      end if;
                      return;
                   end if;

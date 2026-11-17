@@ -397,11 +397,19 @@ procedure Unit_Tests is
            & "p.adb:3:4: info: overflow check proved" & LF
            & "C:\work\p.adb:8:9: high: ""X"" is not initialized" & LF
            & "p.adb:2:1: error: missing "";""" & LF
+           & "counters.ali:0:0: note: a line number 0 is not a message" & LF
+           & "2026-11-17T08:00:00 q.adb:5:16: medium: overflow check might"
+           & " fail" & LF
            & "gnatprove: unproved check messages considered as errors" & LF;
          F : constant String_Vectors.Vector := Proof_Failures (Log);
       begin
-         Check (Natural (F.Length) = 4, "proof failures: count",
+         Check (Natural (F.Length) = 5, "proof failures: count",
                 F.Length'Image);
+         Check (F (3) = "p.adb:8:9: high: ""X"" is not initialized",
+                "proof failures: without the directories", F (3));
+         Check (F (5) = "q.adb:5:16: medium: overflow check might fail"
+                and then Check_Kind (F (5)) = "overflow check",
+                "proof failures: a line with something in front", F (5));
          Check (F (1) = "counters.adb:5:16: medium: range check might fail,"
                         & " cannot prove lower bound for C - 1",
                 "proof failures: the line of the message", F (1));
@@ -409,7 +417,7 @@ procedure Unit_Tests is
                 Check_Kind (F (1)));
          Check (Check_Kind (F (2)) = "postcondition",
                 "check kind: postcondition", Check_Kind (F (2)));
-         Check (Check_Kind (F (3)) = "is not initialized",
+         Check (Check_Kind (F (3)) = "initialization",
                 "check kind: flow analysis, Windows path", Check_Kind (F (3)));
          Check (Check_Kind (F (4)) = "error", "check kind: error",
                 Check_Kind (F (4)));
@@ -418,9 +426,50 @@ procedure Unit_Tests is
                    & " by an arbitrary iteration") = "loop invariant",
                 "check kind: loop invariant");
          Check (Check_Kind ("p.adb:7:8: medium: ""X"" might not be"
-                            & " initialized, in call") =
-                  "might not be initialized",
+                            & " initialized, in call") = "initialization"
+                and then Check_Kind
+                  ("p.adb:7:8: high: ""Y"" is not initialized in ""Init""")
+                  = "initialization"
+                and then Check_Kind
+                  ("p.adb:7:8: medium: ""X"" might not be initialized in"
+                   & " ""Cond_Init""") = "initialization"
+                and then Check_Kind
+                  ("p.adb:7:8: high: ""B"" constituent of ""State"" is not"
+                   & " initialized") = "initialization",
                 "check kind: initialization");
+         --  The names that a message quotes are not part of the kind.
+         Check (Check_Kind
+                  ("p.adb:1:2: high: ""G"" must be listed in the Global"
+                   & " aspect of ""Use_Global"" (SPARK RM 6.1.4(15))")
+                = "must be listed in the Global aspect of",
+                "check kind: Global aspect",
+                Check_Kind
+                  ("p.adb:1:2: high: ""G"" must be listed in the Global"
+                   & " aspect of ""Use_Global"" (SPARK RM 6.1.4(15))"));
+         Check (Check_Kind ("p.ads:1:2: medium: missing dependency"
+                            & " ""Z => X""") = "missing dependency"
+                and then Check_Kind ("p.ads:1:2: medium: incorrect dependency"
+                                     & " ""Y => X""") = "incorrect dependency"
+                and then Check_Kind ("p.ads:1:2: low: unused global"
+                                     & " ""Total""") = "unused global",
+                "check kind: dependencies and globals");
+         Check (Check_Kind
+                  ("p.adb:1:2: high: formal parameter ""X"" and global ""G"""
+                   & " are aliased (SPARK RM 6.4.2)")
+                = "formal parameter and global are aliased",
+                "check kind: aliasing",
+                Check_Kind
+                  ("p.adb:1:2: high: formal parameter ""X"" and global ""G"""
+                   & " are aliased (SPARK RM 6.4.2)"));
+         Check (Check_Kind
+                  ("p.adb:1:2: medium: aspect Always_Terminates on ""Loops"""
+                   & " could be incorrect, loop might be nonterminating")
+                = "aspect Always_Terminates on could be incorrect",
+                "check kind: termination");
+         Check (Check_Kind ("p.adb:1:2: medium: , x") = "unknown"
+                and then Check_Kind ("p.adb:1:2: medium:") = "unknown"
+                and then Check_Kind ("p.adb:1:2: medium: ""X""") = "unknown",
+                "check kind: nothing left");
          Check (Proof_Failures ("gnatprove: error" & LF).Is_Empty,
                 "proof failures: none");
       end;
