@@ -208,6 +208,11 @@ package body AdaMutant.Config is
          Seen.Append (Full);
          Skip_Blanks;
          if Cur /= '=' then
+            --  A name with other characters ends where they begin.
+            if To_String (Table) = "tests" then
+               Fail ("the name of a test consists of letters, digits, '_',"
+                     & " '-' and '.', and '=' follows it");
+            end if;
             Fail ("'=' is expected after '" & Key & "'");
          end if;
          P := P + 1;

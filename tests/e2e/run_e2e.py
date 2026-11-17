@@ -535,7 +535,7 @@ EXAMPLES.update({
         "tests": {"arith": {"kills": True}, "misc": {"kills": True},
                   "idle": {"kills": False}, "lint": {"kills": False}},
         "bail": True, "covered_by": False,
-        "output": "warning: the programs of the tests lint recorded nothing",
+        "output": "warning: the programs of the tests 'lint' recorded nothing",
     },
     # An equivalence_build command that fails: a warning, and the survivors
     # stay.

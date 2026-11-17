@@ -134,7 +134,7 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 
 ### Results per test
 
-A `[tests]` table instead of `test` gives several test commands, each with a name. The key is the name and the value is the command. A name consists of letters, digits, `_`, `-` and `.`. `test` and `[tests]` cannot be used together.
+A `[tests]` table instead of `test` gives several test commands, each with a name. The key is the name and the value is the command. A name consists of letters, digits, `_`, `-` and `.`. It cannot be the name of a setting (`build`, `test`, `prove` and so on), and two names cannot differ only in case. Write `[tests]` after the settings. `test` and `[tests]` cannot be used together.
 
 ```toml
 [tests]
@@ -151,7 +151,7 @@ lexer = "bin/test_lexer"
 
 Tests are left out for a mutant, so two things are needed. Where they do not hold, set `coverage_analysis = false` (every mutant is then tested with every test).
 
-- Every test runs test programs of the build. When a test has recorded no executed place at all (a test that runs no such program, or one that runs where the record cannot be written), what it executes is not known. AdaMutant prints a warning and, for that run, leaves no test out: every mutant is tested with every test
+- Every test runs test programs of the build. When a test has recorded no executed place at all (a test that runs no such program, or one that runs where the record cannot be written), what it executes is not known. AdaMutant prints a warning and, for that run, leaves no test out: every mutant is tested with every test. This is seen for a test as a whole: when a test runs several programs and only some of them cannot record, it goes unnoticed
 - The tests do not depend on each other. When one test writes a file that another test reads, the second reads an old file whenever the first is left out
 
 The console shows, for each test, the number of mutants whose place it executes (Covers) and the number of mutants it detects (Kills). Covers is `-` when the executed places were not examined.

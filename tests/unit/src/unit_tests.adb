@@ -695,6 +695,24 @@ procedure Unit_Tests is
       Rejects ("build = ""b""" & LF & "[tests]" & LF
                & "t" & Character'Val (233) & " = ""x""",
                "config: a test name with other characters");
+      begin
+         declare
+            C2 : constant Configuration := Parse
+              ("build = ""b""" & LF & "[tests]" & LF
+               & "t" & Character'Val (16#C3#) & Character'Val (16#AA#)
+               & " = ""x""", "/r");
+         begin
+            Check (Length (C2.Build) = 0 and then False,
+                   "config: a test name in UTF-8", "accepted");
+         end;
+      exception
+         when E : Config_Error =>
+            Check (Ada.Strings.Fixed.Index
+                     (Ada.Exceptions.Exception_Message (E),
+                      "the name of a test") > 0,
+                   "config: a test name in UTF-8",
+                   Ada.Exceptions.Exception_Message (E));
+      end;
       Rejects ("build = ""b""" & LF & "[tests]" & LF,
                "config: empty tests table and no prove");
       Check (Length (C.Equivalence_Build) = 0

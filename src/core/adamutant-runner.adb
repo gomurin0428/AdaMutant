@@ -1082,6 +1082,11 @@ package body AdaMutant.Runner is
          Hit      : Cover_Matrix_Access;
          Recorded : array (1 .. N_Tests) of Boolean := [others => False];
 
+         --  The record of a test could not be removed before the next
+         --  test ran, so that test seems to execute what the one before
+         --  executed.
+         Stale : Boolean := False;
+
          procedure Collect (T : Positive) is
             --  Test T has just run in the combined build with no mutant
             --  active: read what its programs recorded.
@@ -1130,14 +1135,14 @@ package body AdaMutant.Runner is
                    To_String (Merged));
             --  A program that the test command left running may still
             --  hold its file open, which stops the deletion on Windows.
-            --  Left where it is, the directory does no harm: at worst the
-            --  next test seems to execute what this one executed, and
-            --  runs with more mutants than it has to.
+            --  After the last test the directory does no harm where it
+            --  is.  Before another test it does: that test would seem to
+            --  have recorded what this one recorded.
             begin
                Delete_Tree (Coverage_Dir);
             exception
                when File_Error =>
-                  null;
+                  Stale := Stale or else T < N_Tests;
             end;
          end Collect;
 
@@ -1155,16 +1160,22 @@ package body AdaMutant.Runner is
             for T in 1 .. N_Tests loop
                if not Recorded (T) then
                   Append (Silent, (if Length (Silent) > 0 then ", " else "")
-                          & Test_Name (T));
+                          & "'" & Test_Name (T) & "'");
                end if;
             end loop;
-            if Length (Silent) > 0 then
+            if Length (Silent) > 0 or else Stale then
                if Warn /= null then
-                  Warn ((if not S.Named_Tests then "the test programs"
-                         else "the programs of the tests " & To_String (Silent))
-                        & " recorded nothing about the code"
-                        & " that they execute; coverage analysis is off for"
-                        & " this run");
+                  Warn ((if Length (Silent) = 0 then
+                            "the record of the code that a test executes"
+                            & " could not be removed before the next test"
+                         elsif not S.Named_Tests then
+                            "the test programs recorded nothing about the"
+                            & " code that they execute"
+                         else
+                            "the programs of the tests " & To_String (Silent)
+                            & " recorded nothing about the code that they"
+                            & " execute")
+                        & "; coverage analysis is off for this run");
                end if;
                Free (Hit);
                return;
