@@ -923,7 +923,9 @@ def check_proof_log():
 
 def check_baseline():
     """--baseline FILE reuses the results of an earlier run for unchanged lines."""
-    work = Path(tempfile.mkdtemp(prefix="adamutant-baseline-"))
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-baseline-"))
+    work = root
     try:
         shutil.copytree(ROOT / "examples" / "calculator", work / "p",
                         ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
@@ -1049,7 +1051,7 @@ def check_baseline():
             errors.append(f"list --baseline: exit {proc.returncode}, {proc.stderr}")
         return errors
     finally:
-        shutil.rmtree(work.parent, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def main():
