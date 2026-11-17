@@ -2,7 +2,7 @@
  "src/calculator.adb:10:10 ConditionalExpression False": "Survived",
  "src/calculator.adb:10:10 ConditionalExpression True": "Survived",
  "src/calculator.adb:10:12 EqualityOperator <=": "Survived",
- "src/calculator.adb:10:12 EqualityOperator >=": "Survived",
+ "src/calculator.adb:10:12 EqualityOperator >=": "Ignored",
  "src/calculator.adb:19:10 ConditionalExpression False": "Survived",
  "src/calculator.adb:19:10 ConditionalExpression True": "Survived",
  "src/calculator.adb:19:12 EqualityOperator <=": "Survived",
@@ -10,7 +10,7 @@
  "src/calculator.adb:21:13 ConditionalExpression False": "Survived",
  "src/calculator.adb:21:13 ConditionalExpression True": "Survived",
  "src/calculator.adb:21:15 EqualityOperator <=": "Survived",
- "src/calculator.adb:21:15 EqualityOperator >=": "Survived",
+ "src/calculator.adb:21:15 EqualityOperator >=": "Ignored",
  "src/calculator.adb:29:10 ConditionalExpression False": "Survived",
  "src/calculator.adb:29:10 ConditionalExpression True": "Survived",
  "src/calculator.adb:29:16 EqualityOperator <": "Survived",
@@ -45,6 +45,6 @@
  "src/spare.adb:8:24 NumericLiteral 0": "Survived",
  "src/spare.adb:8:7 StatementDeletion null;": "Survived",
  "src/spare.adb:9:12 NumericLiteral 1": "Survived",
- "src/spare.adb:9:7 StatementDeletion null;": "Survived",
+ "src/spare.adb:9:7 StatementDeletion null;": "Ignored",
  "src/spare.ads:2:23 NumericLiteral 1": "Survived"
 }

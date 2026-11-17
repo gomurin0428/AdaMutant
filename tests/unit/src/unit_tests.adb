@@ -308,6 +308,54 @@ procedure Unit_Tests is
       end;
    end Test_Directives;
 
+   procedure Test_Ghost_Names is
+      Names : constant Name_Sets.Set := Ghost_Names
+        ("package P is" & LF
+         & "   procedure Note (C : Integer) is null with Ghost;" & LF
+         & "   procedure Plain (C : Integer) is null;" & LF
+         & "   function Twice (X : Integer) return Integer is (X * 2)"
+         & " with Ghost;" & LF
+         & "   procedure Mark with Ghost;" & LF
+         & "   function Old return Integer is abstract with Ghost;" & LF
+         & "end P;" & LF);
+   begin
+      Check (Names.Contains ("note") and then Names.Contains ("twice")
+             and then Names.Contains ("mark") and then Names.Contains ("old")
+             and then not Names.Contains ("plain")
+             and then Natural (Names.Length) = 4,
+             "ghost names: null procedures and abstract subprograms too",
+             Names.Length'Image);
+   end Test_Ghost_Names;
+
+   procedure Test_Contract_Flag is
+      --  Mutations in aspects and in ghost code are marked, also in the
+      --  body of a subprogram that only its specification declares ghost.
+      Source : constant String :=
+        "package body P is" & LF
+        & "   function F (X : Integer) return Integer" & LF
+        & "     with Post => F'Result > 1 is" & LF
+        & "   begin" & LF
+        & "      return X + 2;" & LF
+        & "   end F;" & LF
+        & "   procedure G (X : in out Integer) is" & LF
+        & "   begin" & LF
+        & "      X := X * 3;" & LF
+        & "   end G;" & LF
+        & "end P;" & LF;
+      Options : Scan_Options := (Mutate_Contracts => True, others => <>);
+      Marked  : Unbounded_String;
+   begin
+      Options.Ghost_Names.Insert ("g");
+      for M of Find (Source, Options) loop
+         Append (Marked, (if M.Contract then "C" else "-"));
+      end loop;
+      --  > and 1 (two mutations of > and one of 1) in the aspect; + and 2
+      --  in F; the deletion, * and 3 in G.
+      Check (To_String (Marked) = "CCC--CCC",
+             "mutations of contracts and ghost code are marked",
+             To_String (Marked) & " " & Describe (Source, Options));
+   end Test_Contract_Flag;
+
    procedure Test_Apply is
       S : constant String := "X := A + B;";
       M : Mutation;
@@ -359,6 +407,15 @@ procedure Unit_Tests is
          Check (File_Time_Stamp (Path) = To_Ada (To_C (Stamp) + 2),
                 "rewrite moves the time stamp two seconds");
          Check (Read (Path) = "mutant", "rewrite content");
+         Write (Path, "abc");
+         Check (Digest (Path)
+                = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f"
+                  & "20015ad", "digest of a file", Digest (Path));
+         Write (Path, [1 .. 70_000 => 'a']);
+         Check (Digest (Path)
+                = "66915c0872933db504e7578828dd85b7e74a4e0a061f9756793b89c41"
+                  & "51bd4b5", "digest of a file longer than the buffer",
+                Digest (Path));
          Delete_File (Path, Deleted);
       end;
    end Test_Files;
@@ -503,6 +560,13 @@ procedure Unit_Tests is
       Check (C.Scan.Enabled (Arithmetic_Operator)
              and then not C.Scan.Enabled (Numeric_Literal), "config mutators");
       Check (C.High = 90 and then C.Break = 10, "config thresholds");
+      Check (Length (C.Equivalence_Build) = 0
+             and then To_String
+               (Parse
+                  ("build = ""b""" & LF & "test = ""t""" & LF
+                   & "equivalence_build = ""b -cargs -O2""", "/r")
+                  .Equivalence_Build) = "b -cargs -O2",
+             "config equivalence build");
       Check (C.Coverage_Analysis
              and then not Parse
                ("build = ""b""" & LF & "test = ""t""" & LF
@@ -997,6 +1061,8 @@ begin
    Test_Conditions;
    Test_Skipped;
    Test_Directives;
+   Test_Ghost_Names;
+   Test_Contract_Flag;
    Test_Apply;
    Test_Files;
    if GNAT.OS_Lib.Directory_Separator = '/' then

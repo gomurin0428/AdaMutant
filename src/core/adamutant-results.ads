@@ -30,6 +30,9 @@ package AdaMutant.Results is
       Status_Reason : Unbounded_String;
       Killed_By     : Detector := None;
       Reached       : Coverage := Unknown;
+      Equivalent    : Boolean := False;
+      --  Ignored because its object code is that of the unmodified
+      --  project.
       Elapsed       : Duration := 0.0;
    end record;
 

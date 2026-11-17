@@ -50,8 +50,10 @@ SPARE = {
 }
 
 EXAMPLES = {
+    # The example has an equivalence_build command: the two survivors that
+    # are equivalent mutants become Ignored.
     "calculator": {
-        "exit": 0, "min_timeout": 1, "min_uncovered": 1,
+        "exit": 0, "min_timeout": 1, "min_uncovered": 1, "equivalent": 2,
         # Most mutants are tested in the one build that contains them all;
         # only a few are built on their own.
         "max_single_builds": 10,
@@ -293,6 +295,186 @@ EXAMPLES = {
                 "   end if;\n"
                 "end Test_Counters;\n"},
     },
+    # Survivors in three files.  Two are equivalent mutants like those of
+    # the example (in More); one is not, and shows only in the object of
+    # another unit: the named number of B_Limits is used in Client.  The
+    # command of the example compiles Client again and finds it different.
+    # The object of B_Limits is compared although its name starts like
+    # that of a file of the binder ("b__main.o"): the survivors of its
+    # expression function are not equivalent.
+    "equivalence_dependent": {
+        "exit": 0, "example": "calculator", "equivalent": 3,
+        "expect": {"src/b_limits.ads:2:24 NumericLiteral 4": "Survived"},
+        "extra": "DEPENDENT",
+    },
+    # The same with an equivalence_build command that only compiles the
+    # mutated file, which is not a command to use: it does not compile
+    # Client again, so nothing can be said about the mutant of B_Limits, and
+    # it does not bring the objects of the mutant before back to those of
+    # the unmodified project, so AdaMutant has to (otherwise the equivalent
+    # mutants of one file look different because of the other file).
+    "equivalence_selective": {
+        "exit": 0, "example": "calculator", "equivalent": 3,
+        "expect": {"src/b_limits.ads:2:24 NumericLiteral 4": "Survived"},
+        "config": "equivalence_build = '{python} compile_one.py'\n",
+        "output": "does not compile every unit that depends on the file again",
+        "extra": "DEPENDENT",
+    },
+    # An equivalence_build command that removes the objects and then fails
+    # for every mutant: nothing is examined, and the results of the run
+    # stay.
+    "equivalence_breaks": {
+        "exit": 0, "example": "calculator", "equivalent": 0,
+        "config": "equivalence_build = '{python} clean_and_fail.py'\n",
+        "output": "warning: the equivalence_build command fails for detected mutants",
+        "extra": {"clean_and_fail.py":
+                  "import os, shutil, subprocess, sys\n"
+                  "if os.environ.get('ADAMUTANT_MUTANT_ID', '0') != '0':\n"
+                  "    shutil.rmtree('obj')\n"
+                  "    sys.exit(4)\n"
+                  "sys.exit(subprocess.call(['gprbuild', '-p', '-q', '-c', '-P',\n"
+                  "                          'calculator_tests.gpr', '-cargs', '-O2', '-g0']))\n"},
+    },
+    # An equivalence_build command that binds and links as well: what the
+    # binder makes differs for every mutant and is not compared.
+    "equivalence_linked": {
+        "exit": 0, "example": "calculator", "equivalent": 2,
+        "config": "equivalence_build = 'gprbuild -p -q -P calculator_tests.gpr"
+                  " -cargs -O2 -g0'\n",
+    },
+    # Mutants of contracts that survive the proof are other contracts, not
+    # equivalent mutants, although the objects are the same without
+    # assertions.  So are the mutants of the call of Note, which only the
+    # specification declares ghost.
+    "equivalence_contracts": {
+        "exit": 0, "example": "spark_counter", "equivalent": 0,
+        "min_survived": 5,
+        "expect": {"src/counters.adb:5:7 StatementDeletion null;": "Survived"},
+        "config": "mutate = ['src/**/*.adb', 'src/**/*.ads']\n"
+                  "mutate_contracts = true\n"
+                  "equivalence_build = 'gprbuild -p -q -c -P counters.gpr -cargs -O2 -g0'\n",
+        "extra": {
+            "src/counters.ads":
+                "package Counters with SPARK_Mode is\n"
+                "   Max : constant := 100;\n"
+                "   subtype Count is Natural range 0 .. Max;\n"
+                "   procedure Note (C : Count) is null with Ghost;\n"
+                "   function Increment (C : Count) return Count\n"
+                "   with Pre  => C < Max,\n"
+                "        Post => Increment'Result = C + 1;\n"
+                "   function Saturating_Add (A, B : Count) return Count\n"
+                "   with Post =>\n"
+                "     (if A + B <= Max then Saturating_Add'Result = A + B\n"
+                "      else Saturating_Add'Result = Max);\n"
+                "end Counters;\n",
+            "src/counters.adb":
+                "package body Counters with SPARK_Mode is\n"
+                "   function Increment (C : Count) return Count is\n"
+                "   begin\n"
+                "      --  Ghost code: it is not in the program.\n"
+                "      Note (C + 0);\n"
+                "      return C + 1;\n"
+                "   end Increment;\n"
+                "   function Saturating_Add (A, B : Count) return Count is\n"
+                "   begin\n"
+                "      if A + B > Max then\n"
+                "         return Max;\n"
+                "      else\n"
+                "         return A + B;\n"
+                "      end if;\n"
+                "   end Saturating_Add;\n"
+                "end Counters;\n"},
+    },
+}
+
+DEPENDENT = {
+            "compile_one.py":
+                "import os, subprocess, sys\n"
+                "one = os.environ.get('ADAMUTANT_MUTANT_FILE', '')\n"
+                "command = ['gprbuild', '-p', '-q', '-c', '-P', 'calculator_tests.gpr']\n"
+                "if one:\n"
+                "    command += ['-u', os.path.basename(one)]\n"
+                "sys.exit(subprocess.call(command + ['-cargs', '-O2', '-g0']))\n",
+            "src/b_limits.ads":
+                "package B_Limits is\n"
+                "   Small : constant := 3;\n"
+                "   function Is_Big (X : Integer) return Boolean is (X > 100);\n"
+                "end B_Limits;\n",
+            "src/client.ads":
+                "package Client is\n"
+                "   function Tiny (X : Integer) return Boolean;\n"
+                "end Client;\n",
+            "src/client.adb":
+                "with B_Limits;\n"
+                "package body Client is\n"
+                "   function Tiny (X : Integer) return Boolean is\n"
+                "   begin\n"
+                "      return X < B_Limits.Small;\n"
+                "   end Tiny;\n"
+                "end Client;\n",
+            "src/more.ads":
+                "package More is\n"
+                "   function Larger (A, B : Integer) return Integer;\n"
+                "end More;\n",
+            "src/more.adb":
+                "package body More is\n"
+                "   function Larger (A, B : Integer) return Integer is\n"
+                "   begin\n"
+                "      if A > B then\n"
+                "         return A;\n"
+                "      else\n"
+                "         return B;\n"
+                "      end if;\n"
+                "   end Larger;\n"
+                "end More;\n",
+            "tests/test_calculator.adb":
+                "with Ada.Command_Line;\n"
+                "with Calculator; use Calculator;\n"
+                "with Client;\n"
+                "with B_Limits;\n"
+                "with More;\n"
+                "procedure Test_Calculator is\n"
+                "begin\n"
+                "   if Add (2, 3) /= 5 or else Max (1, 7) /= 7\n"
+                "     or else Max (9, 4) /= 9 or else not Is_Even (4)\n"
+                "     or else Clamp (5, 0, 10) /= 5 or else Clamp (-5, 0, 10) /= 0\n"
+                "     or else Clamp (50, 0, 10) /= 10 or else Grade (95) /= \"A\"\n"
+                "     or else Grade (70) /= \"B\" or else Grade (10) /= \"C\"\n"
+                "     or else Sum_To (4) /= 10\n"
+                "     or else More.Larger (1, 7) /= 7 or else More.Larger (9, 4) /= 9\n"
+                "     or else not Client.Tiny (1) or else Client.Tiny (5)\n"
+                "     or else not B_Limits.Is_Big (200) or else B_Limits.Is_Big (50)\n"
+                "   then\n"
+                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+                "   end if;\n"
+                "end Test_Calculator;\n"}
+
+EXAMPLES.update({
+    # An equivalence_build command that fails: a warning, and the survivors
+    # stay.
+    "equivalence_fails": {
+        "exit": 0, "example": "calculator", "equivalent": 0,
+        "config": "equivalence_build = '{python} -c \"import sys; sys.exit(3)\"'\n",
+        "output": "warning: the equivalence_build command fails (exit status 3)",
+    },
+    # An equivalence_build command that compiles nothing: the object files
+    # of the normal build are not taken for its own, so there is nothing to
+    # compare.
+    "equivalence_noop": {
+        "exit": 0, "example": "calculator", "equivalent": 0,
+        "config": "equivalence_build = '{python} -c \"pass\"'\n",
+        "output": "warning: the equivalence_build command leaves no object file",
+    },
+    # An equivalence_build command that compiles something, but not the
+    # mutated files: the object files never change.  That must not make
+    # every survivor an equivalent mutant.
+    "equivalence_other": {
+        "exit": 0, "example": "calculator", "equivalent": 0,
+        "config": "equivalence_build = 'gprbuild -p -q -c -u -P calculator_tests.gpr"
+                  " test_calculator.adb -cargs -O2 -g0'\n",
+        "output": "warning: the equivalence_build command does not compile every unit"
+                  " that depends on the file again for detected mutants of src/calculator.adb",
+    },
     # Every mutant's test first allocates 1 GiB, which only the memory limit
     # makes fail: without the limit some mutants would survive.  The test
     # keeps the allocation while it runs, so that macOS, where AdaMutant
@@ -324,7 +506,7 @@ EXAMPLES = {
                   "os.remove(me)\n"
                   "sys.exit(subprocess.call([os.path.join('bin', 'test_calculator')]))\n"},
     },
-}
+})
 
 
 def key(path, m):
@@ -343,7 +525,10 @@ def run_example(name, spec, update):
         work = Path(tmp) / name
         shutil.copytree(ROOT / "examples" / spec.get("example", name), work,
                         ignore=shutil.ignore_patterns(".adamutant", "obj", "bin", "lib"))
-        for rel, text in spec.get("extra", {}).items():
+        extra = spec.get("extra", {})
+        if isinstance(extra, str):
+            extra = globals()[extra]
+        for rel, text in extra.items():
             (work / rel).parent.mkdir(parents=True, exist_ok=True)
             (work / rel).write_text(text)
         if "config" in spec:
@@ -405,6 +590,13 @@ def run_example(name, spec, update):
             if "no_reason" in spec and (logs / f"mutant-{m['id']}-build.log").exists() \
                     and spec["no_reason"] in (logs / f"mutant-{m['id']}-build.log").read_text():
                 errors.append(f"mutant {m['id']}: {spec['no_reason']} in its build log")
+        equivalent = sum(m.get("statusReason", "").startswith("equivalent mutant")
+                         and m["status"] == "Ignored" for m in mutants)
+        if equivalent != spec.get("equivalent", equivalent):
+            errors.append(f"{equivalent} equivalent mutants, expected {spec['equivalent']}")
+        survived = sum(m["status"] == "Survived" for m in mutants)
+        if survived < spec.get("min_survived", 0):
+            errors.append(f"{survived} survivors, expected at least {spec['min_survived']}")
         if len(uncovered) < spec.get("min_uncovered", 0):
             errors.append(f"{len(uncovered)} mutants without coverage, "
                           f"expected at least {spec['min_uncovered']}")
@@ -532,17 +724,24 @@ def main():
     if not EXE.exists():
         sys.exit(f"{EXE} not found; run 'make build' first")
     failed = False
+    only = [a for a in sys.argv[1:] if not a.startswith("--")]
+    unknown = [a for a in only if a not in EXAMPLES and a != "since"]
+    if unknown:
+        sys.exit("no such case: " + " ".join(unknown))
     for name, spec in EXAMPLES.items():
+        if only and name not in only:
+            continue
         errors = run_example(name, spec, update)
         print(("FAIL " if errors else "ok   ") + name)
         for e in errors:
             print("  " + e)
         failed = failed or bool(errors)
-    errors = check_since()
-    print(("FAIL " if errors else "ok   ") + "since")
-    for e in errors:
-        print("  " + e)
-    failed = failed or bool(errors)
+    if not only or "since" in only:
+        errors = check_since()
+        print(("FAIL " if errors else "ok   ") + "since")
+        for e in errors:
+            print("  " + e)
+        failed = failed or bool(errors)
     leftovers = leftover_processes("test_calculator")
     if leftovers:
         print("FAIL leftover test processes: " + " ".join(leftovers))

@@ -30,7 +30,8 @@ package AdaMutant.Runner is
         (Done, Total : Natural;
          M           : AdaMutant.Results.Mutant;
          File        : String) := null;
-      Warn         : access procedure (Message : String) := null);
+      Warn         : access procedure (Message : String) := null;
+      Note         : access procedure (Message : String) := null);
    --  Builds and tests the unmodified project, then every pending mutant,
    --  in copies of the project under <root>/.adamutant/sandbox.  Raises
    --  Run_Error when the unmodified project does not build or its tests or
@@ -40,5 +41,9 @@ package AdaMutant.Runner is
    --  with coverage analysis, the mutants in places that the tests of the
    --  unmodified project do not execute; with a prove command these skip
    --  the tests and go to the proof.
+   --  With an equivalence_build command the survivors are then built with
+   --  it, which Note announces; those whose object files are the same as
+   --  the ones the command makes of the unmodified project get the Ignored
+   --  status.
 
 end AdaMutant.Runner;
