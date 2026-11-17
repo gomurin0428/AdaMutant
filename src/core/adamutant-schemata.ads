@@ -26,8 +26,11 @@ package AdaMutant.Schemata is
       First       : Positive := 1;
       Last        : Natural := 0;
       Replacement : Unbounded_String;
+      Probe       : Boolean := False;
    end record;
-   --  Mutant Id replaces Source (First .. Last) by Replacement.
+   --  Mutant Id replaces Source (First .. Last) by Replacement.  Of a Probe
+   --  the schema does not contain the mutant itself, only the report that
+   --  its place has been executed (see Sites).
 
    package Candidate_Vectors is new Ada.Containers.Vectors
      (Positive, Candidate);
@@ -36,15 +39,30 @@ package AdaMutant.Schemata is
 
    package Owner_Vectors is new Ada.Containers.Vectors (Positive, Natural);
 
+   type Site is record
+      Id     : Positive := 1;
+      Number : Positive := 1;
+   end record;
+
+   package Site_Vectors is new Ada.Containers.Vectors (Positive, Site);
+
    type Schema is record
       Text     : Unbounded_String;
-      --  The source with the mutants built in; "" when Included is empty.
+      --  The source with the mutants built in; "" when Sites is empty.
       Included : Id_Vectors.Vector;
       --  The mutants that Text contains, in the order of the candidates.
+      Sites    : Site_Vectors.Vector;
+      --  The candidates that lie in one of the places above (those in
+      --  Included and the probes), in the order of the candidates, each
+      --  with the number of its place: the Id of the first candidate
+      --  there.  The support unit can record the places that a program
+      --  executes (see Support_Body).
       Owners   : Owner_Vectors.Vector;
-      --  Owners (L) is the mutant whose code is on line L of Text, or 0
-      --  for a line that belongs to no single mutant.  A compiler message
-      --  on a line with an owner is that mutant's compile error.
+      --  Owners (L) is the mutant whose code is on line L of Text, or the
+      --  probe whose place alone line L belongs to, or 0 for a line that
+      --  belongs to no single candidate.  A compiler message on a line
+      --  with an owner is that mutant's compile error, or means that the
+      --  place of that probe cannot be watched.
    end record;
 
    function Build
@@ -55,8 +73,9 @@ package AdaMutant.Schemata is
    --  Tag makes the name that the schema declares in the unit unique among
    --  the files of a project.  Propagates AdaMutant.Lexer.Lexical_Error.
 
-   --  The schema reads the active mutant through a function that every
-   --  changed unit imports by its link name.  The function lives in a unit
+   --  The schema reads the active mutant, and reports the places that are
+   --  executed, through a function that every changed unit imports by its
+   --  link name.  The function lives in a unit
    --  of its own, which must be part of the program: the main subprogram
    --  gets a with clause for it.
 
@@ -64,7 +83,15 @@ package AdaMutant.Schemata is
    Support_Body_File : constant String := "adamutant_schemata_support.adb";
 
    function Support_Spec return String;
-   function Support_Body return String;
+   function Support_Body
+     (Last_Site : Natural := 0; Coverage_Dir : String := "") return String;
+   --  Last_Site is the largest number of a place in the schemas of the
+   --  program.  With a Coverage_Dir, a program that runs with no mutant
+   --  active records the places that it executes: each process appends
+   --  their numbers, one per line and each once, to the file
+   --  "<process id>.txt" in that directory, which has to exist.  The
+   --  first line is 0 and is written when the unit is elaborated, so a
+   --  process that executes no place leaves a file too.
 
    function With_Support (Source : String) return String;
    --  Source, the text of a main subprogram or of a schema of one, with a

@@ -111,6 +111,7 @@ package body AdaMutant.Runner is
                                   ("unchanged since " & Since)
                               else Null_Unbounded_String),
                            Killed_By     => None,
+                           Reached       => Unknown,
                            Elapsed       => 0.0));
                   end;
                   Next := Next + 1;
@@ -288,8 +289,19 @@ package body AdaMutant.Runner is
       Tested   : Flags := [others => False];
       Combined_Test_TO : Duration := 0.0;
 
+      --  The number of the place of each mutant in that build (0 for a
+      --  mutant in no place that the build watches), and the mutants that
+      --  are not built in whose place cannot be watched either.
+      Place     : array (1 .. Natural (R.Mutants.Length)) of Natural :=
+        [others => 0];
+      Unwatched : Flags := [others => False];
+
       function Slot_Dir (Slot : Positive) return String is
         (Join (Sandbox, Image (Slot)));
+
+      Coverage_Dir : constant String := Join (Logs, "coverage");
+      --  Where the programs of the combined build record the places that
+      --  they execute while no mutant is active, a file per process.
 
       procedure Baseline_Step
         (Name, Command : String; Timeout : Duration; Elapsed : out Duration;
@@ -392,6 +404,7 @@ package body AdaMutant.Runner is
             while Cursor_Combined < Work_Items'Last loop
                Cursor_Combined := Cursor_Combined + 1;
                if Combined (Cursor_Combined)
+                 and then not Tested (Cursor_Combined)
                  and then Work_Items (Cursor_Combined).Status = Pending
                then
                   Index := Cursor_Combined;
@@ -431,8 +444,11 @@ package body AdaMutant.Runner is
       end Wait_For_New_Stamp;
 
       procedure Test_Mutant
-        (Slot : Positive; M : in out Mutant; Already_Tested : Boolean)
+        (Slot : Positive; M : in out Mutant; Built, Skip_Tests : Boolean)
       is
+         --  Built: the build that contains the mutants has compiled M.
+         --  Skip_Tests: the tests have run with M there and passed, or
+         --  they do not execute the place of M.
          Dir      : constant String := Slot_Dir (Slot);
          Rel      : constant String := To_String (R.Files (M.File).Path);
          Path     : constant String := Join (Dir, Rel);
@@ -447,7 +463,7 @@ package body AdaMutant.Runner is
                  (if Name = "test" then S.Test_Memory_Limit_Mb else 0), Rel));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
-         if not Already_Tested then
+         if not Built then
             declare
                B : constant Run_Result :=
                  Step ("build", To_String (S.Build), Build_TO);
@@ -469,7 +485,7 @@ package body AdaMutant.Runner is
                end if;
             end;
          end if;
-         if M.Status = Pending and then Has_Test and then not Already_Tested
+         if M.Status = Pending and then Has_Test and then not Skip_Tests
          then
             declare
                T : constant Run_Result :=
@@ -511,7 +527,9 @@ package body AdaMutant.Runner is
          if M.Status = Pending then
             M.Status := Survived;
             M.Status_Reason := To_Unbounded_String
-              (if Has_Test and then Has_Prove then "tests and proof passed"
+              (if M.Reached = Not_Covered then
+                  "no test executes this code, and the proof passed"
+               elsif Has_Test and then Has_Prove then "tests and proof passed"
                elsif Has_Test then "tests passed" else "proof passed");
          end if;
          Write_Changed (Path, Original);
@@ -585,7 +603,9 @@ package body AdaMutant.Runner is
             if Combined_Build then
                Test_Combined (Slot, Index, Work_Items (Index));
             else
-               Test_Mutant (Slot, Work_Items (Index), Tested (Index));
+               Test_Mutant (Slot, Work_Items (Index),
+                            Built      => Combined (Index),
+                            Skip_Tests => Tested (Index));
             end if;
             if Work_Items (Index).Status = Pending then
                --  Its tests passed in the combined build; the proof is
@@ -658,6 +678,11 @@ package body AdaMutant.Runner is
          function Is_Main (Path : String) return Boolean is
            (Mains.Contains (Path));
 
+         --  The files other than the mains that hold the text of a schema
+         --  in the first sandbox.
+         Holds_Schema : array (R.Files.First_Index .. R.Files.Last_Index)
+           of Boolean := [others => False];
+
          procedure Generate (F : Positive) is
             Candidates : AdaMutant.Schemata.Candidate_Vectors.Vector;
          begin
@@ -666,16 +691,23 @@ package body AdaMutant.Runner is
             --  in the mutant, and an optimizing compiler may then give it
             --  the value that the original statement assigns in the other
             --  alternative: the mutant would do what the original does.
+            --  With coverage analysis the build still watches whether the
+            --  statement is executed.
             for M of Work_Items.all loop
                if M.File = F and then M.Status = Pending
-                 and then M.Mutation.Kind /= Statement_Deletion
+                 and then
+                   (M.Mutation.Kind /= Statement_Deletion
+                    or else (S.Coverage_Analysis
+                             and then not Unwatched (M.Id)))
                then
                   Candidates.Append
                     (AdaMutant.Schemata.Candidate'
                        (Id          => M.Id,
                         First       => M.Mutation.First,
                         Last        => M.Mutation.Last,
-                        Replacement => M.Mutation.Replacement));
+                        Replacement => M.Mutation.Replacement,
+                        Probe       =>
+                          M.Mutation.Kind = Statement_Deletion));
                end if;
             end loop;
             Schemas (F) := AdaMutant.Schemata.Build
@@ -684,17 +716,25 @@ package body AdaMutant.Runner is
 
          procedure Write_Sources (Slot : Positive; Restore : Boolean) is
             --  The sources of the combined build, or the original ones
-            --  again.
+            --  again.  A file whose last mutant has left the combined
+            --  build gets its original source back at once: its schema
+            --  needs the support unit, which later builds do not have.
             Dir : constant String := Slot_Dir (Slot);
          begin
             for F in Schemas'Range loop
-               if not Schemas (F).Included.Is_Empty
-                 and then not Is_Main (Rel (F))
-               then
+               if Is_Main (Rel (F)) then
+                  null;
+               elsif not Restore and then Length (Schemas (F).Text) > 0 then
                   Write_Changed
-                    (Join (Dir, Rel (F)),
-                     (if Restore then To_String (R.Files (F).Source)
-                      else To_String (Schemas (F).Text)));
+                    (Join (Dir, Rel (F)), To_String (Schemas (F).Text));
+                  Holds_Schema (F) := True;
+               elsif Holds_Schema (F) then
+                  --  The other sandboxes are copies of the first.
+                  Write_Changed
+                    (Join (Dir, Rel (F)), To_String (R.Files (F).Source));
+                  if Slot = Slots or else not Restore then
+                     Holds_Schema (F) := False;
+                  end if;
                end if;
             end loop;
             for K in Mains.First_Index .. Mains.Last_Index loop
@@ -713,7 +753,7 @@ package body AdaMutant.Runner is
                begin
                   for F in Schemas'Range loop
                      if Rel (F) = Main
-                       and then not Schemas (F).Included.Is_Empty
+                       and then Length (Schemas (F).Text) > 0
                      then
                         Text := Schemas (F).Text;
                      end if;
@@ -731,7 +771,12 @@ package body AdaMutant.Runner is
                        (Join (Dir, Main),
                         AdaMutant.Schemata.With_Support (To_String (Text)));
                      Write (Spec, AdaMutant.Schemata.Support_Spec);
-                     Write (Body_File, AdaMutant.Schemata.Support_Body);
+                     Write (Body_File,
+                            AdaMutant.Schemata.Support_Body
+                              (Last_Site    => Natural (R.Mutants.Length),
+                               Coverage_Dir =>
+                                 (if S.Coverage_Analysis then Coverage_Dir
+                                  else "")));
                   end if;
                end;
             end loop;
@@ -739,7 +784,9 @@ package body AdaMutant.Runner is
 
          function Drop_Compile_Errors return Natural is
             --  Mutants whose own lines the compiler complained about do
-            --  not compile; they leave the combined build.
+            --  not compile; they leave the combined build.  So do the
+            --  places that are only watched, without a verdict on their
+            --  mutants.
             Dropped : Natural := 0;
          begin
             for D of AdaMutant.Schemata.Diagnostics (Read (Log)) loop
@@ -753,7 +800,12 @@ package body AdaMutant.Runner is
                           Work_Items (Schemas (F).Owners (D.Line));
                         Done : Natural;
                      begin
-                        if M.Status = Pending then
+                        if M.Mutation.Kind = Statement_Deletion then
+                           if not Unwatched (M.Id) then
+                              Unwatched (M.Id) := True;
+                              Dropped := Dropped + 1;
+                           end if;
+                        elsif M.Status = Pending then
                            M.Status := Compile_Error;
                            M.Status_Reason := To_Unbounded_String
                              ("build failed: " & To_String (D.Text));
@@ -769,6 +821,97 @@ package body AdaMutant.Runner is
             end loop;
             return Dropped;
          end Drop_Compile_Errors;
+
+         procedure Skip_Uncovered is
+            --  The tests of the unmodified project have run in the
+            --  combined build.  They cannot detect a mutant in a place that
+            --  they do not execute.
+            Hit      : Flags := [others => False];
+            Reported : Boolean := False;
+            Merged   : Unbounded_String;
+            Records  : constant String_Vectors.Vector :=
+              (if Ada.Directories.Exists (Coverage_Dir)
+               then Find_Files (Coverage_Dir, String_Vectors.Empty_Vector)
+               else String_Vectors.Empty_Vector);
+         begin
+            for Name of Records loop
+               declare
+                  Text  : constant String := Read (Join (Coverage_Dir, Name));
+                  Value : Natural := 0;
+                  Valid : Boolean := False;
+               begin
+                  for C of Text loop
+                     if C in '0' .. '9' then
+                        if Value <= Hit'Last then
+                           Value := Value * 10
+                             + (Character'Pos (C) - Character'Pos ('0'));
+                        end if;
+                        Valid := True;
+                     else
+                        if Valid then
+                           --  0 is the line that every process writes.
+                           Reported := True;
+                           if Value in Hit'Range then
+                              Hit (Value) := True;
+                           end if;
+                        end if;
+                        Value := 0;
+                        Valid := False;
+                     end if;
+                  end loop;
+               end;
+            end loop;
+            for K in Hit'Range loop
+               if Hit (K) then
+                  Append (Merged, Image (K) & ASCII.LF);
+               end if;
+            end loop;
+            Write (Join (Logs, "coverage.txt"), To_String (Merged));
+            --  A program that the test command left running may still
+            --  hold its file open, which stops the deletion on Windows.
+            --  Left where it is, the directory does no harm.
+            begin
+               Delete_Tree (Coverage_Dir);
+            exception
+               when File_Error =>
+                  null;
+            end;
+            if not Reported then
+               --  No program that contains the support unit has run, or
+               --  none could write its file.
+               if Warn /= null then
+                  Warn ("the test programs recorded nothing about the code"
+                        & " that they execute; coverage analysis is off for"
+                        & " this run");
+               end if;
+               return;
+            end if;
+            for K in Work_Items'Range loop
+               declare
+                  M    : Mutant renames Work_Items (K);
+                  Done : Natural;
+               begin
+                  if M.Status = Pending and then Place (K) /= 0 then
+                     if Hit (Place (K)) then
+                        M.Reached := Covered;
+                     else
+                        M.Reached := Not_Covered;
+                        if Has_Prove then
+                           Tested (K) := True;
+                        else
+                           M.Status := No_Coverage;
+                           M.Status_Reason := To_Unbounded_String
+                             ("no test executes this code");
+                           Queue.Finished (Done);
+                           if Progress /= null then
+                              Progress (Done, Pending_Count, M, Rel (M.File));
+                           end if;
+                        end if;
+                     end if;
+                  end if;
+               end;
+            end loop;
+         end Skip_Uncovered;
 
          Any : Boolean;
       begin
@@ -788,7 +931,7 @@ package body AdaMutant.Runner is
             Any := False;
             for F in Schemas'Range loop
                Generate (F);
-               Any := Any or else not Schemas (F).Included.Is_Empty;
+               Any := Any or else Length (Schemas (F).Text) > 0;
             end loop;
             exit when not Any;
             Write_Sources (1, Restore => False);
@@ -816,6 +959,9 @@ package body AdaMutant.Runner is
                for Id of Schemas (F).Included loop
                   Combined (Id) := True;
                end loop;
+               for Site of Schemas (F).Sites loop
+                  Place (Site.Id) := Site.Number;
+               end loop;
             end loop;
             for Slot in 2 .. Slots loop
                Delete_Tree (Slot_Dir (Slot));
@@ -827,11 +973,17 @@ package body AdaMutant.Runner is
             declare
                Elapsed : Duration;
             begin
+               if S.Coverage_Analysis then
+                  Ada.Directories.Create_Path (Coverage_Dir);
+               end if;
                Baseline_Step ("combined-test", To_String (S.Test), 0.0,
                               Elapsed, S.Test_Memory_Limit_Mb, Slots);
                Combined_Test_TO :=
                  Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
             end;
+            if S.Coverage_Analysis then
+               Skip_Uncovered;
+            end if;
             Run_Workers (Combined_Build => True);
          end if;
          for Slot in 1 .. Slots loop

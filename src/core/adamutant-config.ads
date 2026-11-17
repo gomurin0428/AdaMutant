@@ -23,6 +23,7 @@ package AdaMutant.Config is
       Timeout_Ms       : Natural := 5_000;
       Build_Timeout_Ms : Natural := 600_000;
       Test_Memory_Limit_Mb : Natural := 0;
+      Coverage_Analysis : Boolean := True;
       Scan             : AdaMutant.Mutators.Scan_Options;
       Sandbox_Exclude  : String_Vector;
       Report_Dir       : Unbounded_String;

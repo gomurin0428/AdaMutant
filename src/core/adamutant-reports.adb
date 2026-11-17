@@ -148,6 +148,11 @@ package body AdaMutant.Reports is
                      Add (",""statusReason"":"
                           & Json_String (To_String (M.Status_Reason)));
                   end if;
+                  if M.Reached = Covered then
+                     Add (",""coveredBy"":[""tests""]");
+                  elsif M.Reached = Not_Covered then
+                     Add (",""coveredBy"":[]");
+                  end if;
                   if M.Killed_By /= None then
                      Add (",""killedBy"":["
                           & Json_String (if M.Killed_By = Tests then "tests"
@@ -273,6 +278,39 @@ package body AdaMutant.Reports is
             end if;
          end loop;
       end if;
+
+      --  The lines that no test executes, once each: there the mutation
+      --  does not matter.  With a proof their mutants are not NoCoverage.
+      declare
+         Header : Boolean := False;
+         K      : Positive := R.Mutants.First_Index;
+         Last   : Positive;
+      begin
+         while K <= R.Mutants.Last_Index loop
+            Last := K;
+            if R.Mutants (K).Reached = Not_Covered then
+               while Last < R.Mutants.Last_Index
+                 and then R.Mutants (Last + 1).Reached = Not_Covered
+                 and then R.Mutants (Last + 1).File = R.Mutants (K).File
+                 and then R.Mutants (Last + 1).Start_Pos.Line
+                          = R.Mutants (K).Start_Pos.Line
+               loop
+                  Last := Last + 1;
+               end loop;
+               if not Header then
+                  Ada.Text_IO.New_Line;
+                  Ada.Text_IO.Put_Line ("Lines that no test executes:");
+                  Header := True;
+               end if;
+               Ada.Text_IO.Put_Line
+                 ("  " & To_String (R.Files (R.Mutants (K).File).Path) & ":"
+                  & Image (R.Mutants (K).Start_Pos.Line) & " ("
+                  & Image (Last - K + 1)
+                  & (if Last = K then " mutant)" else " mutants)"));
+            end if;
+            K := Last + 1;
+         end loop;
+      end;
 
       Ada.Text_IO.New_Line;
       Ada.Text_IO.Put_Line (Pad ("File", Name_Width, False)
