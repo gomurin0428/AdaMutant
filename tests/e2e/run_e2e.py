@@ -665,7 +665,9 @@ def edit_line(path, old, new):
 
 def check_since():
     """--since REF mutates only lines changed since the merge base."""
-    work = Path(tempfile.mkdtemp(prefix="adamutant-since-"))
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-since-"))
+    work = root
     try:
         shutil.copytree(ROOT / "examples" / "calculator", work / "p",
                         ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
@@ -723,12 +725,14 @@ def check_since():
             errors.append(f"bad ref: exit {bad.returncode}, {bad.stderr}")
         return errors
     finally:
-        shutil.rmtree(work.parent, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def check_proof_log():
     """What the report says about a proof depends on the log of the prover."""
-    work = Path(tempfile.mkdtemp(prefix="adamutant-proof-"))
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-proof-"))
+    work = root
     try:
         shutil.copytree(ROOT / "examples" / "spark_counter", work / "p",
                         ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
@@ -796,7 +800,7 @@ def check_proof_log():
             errors.append("a message of the unmodified project is counted")
         return errors
     finally:
-        shutil.rmtree(work.parent, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def main():
