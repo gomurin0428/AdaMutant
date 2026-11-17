@@ -82,31 +82,36 @@ package body AdaMutant.Files is
 
    procedure Wait_Past_Stamps (Dir : String; Relative : String_Vectors.Vector)
    is
+      --  OS_Time and its operations only: the type of To_C is time_t up to
+      --  GNAT 15 and Long_Long_Integer from GNAT 16 on.
       use GNAT.OS_Lib;
-
-      function Now return Long_Long_Integer is
-        (Long_Long_Integer (To_C (Current_Time)));
-
-      Newest : Long_Long_Integer := Long_Long_Integer'First;
-      Start  : constant Long_Long_Integer := Now;
+      Start  : constant OS_Time := Current_Time;
+      Newest : OS_Time := Invalid_Time;
    begin
       for Name of Relative loop
          declare
             Stamp : constant OS_Time := File_Time_Stamp (Join (Dir, Name));
          begin
-            if Stamp /= Invalid_Time then
-               Newest := Long_Long_Integer'Max
-                 (Newest, Long_Long_Integer (To_C (Stamp)));
+            if Stamp /= Invalid_Time
+              and then (Newest = Invalid_Time or else Stamp > Newest)
+            then
+               Newest := Stamp;
             end if;
          end;
       end loop;
-      if Newest = Long_Long_Integer'First then
+      if Newest = Invalid_Time then
          return;
       end if;
-      Newest := Long_Long_Integer'Min (Newest, Start);
-      while Now < Newest + 2 loop
-         delay 0.05;
-      end loop;
+      if Newest > Start then
+         Newest := Start;
+      end if;
+      declare
+         Done : constant OS_Time := To_Ada (To_C (Newest) + 2);
+      begin
+         while Current_Time < Done loop
+            delay 0.05;
+         end loop;
+      end;
    end Wait_Past_Stamps;
 
    function Glob_Match (Pattern, Path : String) return Boolean is
