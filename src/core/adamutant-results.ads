@@ -29,6 +29,10 @@ package AdaMutant.Results is
       Status        : Mutant_Status := Pending;
       Status_Reason : Unbounded_String;
       Killed_By     : Detector := None;
+      Failed_Checks : AdaMutant.Config.String_Vector;
+      --  For a mutant that the proof detects: the kinds of the checks that
+      --  could not be proved ("postcondition", "range check", ...), each
+      --  once, in the order of the messages.
       Reached       : Coverage := Unknown;
       Equivalent    : Boolean := False;
       --  Ignored because its object code is that of the unmodified

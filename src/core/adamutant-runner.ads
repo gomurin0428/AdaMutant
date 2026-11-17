@@ -23,6 +23,20 @@ package AdaMutant.Runner is
    --  The first compiler error in the text of a build log (a GNAT line
    --  "file:line:col: error: message"), or "" when there is none.
 
+   function Proof_Failures
+     (Log : String) return AdaMutant.Files.String_Vectors.Vector;
+   --  The messages in the text of a GNATprove log that make a proof fail:
+   --  the lines "file:line:col: severity: text" whose severity is high,
+   --  medium, low or error, each from the name of its file on.
+
+   function Check_Kind (Message : String) return String;
+   --  What a message of Proof_Failures is about: "postcondition" for
+   --  "p.ads:9:17: medium: postcondition might fail", "range check" for
+   --  "p.adb:5:16: medium: range check might fail, cannot prove ...",
+   --  "initialization" for the messages of the flow analysis about
+   --  objects that are not initialized, "error" for an error.  The names
+   --  that a message quotes are not part of the kind.
+
    procedure Execute
      (R            : in out AdaMutant.Results.Report;
       Keep_Sandbox : Boolean;

@@ -63,7 +63,10 @@ EXAMPLES = {
                   "begin\n   return X + 1;\nend Unused;\n"},
         "output": "warning: src/unused.adb is not compiled by the build command",
     },
-    "spark_counter": {"exit": 0, "killed_by": "proof"},
+    # The report says which checks the proof failed on.
+    "spark_counter": {"exit": 0, "killed_by": "proof",
+                      "proof_checks": ["postcondition", "range check"],
+                      "output": "Mutants killed by the proof, by the check that fails"},
     # A mutant that does not compile ("X * 2" with a Float X) must not stop
     # the build that contains all mutants: it becomes a CompileError and the
     # others are tested.  The test here checks little, so the score is
@@ -564,9 +567,13 @@ def run_example(name, spec, update):
             errors.append("schemaVersion is not 2")
         actual = statuses(report)
         mutants = [m for f in report["files"].values() for m in f["mutants"]]
+        killers = {k for m in mutants for k in m.get("killedBy", [])}
         if "killed_by" in spec and not any(
-                spec["killed_by"] in m.get("killedBy", []) for m in mutants):
+                k.split(":")[0] == spec["killed_by"] for k in killers):
             errors.append(f"no mutant killed by {spec['killed_by']}")
+        for check in spec.get("proof_checks", []):
+            if f"proof: {check}" not in killers:
+                errors.append(f"no mutant killed by the proof of a {check}: {sorted(killers)}")
         # Mutants in code that the tests do not execute are not run.
         logs = work / ".adamutant" / "logs"
         uncovered = [m for m in mutants if m.get("coveredBy") == []]
@@ -658,7 +665,9 @@ def edit_line(path, old, new):
 
 def check_since():
     """--since REF mutates only lines changed since the merge base."""
-    work = Path(tempfile.mkdtemp(prefix="adamutant-since-"))
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-since-"))
+    work = root
     try:
         shutil.copytree(ROOT / "examples" / "calculator", work / "p",
                         ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
@@ -716,7 +725,82 @@ def check_since():
             errors.append(f"bad ref: exit {bad.returncode}, {bad.stderr}")
         return errors
     finally:
-        shutil.rmtree(work.parent, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_proof_log():
+    """What the report says about a proof depends on the log of the prover."""
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-proof-"))
+    work = root
+    try:
+        shutil.copytree(ROOT / "examples" / "spark_counter", work / "p",
+                        ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
+        work = work / "p"
+        # A prover whose output is known for each mutant.
+        (work / "fake_prove.py").write_text(
+            "import os, sys, time\n"
+            "n = os.environ.get('ADAMUTANT_MUTANT_ID', '0')\n"
+            "# The unmodified project has this message too; a mutant moves it.\n"
+            "print('counters.adb:%s:1: low: overflow check might fail'\n"
+            "      % (1 if n == '0' else 2))\n"
+            "if n == '1':\n"
+            "    sys.exit(1)\n"
+            "if n == '2':\n"
+            "    print('2026-11-17T08:00:00 /x/counters.adb:5:16: medium: range check'\n"
+            "          ' might fail, cannot prove lower bound')\n"
+            "    print('counters.ads:9:17: medium: postcondition might fail')\n"
+            "    print('counters.ali:0:0: note: not a message')\n"
+            "    sys.exit(1)\n"
+            "if n == '3':\n"
+            "    print('counters.adb:7:8: high: \"Y\" is not initialized in \"Init\"')\n"
+            "    print('counters.adb:7:9: medium: \"X\" might not be initialized')\n"
+            "    sys.exit(1)\n"
+            "if n == '4':\n"
+            "    time.sleep(30)\n"
+            "sys.exit(0)\n")
+        python = (f'"{sys.executable}"' if " " in sys.executable
+                  else sys.executable).replace("\\", "/")
+        config = work / "adamutant.toml"
+        lines = [line for line in config.read_text().splitlines(True)
+                 if not line.startswith(("prove", "equivalence_build"))]
+        config.write_text(f"prove = '{python} fake_prove.py'\ntimeout_ms = 1000\n"
+                          + "".join(lines))
+        proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if proc.returncode != 0:
+            return [f"exit status {proc.returncode}\n{proc.stdout}"]
+        report = json.loads((work / ".adamutant" / "reports" / "mutation-report.json")
+                            .read_text(encoding="utf-8"))
+        mutants = {m["id"]: m for f in report["files"].values() for m in f["mutants"]}
+        expected = {
+            # Only the message that the unmodified project has too.
+            "1": ("Killed", ["proof"], "proof failed with exit status 1"),
+            "2": ("Killed", ["proof: range check", "proof: postcondition"],
+                  "proof failed: counters.adb:5:16: medium: range check might fail,"
+                  " cannot prove lower bound (and 1 more)"),
+            "3": ("Killed", ["proof: initialization"],
+                  'proof failed: counters.adb:7:8: high: "Y" is not initialized in "Init"'
+                  " (and 1 more)"),
+            "4": ("Timeout", ["proof"], "proof did not finish within the timeout"),
+            "5": ("Survived", None, "proof passed"),
+        }
+        errors = []
+        for n, want in expected.items():
+            m = mutants[n]
+            got = (m["status"], m.get("killedBy"), m.get("statusReason"))
+            if got != want:
+                errors.append(f"mutant {n}: {got}, expected {want}")
+        for line in ("  range check    |     1 |     0 alone",
+                     "  postcondition  |     1 |     0 alone",
+                     "  initialization |     1 |     1 alone"):
+            if line not in proc.stdout:
+                errors.append(f"output lacks {line!r}\n{proc.stdout}")
+        if "overflow check" in proc.stdout:
+            errors.append("a message of the unmodified project is counted")
+        return errors
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def main():
@@ -725,7 +809,8 @@ def main():
         sys.exit(f"{EXE} not found; run 'make build' first")
     failed = False
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
-    unknown = [a for a in only if a not in EXAMPLES and a != "since"]
+    checks = (("since", check_since), ("proof_log", check_proof_log))
+    unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:
         sys.exit("no such case: " + " ".join(unknown))
     for name, spec in EXAMPLES.items():
@@ -736,9 +821,11 @@ def main():
         for e in errors:
             print("  " + e)
         failed = failed or bool(errors)
-    if not only or "since" in only:
-        errors = check_since()
-        print(("FAIL " if errors else "ok   ") + "since")
+    for name, check in checks:
+        if only and name not in only:
+            continue
+        errors = check()
+        print(("FAIL " if errors else "ok   ") + name)
         for e in errors:
             print("  " + e)
         failed = failed or bool(errors)

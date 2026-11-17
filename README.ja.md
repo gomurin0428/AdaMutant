@@ -125,6 +125,22 @@ Log ("...");
 
 `スコア = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
 
+### 証明のどの検査で検出したか
+
+証明で検出したミュータント（Killed、`killedBy` が証明）には、GNATprove が証明できなかった検査の種類を記録します。JSON の `killedBy` は `["proof: postcondition", "proof: range check"]` のようになり、`statusReason` には GNATprove の最初のメッセージが入ります。コンソールには、検査の種類ごとの数が出ます。
+
+```
+Mutants killed by the proof, by the check that fails (alone: no other kind of check fails for the mutant):
+  range check   |     5 |     2 alone
+  postcondition |     5 |     2 alone
+```
+
+`alone` は、その種類の検査だけで検出したミュータントの数です。範囲検査やオーバーフロー検査だけで検出したミュータントは、契約を見直すきっかけにはなりますが、それだけで契約が弱いとは言えません。GNATprove は、検査のあとのコードを「その検査は成り立つ」という前提で証明します。そのため、ミュータントが誤った動作をする入力は、実行時検査で止まり、事後条件の証明には届かないことがあります。上の例の `range check` だけで検出した 2 つも、事後条件が結果を完全に決めている関数のミュータントです。
+
+- 種類の名前は GNATprove のメッセージから取ります（`... might fail` の前の部分）。メッセージが引用している名前（変数や手続きの名前）は種類に含めません。初期化されていないオブジェクトについてのフロー解析のメッセージは、まとめて `initialization` です
+- 変更前のプロジェクトの証明にも出ているメッセージは数えません（同じファイルの同じ文面のメッセージを、行と桁が違っても同じものとみなします）
+- メッセージを読み取れなかったときは、これまでどおり `killedBy` は `["proof"]` です
+
 ## 仕組み
 
 1. 元のプロジェクトを `.adamutant/sandbox/1` にコピーし、ビルドとテスト（と証明）を一度通して所要時間を測る。失敗したらエラーで止まる

@@ -153,7 +153,18 @@ package body AdaMutant.Reports is
                   elsif M.Reached = Not_Covered then
                      Add (",""coveredBy"":[]");
                   end if;
-                  if M.Killed_By /= None then
+                  if M.Killed_By = Proof and then not M.Failed_Checks.Is_Empty
+                  then
+                     Add (",""killedBy"":[");
+                     for K in M.Failed_Checks.First_Index
+                       .. M.Failed_Checks.Last_Index
+                     loop
+                        Add ((if K > M.Failed_Checks.First_Index then ","
+                              else "")
+                             & Json_String ("proof: " & M.Failed_Checks (K)));
+                     end loop;
+                     Add ("]");
+                  elsif M.Killed_By /= None then
                      Add (",""killedBy"":["
                           & Json_String (if M.Killed_By = Tests then "tests"
                                          else "proof") & "]");
@@ -330,6 +341,45 @@ package body AdaMutant.Reports is
             end if;
             K := Last + 1;
          end loop;
+      end;
+
+      --  What the proof detects the mutants with.
+      declare
+         Kinds  : AdaMutant.Config.String_Vector;
+         Width  : Natural := 0;
+      begin
+         for M of R.Mutants loop
+            for Kind of M.Failed_Checks loop
+               if not Kinds.Contains (Kind) then
+                  Kinds.Append (Kind);
+                  Width := Natural'Max (Width, Kind'Length);
+               end if;
+            end loop;
+         end loop;
+         if not Kinds.Is_Empty then
+            Ada.Text_IO.New_Line;
+            Ada.Text_IO.Put_Line
+              ("Mutants killed by the proof, by the check that fails"
+               & " (alone: no other kind of check fails for the mutant):");
+            for Kind of Kinds loop
+               declare
+                  Count, Alone : Natural := 0;
+               begin
+                  for M of R.Mutants loop
+                     if M.Failed_Checks.Contains (Kind) then
+                        Count := Count + 1;
+                        if Natural (M.Failed_Checks.Length) = 1 then
+                           Alone := Alone + 1;
+                        end if;
+                     end if;
+                  end loop;
+                  Ada.Text_IO.Put_Line
+                    ("  " & Pad (Kind, Width, False) & " |"
+                     & Pad (Image (Count), 6) & " |"
+                     & Pad (Image (Alone), 6) & " alone");
+               end;
+            end loop;
+         end if;
       end;
 
       Ada.Text_IO.New_Line;

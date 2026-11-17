@@ -102,6 +102,8 @@ package AdaMutant.Schemata is
       File : Unbounded_String;  --  lower-case base name
       Line : Positive := 1;
       Text : Unbounded_String;  --  the whole line of the log
+      Name_First : Positive := 1;
+      --  Where the base name of the file starts in Text.
    end record;
 
    package Diagnostic_Vectors is new Ada.Containers.Vectors
@@ -109,6 +111,7 @@ package AdaMutant.Schemata is
 
    function Diagnostics (Log : String) return Diagnostic_Vectors.Vector;
    --  The compiler messages ("file:line:column: text") in a build log.
+   --  A line whose line number is 0 is not one.
 
    function Main_Source (Ali : String) return String;
    --  The lower-case file name of the source of the main subprogram that
