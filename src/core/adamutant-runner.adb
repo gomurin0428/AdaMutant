@@ -588,6 +588,19 @@ package body AdaMutant.Runner is
       Prove_Ended : array (1 .. Positive'Max (1, S.Concurrency)) of Time :=
         [others => Started];
 
+      --  The build command makes libraries, and when the last build of
+      --  each sandbox ended.  gprbuild takes a library to be up to date
+      --  when its time stamp is not older than those of its objects, and
+      --  time stamps have whole-second resolution: an object compiled in
+      --  the second in which the library was made does not get into it,
+      --  and the tests then run the library of the build before.  So,
+      --  where there are libraries, a build starts in a later second than
+      --  the one in which the build before it ended (see
+      --  Wait_For_New_Stamp).
+      Has_Libraries : Boolean := False;
+      Build_Ended   : array (1 .. Positive'Max (1, S.Concurrency)) of Time :=
+        [others => Started];
+
       --  GNATprove skips its proof phase when the files it regenerates get
       --  the same time stamp as the previous run's results.  Time stamps
       --  have whole-second (two-second on FAT) resolution, so start the next
@@ -711,10 +724,14 @@ package body AdaMutant.Runner is
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          if not Built then
+            if Has_Libraries then
+               Wait_For_New_Stamp (Build_Ended (Slot));
+            end if;
             declare
                B : constant Run_Result :=
                  Step ("build", To_String (S.Build), Build_TO);
             begin
+               Build_Ended (Slot) := Clock;
                if B.Timed_Out then
                   M.Status := Compile_Error;
                   M.Status_Reason := To_Unbounded_String ("build timed out");
@@ -1242,10 +1259,15 @@ package body AdaMutant.Runner is
             end loop;
             exit when not Any;
             Write_Sources (1, Restore => False);
+            if Has_Libraries then
+               Wait_For_New_Stamp (Build_Ended (1));
+            end if;
             declare
                B : constant Run_Result :=
                  Run (To_String (S.Build), Slot_Dir (1), Log, 0, Build_TO);
             begin
+               --  The other sandboxes become copies of this one.
+               Build_Ended := [others => Clock];
                exit when not B.Timed_Out and then B.Exit_Code = 0;
                if B.Timed_Out then
                   raise Run_Error with
@@ -1753,6 +1775,22 @@ package body AdaMutant.Runner is
       begin
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
       end;
+      Build_Ended := [others => Clock];
+      for Path of Find_Files (Slot_Dir (1), String_Vectors.Empty_Vector) loop
+         declare
+            Name : constant String := Base_Name (Path);
+
+            function Ends_With (Extension : String) return Boolean is
+              (Name'Length > Extension'Length
+               and then Name (Name'Last - Extension'Length + 1 .. Name'Last)
+                        = Extension);
+         begin
+            Has_Libraries := Has_Libraries
+              or else Ends_With (".a") or else Ends_With (".lib")
+              or else Ends_With (".so") or else Ends_With (".dll")
+              or else Ends_With (".dylib");
+         end;
+      end loop;
 
       --  Counted before the NoCoverage check, which needs the files the
       --  baseline test compiles too, so a few sandboxes may stay idle.
