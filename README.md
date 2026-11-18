@@ -111,10 +111,10 @@ Exit status: 0 = success, 1 = error (a mistake in the configuration, the origina
 ```toml
 mutate = ["src/**/*.adb", "src/**/*.ads"]   # files to mutate
 exclude = ["src/generated/**"]
-build = "gprbuild -p -q -P tests.gpr"       # required. A mutant that fails to build is CompileError
+build = "gprbuild -p -q -P tests.gpr -cargs -gnata"  # required. A mutant that fails to build is CompileError
 test = "bin/run_tests"                      # required (or [tests]); Killed when the exit status is not 0
 prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
-equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # optional. The build used to recognize equivalent mutants
+equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -gnata -O2 -g0"  # optional. The build used to recognize equivalent mutants
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
 timeout_ms = 5000
@@ -125,7 +125,6 @@ bail = true                                 # false runs the remaining tests aft
 mutators = ["ArithmeticOperator", "EqualityOperator"]  # when omitted, all but LoopDirection
 exclude_mutators = ["StringLiteral"]        # left out of the mutators above, also when in include_mutators
 include_mutators = ["LoopDirection"]        # added to them
-mutate_contracts = false                    # true also mutates aspects such as Pre/Post
 sandbox_exclude = [".git", "obj", "bin"]    # not copied into the sandboxes
 report_dir = ".adamutant/reports"
 
@@ -171,7 +170,7 @@ A reused result rests on nothing but the lines being unchanged. In the following
 - Tests were removed or weakened (a mutant that counts as detected survives now)
 - What an unchanged line does has changed because of a change in another line or another file
 - The build or test commands or the compiler changed
-- The mutators changed (`mutators`, `exclude_mutators`, `include_mutators`, `mutate_contracts`): with `--since`, the new mutants on unchanged lines have no result in the report and stay Ignored (`unchanged since REF`)
+- The mutators changed (`mutators`, `exclude_mutators`, `include_mutators`): with `--since`, the new mutants on unchanged lines have no result in the report and stay Ignored (`unchanged since REF`). So does a report of an earlier version that did not mutate contracts
 - Mutants whose result depends on the load of the machine (a Timeout because the time ran out)
 
 ### Speeding up the proof of the mutants
@@ -213,10 +212,21 @@ An example with GNATprove 16.1: in a unit of 24 functions (480 checks), with a m
 | StatementDeletion | assignment statements, procedure call statements, raise statements and return statements without a value (`return;`) → `null;`. Not a `return;` right before `exception` or an `end` that is not `end if`/`loop`/`case`/`select`, where it changes nothing in a body (it is also left out before the end of a nested block, where it does change something). Not a raise or `return;` that is the whole branch of an `if` or `elsif` without an `else`, while ConditionalExpression is enabled: it already makes that program (condition → `False`). Not an exit statement, which could make the loop run for ever, nor a delay statement, whose only effect (time) tests and proof rarely observe |
 | NumericLiteral | `0`→`1`, `1`→`0`, `n`→`n+1`, a real literal → `0.0`. Based integer literals and integer literals with an exponent follow the same rules, and the base is kept (`16#FF#`→`16#100#`, `1E6`→`1000001`). The bounds of the range of a declared subtype, such as `String (1 .. 6)`, are not mutated |
 | StringLiteral | `"abc"`→`""`, `""`→`"AdaMutant was here!"` |
-| AttributeSwap | `'First`↔`'Last`, `'Min`↔`'Max`, `'Succ`↔`'Pred`, `'Floor`↔`'Ceiling`, `'First_Valid`↔`'Last_Valid`. The counterpart gives a value of the same type, so the mutant type-checks; it can still fail to compile where choices must differ or cover the type (case choices, named array aggregates) or where a static value goes out of range (`Color'Succ (Color'Last)`), and is then a CompileError. Not in the subtype of a declaration (`X : String (1 .. A'Last)`, `subtype S is T range T'First .. T'Last`), like the bounds of NumericLiteral; an initial value (`L : constant Natural := A'Last`) and an aspect of the declaration (a predicate, with `mutate_contracts`) are mutated |
+| AttributeSwap | `'First`↔`'Last`, `'Min`↔`'Max`, `'Succ`↔`'Pred`, `'Floor`↔`'Ceiling`, `'First_Valid`↔`'Last_Valid`. The counterpart gives a value of the same type, so the mutant type-checks; it can still fail to compile where choices must differ or cover the type (case choices, named array aggregates) or where a static value goes out of range (`Color'Succ (Color'Last)`), and is then a CompileError. Not in the subtype of a declaration (`X : String (1 .. A'Last)`, `subtype S is T range T'First .. T'Last`), like the bounds of NumericLiteral; an initial value (`L : constant Natural := A'Last`) and an aspect of the declaration (a predicate) are mutated |
 | LoopDirection | `for I in A .. B loop`↔`for I in reverse A .. B loop`. `reverse` is added to a loop over a range (`A .. B`, `X'Range`) or over a type or subtype named alone that is declared in the file, in its spec or in Standard (`for I in Index loop`, `for C in Character loop`). Not to a loop over another name (`for C in L loop`, `for I in Types.Index loop`) or an iterator (`for C in V.Iterate`, `for E of A`), which may be a container or an iterator that cannot go backwards; not in a quantified expression or an aggregate. The `when` of an iterator filter ends the range. `reverse` is removed from any `for ... in reverse` loop, an iterator too, since going forwards always compiles. **Off by default**: in many loops the order does not matter (a sum, a copy into another array), and the mutant is then equivalent, yet a loop invariant usually makes its proof fail, so it is listed as a candidate for a missing test. Turn it on with `include_mutators = ["LoopDirection"]` |
 
-`with`/`use` clauses, `pragma`s, representation clauses (`for X'Size use ...`) and `digits`/`delta` are not mutated. The default values of the formal parameters of a subprogram are not mutated either, because the program does not compile unless the declaration and the body match (full conformance). The default values in `is null` and `is abstract` subprograms, in expression functions and in generic formal subprograms are mutated. Aspects (`Pre`, `Post`, `Type_Invariant` and so on) and ghost code (the declarations and bodies of the subprograms, objects and types declared with the `Ghost` aspect, and the statements that call them or assign to them) are mutated only when `mutate_contracts = true`. The ghost names are collected from the `.adb` being mutated and from the `.ads` of the same name.
+`with`/`use` clauses, `pragma`s, representation clauses (`for X'Size use ...`) and `digits`/`delta` are not mutated. The default values of the formal parameters of a subprogram are not mutated either, because the program does not compile unless the declaration and the body match (full conformance). The default values in `is null` and `is abstract` subprograms, in expression functions and in generic formal subprograms are mutated. Aspects that are contracts (`Pre`, `Post` and their `'Class` forms, `Contract_Cases`, `Type_Invariant`, the predicates, `Default_Initial_Condition`, `Initial_Condition`, `Subprogram_Variant`, `Refined_Post`, `Exceptional_Cases` and so on) and ghost code (the declarations and bodies of the subprograms, objects and types declared with the `Ghost` aspect, and the statements that call them or assign to them) are always mutated: a mutant of a contract shows how strong the contract is (see below). Other aspects (`Size`, `Alignment`, `Inline`, `Import`, `External_Name`, `Global`, `Depends`, `Annotate` and so on) are never mutated, like representation clauses. The ghost names are collected from the `.adb` being mutated and from the `.ads` of the same name.
+
+Contracts and ghost code are only executed in a build with assertions, so build the code under test with `-gnata` (with gprbuild, `-cargs -gnata` reaches the projects that the test project uses); otherwise the tests cannot detect a mutant of a contract. After the build of the unchanged project, when there are mutants of contracts, AdaMutant reads the GNAT ALI files of the mutated files and warns when none was compiled with `-gnata` (unless a configuration pragma file `.adc` or the source has an `Assertion_Policy` with `Check`). The check needs the ALI files after `build`: when the test command builds the code, it does not warn. A configuration with `mutate_contracts = false`, from earlier versions, is refused: remove the line.
+
+A mutant of a contract that the proof detects is not listed among the candidates for a missing test: no test can detect a weaker postcondition, for instance, since the code is the same. How to read the mutants of a contract that survive the tests and the proof:
+
+- A stronger postcondition (`Post => R >= 0` → `Post => R > 0`) that still proves: the body guarantees more than the contract says, and the contract could say more. This holds for a body that GNATprove proves; for a body outside SPARK, GNATprove only assumes the postcondition
+- A weaker postcondition that still proves: no caller's proof needs that part of the contract. Tests never detect a weaker postcondition
+- A stronger precondition that still proves: every caller in SPARK meets it, and no test calls the subprogram outside it. For a subprogram that SPARK code does not call (an API), add a test at the boundary
+- A weaker precondition that still proves: the body does not need that part of it
+- A mutant of a contract can be equivalent, when it says the same thing in another way. `equivalence_build` does not examine mutants of contracts, so such a mutant stays Survived
+- Without a proof (`prove = "exit 0"`), only the tests built with assertions examine contracts: a weaker postcondition then always survives, and the score is lower
 
 There is no comment that disables a mutant. A mutant that the tests cannot observe is left to the proof (see [Intended workflow](#intended-workflow)), and an equivalent mutant is recognized by `equivalence_build`.
 
@@ -364,7 +374,7 @@ There is one difference from building the mutants one at a time. The style check
 No test can detect a mutant that behaves exactly like the original program (an equivalent mutant). When `equivalence_build` holds a command, AdaMutant builds each survivor with that command and compares the object files with those of the unchanged project. When all of them are the same, the mutant is the same program as the unchanged project, so it becomes Ignored (with the reason `equivalent mutant: ...`) and leaves the score. The mutants found to be equivalent are listed on the console under `Equivalent mutants`.
 
 ```toml
-equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"
+equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -gnata -O2 -g0"
 ```
 
 Make the command the `build` command with only the switches for optimization and debug information changed.
@@ -384,7 +394,7 @@ To avoid a wrong verdict, AdaMutant does the following.
 - For each file, it first builds one mutant that was detected (Killed) with the command and makes sure that the object files change. If the command does not compile the file, the object files do not change and every survivor would look equivalent. When they do not change (up to three mutants are tried), when there is no detected mutant, or when the build fails, it prints a warning and does not examine the survivors of that file
 - After it has built a mutant, it reads the GNAT ALI files and makes sure that every unit that depends on the mutated file has been compiled again. A mutant for which this is not so is not taken to be equivalent
 - After each mutant is compared, the object files are put back to those of the unchanged project
-- Mutants of contracts (aspects and ghost code) are not examined. In a build without assertions they do not show in the objects, but they are other contracts all the same (with `mutate_contracts = true`)
+- Mutants of contracts (aspects and ghost code) are not examined. In a build without assertions they do not show in the objects, but they are other contracts all the same
 - When the command fails on the unchanged project, or when reading or writing a file fails on the way, it prints a warning and gives up. The results so far stay
 
 ## Examples

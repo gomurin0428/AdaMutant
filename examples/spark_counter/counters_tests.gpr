@@ -6,7 +6,7 @@ project Counters_Tests is
    for Main use ("test_counters.adb");
 
    package Compiler is
-      for Default_Switches ("Ada") use ("-gnat2022");
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnata");
    end Compiler;
 
 end Counters_Tests;

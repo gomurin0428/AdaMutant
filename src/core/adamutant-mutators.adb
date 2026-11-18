@@ -378,6 +378,10 @@ package body AdaMutant.Mutators is
          Depth      : array (1 .. N) of Natural := [others => 0];
          Seg_Start  : array (1 .. N) of Positive := [others => 1];
          In_Aspect  : array (1 .. N) of Boolean := [others => False];
+         Not_Contract : array (1 .. N) of Boolean := [others => False];
+         --  In an aspect that is no contract (Size, Inline, Import,
+         --  External_Name, Global, Annotate...), which is never mutated,
+         --  like a representation clause.
          Seg_Skip   : array (1 .. N) of Boolean := [others => False];
          Seg_Pragma : array (1 .. N) of Boolean := [others => False];
          In_Default : array (1 .. N) of Boolean := [others => False];
@@ -392,7 +396,7 @@ package body AdaMutant.Mutators is
 
          function Skipped (K : Positive) return Boolean is
            (Seg_Skip (Seg_Start (K)) or else Seg_Pragma (Seg_Start (K))
-            or else In_Default (K)
+            or else In_Default (K) or else Not_Contract (K)
             or else (not Options.Mutate_Contracts
                      and then (In_Aspect (K) or else In_Ghost (K))));
 
@@ -577,11 +581,27 @@ package body AdaMutant.Mutators is
             D      : Natural := 0;
             Start  : Positive := 1;
             Aspect : Boolean := False;
+            Contract_Aspect : Boolean := False;
+            --  The aspect that the specification is in is a contract.
          begin
             for K in 1 .. N loop
                Depth (K) := D;
                Seg_Start (K) := Start;
                In_Aspect (K) := Aspect;
+               --  The name of an aspect, after "with" or a comma.
+               if Aspect and then D = 0 and then S (K).Kind = Identifier
+                 and then (Is_Kw (K - 1, "with") or else Is_Del (K - 1, ","))
+               then
+                  Contract_Aspect := Lower (Txt (K)) in
+                    "pre" | "post" | "contract_cases" | "type_invariant"
+                    | "invariant" | "static_predicate" | "dynamic_predicate"
+                    | "predicate" | "ghost_predicate"
+                    | "default_initial_condition" | "initial_condition"
+                    | "subprogram_variant" | "refined_post"
+                    | "exceptional_cases" | "exit_cases" | "program_exit"
+                    | "always_terminates";
+               end if;
+               Not_Contract (K) := Aspect and then not Contract_Aspect;
                if Is_Del (K, "(") or else Is_Del (K, "[") then
                   D := D + 1;
                elsif Is_Del (K, ")") or else Is_Del (K, "]") then
@@ -723,8 +743,8 @@ package body AdaMutant.Mutators is
 
          --  Pass 2c: ghost code (declarations and bodies of ghost entities
          --  and statements calling or assigning them).  It only exists for
-         --  proof, so like contracts it is mutated only with
-         --  mutate_contracts.
+         --  proof and in builds with assertions, so like contracts it is
+         --  marked (Contract) and mutated only with Mutate_Contracts.
          declare
             Names  : Name_Sets.Set := Options.Ghost_Names;
             Ranges : Range_Vectors.Vector;

@@ -308,7 +308,12 @@ package body AdaMutant.Config is
          elsif Full = "include_mutators" then
             Included_List := Array_Value;
          elsif Full = "mutate_contracts" then
-            C.Scan.Mutate_Contracts := Boolean_Value;
+            --  Contracts are always mutated now; true is still accepted.
+            if not Boolean_Value then
+               Fail ("mutate_contracts = false is no longer possible:"
+                     & " contracts (aspects and ghost code) are always"
+                     & " mutated; remove the line");
+            end if;
          elsif Full = "sandbox_exclude" then
             C.Sandbox_Exclude := Array_Value;
             Have_Sandbox_Exclude := True;
@@ -389,6 +394,8 @@ package body AdaMutant.Config is
          C.Sandbox_Exclude.Append (".git");
       end if;
       C.Sandbox_Exclude.Append (".adamutant");
+      --  Contracts (aspects and ghost code) are always mutated.
+      C.Scan.Mutate_Contracts := True;
 
       Check_Mutators (Mutators_List, "mutators");
       Check_Mutators (Excluded_List, "exclude_mutators");
@@ -471,7 +478,9 @@ package body AdaMutant.Config is
       & LF
       & "# Commands run by the shell in a copy of this directory." & LF
       & "# A non-zero exit status of 'test' or 'prove' kills the mutant." & LF
-      & "build = ""gprbuild -p -q -P tests/tests.gpr""" & LF
+      & "# Assertions on (-gnata), so that the tests check the contracts:" & LF
+      & "# contracts (aspects and ghost code) are always mutated." & LF
+      & "build = ""gprbuild -p -q -P tests/tests.gpr -cargs -gnata""" & LF
       & "test = ""./tests/bin/test_main""" & LF
       & "# Instead of 'test': several test commands with names, in a [tests]" & LF
       & "# table at the end of this file.  The report then says which tests" & LF
@@ -496,7 +505,7 @@ package body AdaMutant.Config is
       & "# surviving mutant whose object files are the same as those of the" & LF
       & "# unmodified project is an equivalent mutant and becomes Ignored." & LF
       & "# equivalence_build = ""gprbuild -p -q -c -P tests/tests.gpr"
-      & " -cargs -O2 -g0""" & LF
+      & " -cargs -gnata -O2 -g0""" & LF
       & LF
       & "# concurrency = 4" & LF
       & "timeout_factor = 1.5" & LF
@@ -512,7 +521,6 @@ package body AdaMutant.Config is
       & "# exclude_mutators = [""StringLiteral""]" & LF
       & "# Off unless named in mutators or here: LoopDirection." & LF
       & "# include_mutators = [""LoopDirection""]" & LF
-      & "mutate_contracts = false" & LF
       & "sandbox_exclude = ["".git"", ""obj"", ""bin""]" & LF
       & "reporters = [""console"", ""html"", ""json""]" & LF
       & LF

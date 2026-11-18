@@ -459,6 +459,67 @@ procedure Unit_Tests is
               "statement deletion: raise at the end of a file", O);
    end Test_Deletions;
 
+   procedure Test_Contract_Aspects is
+      --  Only the aspects that are contracts are mutated (with
+      --  Mutate_Contracts); the others never are, like representation
+      --  clauses.
+      O : Scan_Options := (Mutate_Contracts => True, others => <>);
+   begin
+      O.Enabled := [others => False];
+      O.Enabled (Numeric_Literal) := True;
+      O.Enabled (Boolean_Literal) := True;
+      Expect ("package P is" & LF
+              & "   procedure Q (X : Integer) with" & LF
+              & "     Pre => X > 1, Inline => True, Global => null," & LF
+              & "     Annotate => (GNATprove, Intentional, ""a"", ""b"")," & LF
+              & "     Post'Class => X < 2;" & LF
+              & "   type T is new Integer with Size => 32, Default_Value => 3;" & LF
+              & "   subtype S is Integer with Static_Predicate => S in 4 .. 5;" & LF
+              & "   X : Integer with Volatile => True, Alignment => 16;" & LF
+              & "   function F return Boolean is (True)" & LF
+              & "     with Subprogram_Variant => (Decreases => 6);" & LF
+              & "end P;",
+              "NumericLiteral 1->0|NumericLiteral 2->3|NumericLiteral 4->5"
+              & "|NumericLiteral 5->6|BooleanLiteral True->False"
+              & "|NumericLiteral 6->7",
+              "only contract aspects are mutated", O);
+   end Test_Contract_Aspects;
+
+   procedure Test_Assertions_Check is
+      use AdaMutant.Files;
+      Tmp     : constant String :=
+        Ada.Directories.Current_Directory & "/obj/ali";
+      Sources : String_Vectors.Vector;
+      Ali     : constant String :=
+        "V ""GNAT Lib v16""" & LF & "A -gnat2022" & LF;
+   begin
+      if Ada.Directories.Exists (Tmp) then
+         Ada.Directories.Delete_Tree (Tmp);
+      end if;
+      Ada.Directories.Create_Path (Tmp & "/src");
+      Ada.Directories.Create_Path (Tmp & "/obj/gnatprove");
+      Write (Tmp & "/src/counters.adb", "package body Counters is end;");
+      Sources.Append ("src/counters.adb");
+      Check (AdaMutant.Runner.Without_Assertions (Tmp, Sources) = "",
+             "assertions: no ALI file, no warning");
+      Write (Tmp & "/obj/counters.ali", Ali & "A -O2" & LF);
+      Write (Tmp & "/obj/gnatprove/counters.ali", Ali & "A -gnata" & LF);
+      Check (AdaMutant.Runner.Without_Assertions (Tmp, Sources) = "src/counters.adb",
+             "assertions: compiled without -gnata",
+             AdaMutant.Runner.Without_Assertions (Tmp, Sources));
+      Write (Tmp & "/obj/counters.ali", Ali & "A -gnata" & LF & "A -O2" & LF);
+      Check (AdaMutant.Runner.Without_Assertions (Tmp, Sources) = "",
+             "assertions: compiled with -gnata");
+      Write (Tmp & "/obj/counters.ali", Ali);
+      Write (Tmp & "/gnat.adc", "pragma Assertion_Policy (Ignore);" & LF);
+      Check (AdaMutant.Runner.Without_Assertions (Tmp, Sources)
+               = "src/counters.adb",
+             "assertions: an Assertion_Policy that ignores them");
+      Write (Tmp & "/gnat.adc", "pragma Assertion_Policy (Check);" & LF);
+      Check (AdaMutant.Runner.Without_Assertions (Tmp, Sources) = "",
+             "assertions: turned on by a configuration pragma");
+   end Test_Assertions_Check;
+
    procedure Test_Comments is
    begin
       --  A comment changes nothing, whatever it says.
@@ -1063,6 +1124,17 @@ procedure Unit_Tests is
       Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF
                & "include_mutators = [""Nonsense""]",
                "config: an unknown mutator to include");
+      --  Contracts are always mutated; "mutate_contracts = false" is
+      --  refused, "true" accepted.
+      Check (C.Scan.Mutate_Contracts
+             and then Parse ("build = ""b""" & LF & "prove = ""p""" & LF
+                             & "test = ""t""" & LF
+                             & "mutate_contracts = true" & LF, "/r")
+                        .Scan.Mutate_Contracts,
+             "config: contracts are always mutated");
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF
+               & "mutate_contracts = false",
+               "config: mutate_contracts = false");
       Check (C.High = 90 and then C.Break = 10, "config thresholds");
       Check (Natural (C.Tests.Length) = 1
              and then To_String (C.Tests (1).Name) = "tests"
@@ -2150,6 +2222,8 @@ begin
    Test_Conditions;
    Test_Skipped;
    Test_Comments;
+   Test_Assertions_Check;
+   Test_Contract_Aspects;
    Test_Attributes;
    Test_Loop_Direction;
    Test_Deletions;

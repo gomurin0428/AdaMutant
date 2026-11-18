@@ -363,8 +363,11 @@ package body AdaMutant.Reports is
       --  The tests run first, so the proof only sees what they miss.  The
       --  mutants are in three groups by what GNATprove gives with the
       --  failure (see Proof_Evidence).
+      --  Not the mutants of contracts: no test can detect a weaker
+      --  postcondition, for instance, since the code is the same.
       if (for some M of R.Mutants =>
-            M.Status = Killed and then M.Killed_By = Proof)
+            M.Status = Killed and then M.Killed_By = Proof
+            and then not M.Mutation.Contract)
       then
          Ada.Text_IO.New_Line;
          Ada.Text_IO.Put_Line
@@ -373,6 +376,7 @@ package body AdaMutant.Reports is
             declare
                function In_Group (M : Mutant) return Boolean is
                  (M.Status = Killed and then M.Killed_By = Proof
+                  and then not M.Mutation.Contract
                   and then (if M.Evidence = None then Group = Undecided
                             else M.Evidence = Group));
             begin
