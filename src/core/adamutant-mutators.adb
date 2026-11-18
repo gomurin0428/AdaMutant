@@ -17,7 +17,9 @@ package body AdaMutant.Mutators is
          when Numeric_Literal        => "NumericLiteral",
          when String_Literal         => "StringLiteral",
          when Attribute_Swap         => "AttributeSwap",
-         when Loop_Direction         => "LoopDirection");
+         when Loop_Direction         => "LoopDirection",
+         when Conjunct_Deletion      => "ConjunctDeletion",
+         when Assertion_Deletion     => "AssertionDeletion");
 
    function Squash (S : String) return String is
       R    : String (1 .. S'Length);
@@ -429,6 +431,11 @@ package body AdaMutant.Mutators is
          --  like a representation clause.
          Seg_Skip   : array (1 .. N) of Boolean := [others => False];
          Seg_Pragma : array (1 .. N) of Boolean := [others => False];
+         In_Assertion : array (1 .. N) of Boolean := [others => False];
+         --  In the arguments of an assertion pragma (Assert,
+         --  Assert_And_Cut, Assume, Loop_Invariant, Loop_Variant), which is
+         --  a contract: only ConjunctDeletion changes it, and
+         --  AssertionDeletion deletes the pragma.
          In_Default : array (1 .. N) of Boolean := [others => False];
          In_Ghost   : array (1 .. N) of Boolean := [others => False];
 
@@ -484,6 +491,13 @@ package body AdaMutant.Mutators is
                                                 "subtype")));
          end In_Declared_Subtype;
 
+         function In_Contract (K : Positive) return Boolean is
+           (In_Assertion (K)
+            or else ((In_Aspect (K) or else In_Ghost (K))
+                     and then not Skipped (K)));
+         --  K is in a contract that may be mutated: a contract aspect, ghost
+         --  code or an assertion pragma.
+
          procedure Add
            (Kind        : Mutator_Kind;
             From, To    : Positive;
@@ -492,7 +506,13 @@ package body AdaMutant.Mutators is
          is
             A : constant Positive := (if Anchor = 0 then From else Anchor);
          begin
-            if not Options.Enabled (Kind) or else Skipped (A) then
+            if not Options.Enabled (Kind) then
+               return;
+            elsif Kind in Conjunct_Deletion | Assertion_Deletion then
+               if not Options.Mutate_Contracts or else not In_Contract (A) then
+                  return;
+               end if;
+            elsif Skipped (A) then
                return;
             end if;
             Result.Append
@@ -500,7 +520,8 @@ package body AdaMutant.Mutators is
                 First       => S (From).First,
                 Last        => S (To).Last,
                 Replacement => To_Unbounded_String (Replacement),
-                Contract    => In_Aspect (A) or else In_Ghost (A)));
+                Contract    => In_Aspect (A) or else In_Ghost (A)
+                                 or else In_Assertion (A)));
          end Add;
 
          function Same_Case (Model, Word : String) return String is
@@ -525,25 +546,23 @@ package body AdaMutant.Mutators is
                         or else (Is_Kw (J, "then") and then Is_Kw (J - 1, "and"))
                         or else (Is_Kw (J, "else") and then Is_Kw (J - 1, "or")))));
 
-         --  Ada does not allow different logical operators side by side
-         --  without parentheses, so in a chain such as "A and then B and then
-         --  C" the operands around the mutated operator are parenthesised:
-         --  "(A or else B) and then C", "((A and then B) or else C)".
-         procedure Add_Logical
-           (K : Positive; Width : Positive; New_Op : String)
+         function Op_Width (J : Positive) return Natural is
+           (if (Is_Kw (J, "and") and then Is_Kw (J + 1, "then"))
+              or else (Is_Kw (J, "or") and then Is_Kw (J + 1, "else"))
+            then 2
+            elsif Is_Kw (J, "and") or else Is_Kw (J, "or")
+              or else Is_Kw (J, "xor")
+            then 1
+            else 0);
+         --  The number of tokens of the logical operator at J, or 0.
+
+         procedure Chain (K : Positive; Width : Positive; L, R : out Positive);
+         --  L .. R is the chain of operands and logical operators around
+         --  the logical operator at K (of Width tokens), at its depth.
+
+         procedure Chain (K : Positive; Width : Positive; L, R : out Positive)
          is
             D : constant Natural := Depth (K);
-            L : Positive := K;
-            R : Natural := K + Width - 1;
-
-            function Op_Width (J : Positive) return Natural is
-              (if (Is_Kw (J, "and") and then Is_Kw (J + 1, "then"))
-                 or else (Is_Kw (J, "or") and then Is_Kw (J + 1, "else"))
-               then 2
-               elsif Is_Kw (J, "and") or else Is_Kw (J, "or")
-                 or else Is_Kw (J, "xor")
-               then 1
-               else 0);
 
             function Membership_Bar (J : Positive) return Boolean;
             --  J is a "|" between the choices of a membership test
@@ -574,16 +593,30 @@ package body AdaMutant.Mutators is
                or else (Depth (J) = D
                         and then (not Is_Boundary (J)
                                   or else Membership_Bar (J))));
-
-            Before, After : Natural := 0;
-            Next          : Natural;
          begin
+            L := K;
+            R := K + Width - 1;
             while L > 1 and then Inside (L - 1) loop
                L := L - 1;
             end loop;
             while R < N and then Inside (R + 1) loop
                R := R + 1;
             end loop;
+         end Chain;
+
+         --  Ada does not allow different logical operators side by side
+         --  without parentheses, so in a chain such as "A and then B and then
+         --  C" the operands around the mutated operator are parenthesised:
+         --  "(A or else B) and then C", "((A and then B) or else C)".
+         procedure Add_Logical
+           (K : Positive; Width : Positive; New_Op : String)
+         is
+            D : constant Natural := Depth (K);
+            L, R          : Positive;
+            Before, After : Natural := 0;
+            Next          : Natural;
+         begin
+            Chain (K, Width, L, R);
             declare
                J : Positive := L;
             begin
@@ -619,6 +652,67 @@ package body AdaMutant.Mutators is
                     Anchor => K);
             end;
          end Add_Logical;
+
+         --  ConjunctDeletion: the chain "A and B and C" (or with "and
+         --  then") at K, its first operator, without one of its operands,
+         --  for each operand: "B and C", "A and C", "A and B".  The line
+         --  breaks of what is left out follow the replacement (see Apply).
+         procedure Add_Conjuncts (K : Positive) is
+            D    : constant Natural := Depth (K);
+            L, R : Positive;
+         begin
+            Chain (K, Op_Width (K), L, R);
+            declare
+               --  Ops (I) is the first token of the I-th operator; the
+               --  operands are L .. Ops (1) - 1, Ops (1) + width .. Ops (2)
+               --  - 1, and so on.
+               Ops   : array (1 .. R - L + 1) of Positive;
+               Count : Natural := 0;
+               J     : Positive := L;
+            begin
+               while J <= R loop
+                  if Depth (J) = D and then Op_Width (J) > 0 then
+                     if not Is_Kw (J, "and") then
+                        return;
+                     end if;
+                     Count := Count + 1;
+                     Ops (Count) := J;
+                     J := J + Op_Width (J);
+                  else
+                     J := J + 1;
+                  end if;
+               end loop;
+               if Count = 0 or else Ops (1) /= K or else L = K then
+                  return;
+               end if;
+               for I in 1 .. Count + 1 loop
+                  declare
+                     First_Out : constant Positive :=
+                       (if I = Count + 1 then S (Ops (Count) - 1).Last + 1
+                        elsif I = 1 then S (L).First
+                        else S (Ops (I - 1) + Op_Width (Ops (I - 1))).First);
+                     --  What is left out: the operand and the operator
+                     --  after it, or for the last operand, the operator
+                     --  before it.
+                     Last_Out  : constant Natural :=
+                       (if I = Count + 1 then S (R).Last
+                        else S (Ops (I) + Op_Width (Ops (I))).First - 1);
+                     Breaks    : Unbounded_String;
+                  begin
+                     for C of Source (First_Out .. Last_Out) loop
+                        if C in ASCII.CR | ASCII.LF then
+                           Append (Breaks, C);
+                        end if;
+                     end loop;
+                     Add (Conjunct_Deletion, L, R,
+                          Source (S (L).First .. First_Out - 1)
+                          & Source (Last_Out + 1 .. S (R).Last)
+                          & To_String (Breaks),
+                          Anchor => K);
+                  end;
+               end loop;
+            end;
+         end Add_Conjuncts;
       begin
          --  Pass 1: nesting depth, segments (statements, declarations,
          --  alternatives) and aspect specifications.
@@ -725,6 +819,16 @@ package body AdaMutant.Mutators is
                     or else (Is_Kw (K, "for") and then Has_Use)
                     or else Has_At;
                   Seg_Pragma (K) := Is_Kw (K, "pragma");
+                  if Seg_Pragma (K) and then K < N
+                    and then S (K + 1).Kind = Identifier
+                    and then Lower (Txt (K + 1)) in
+                      "assert" | "assert_and_cut" | "assume"
+                      | "loop_invariant" | "loop_variant"
+                  then
+                     for I in K .. J - 1 loop
+                        In_Assertion (I) := True;
+                     end loop;
+                  end if;
                end;
             end if;
          end loop;
@@ -964,6 +1068,21 @@ package body AdaMutant.Mutators is
                         Add (Arithmetic_Operator, K, K, "*");
 
                      elsif Lw = "and" then
+                        --  Not the "and" of a list of interfaces ("new T
+                        --  and I with", "interface and I") outside aspects.
+                        if Options.Enabled (Conjunct_Deletion)
+                          and then In_Contract (K)
+                          and then (In_Aspect (K)
+                                    or else not
+                                      (Is_Kw (Seg_Start (K), "new")
+                                       or else Is_Kw (Seg_Start (K), "interface")
+                                       or else Is_Kw (Seg_Start (K), "limited")
+                                       or else Is_Kw (Seg_Start (K), "synchronized")
+                                       or else Is_Kw (Seg_Start (K), "task")
+                                       or else Is_Kw (Seg_Start (K), "protected")))
+                        then
+                           Add_Conjuncts (K);
+                        end if;
                         if Is_Kw (K + 1, "then") then
                            Add_Logical (K, 2, Same_Case (Txt (K), "or else"));
                         elsif not (Is_Kw (Seg_Start (K), "new")
@@ -1106,6 +1225,43 @@ package body AdaMutant.Mutators is
                                                          or else Is_Kw (J + 2, "select"))))))
                            then
                               Add (Statement_Deletion, K, J, "null;");
+                           end if;
+                        end;
+                     end if;
+
+                     --  Assertion deletion: an assertion pragma, which
+                     --  leaves nothing, or "null;" where the sequence of
+                     --  statements would be empty ("begin pragma Assert
+                     --  (X); end;").  Not "null;" anywhere: it would split
+                     --  a group of loop invariants, which GNAT rejects.
+                     if Lw = "pragma" and then Seg_Start (K) = K
+                       and then In_Assertion (K)
+                     then
+                        declare
+                           J : Positive := K + 1;
+                        begin
+                           while J < N and then not (Depth (J) = 0
+                                                     and then Is_Del (J, ";"))
+                           loop
+                              J := J + 1;
+                           end loop;
+                           if Is_Del (J, ";") then
+                              Add (Assertion_Deletion, K, J,
+                                   (if (Is_Kw (K - 1, "begin")
+                                        or else Is_Kw (K - 1, "loop")
+                                        or else Is_Kw (K - 1, "do")
+                                        or else Is_Kw (K - 1, "then")
+                                        or else Is_Kw (K - 1, "else")
+                                        or else Is_Kw (K - 1, "select")
+                                        or else Is_Del (K - 1, "=>"))
+                                      and then (Is_Kw (J + 1, "end")
+                                                or else Is_Kw (J + 1, "elsif")
+                                                or else Is_Kw (J + 1, "else")
+                                                or else Is_Kw (J + 1, "when")
+                                                or else Is_Kw (J + 1, "exception")
+                                                or else Is_Kw (J + 1, "or")
+                                                or else Is_Del (J + 1, "<<"))
+                                    then "null;" else ""));
                            end if;
                         end;
                      end if;

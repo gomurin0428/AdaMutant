@@ -285,8 +285,9 @@ procedure Unit_Tests is
               & "end F;",
               "StatementDeletion R := 1;->null;|NumericLiteral 1->0",
               "the aspects of an extended return end at do");
-      Expect ("package P is pragma Assert (X > 0); end P;", "",
-              "pragmas are skipped even with mutate_contracts",
+      Expect ("package P is pragma Assert (X > 0); end P;",
+              "AssertionDeletion pragma Assert (X > 0);->",
+              "an assertion pragma is only deleted",
               (Mutate_Contracts => True, others => <>));
       Expect ("package P is type T is new Parent and Iface with null record;"
               & " end P;",
@@ -501,6 +502,114 @@ procedure Unit_Tests is
               "NumericLiteral 7->8|NumericLiteral 8->9",
               "aspects after end record and private", O);
    end Test_Contract_Aspects;
+
+   procedure Test_Weakening is
+      --  ConjunctDeletion and AssertionDeletion change only contracts.
+      O : Scan_Options := (Mutate_Contracts => True, others => <>);
+   begin
+      O.Enabled := [others => False];
+      O.Enabled (Conjunct_Deletion) := True;
+      O.Enabled (Assertion_Deletion) := True;
+      Expect ("procedure Q (X, Y : Integer)" & LF
+              & "  with Pre => X > 0 and then Y > 0," & LF
+              & "       Post => (X > 1 and Y > 1 and X /= Y)," & LF
+              & "       Inline => A and B" & LF
+              & "is" & LF
+              & "   Z : Integer := X and Y;" & LF
+              & "   pragma Assert (X /= 3);" & LF
+              & "begin" & LF
+              & "   pragma Assert (X > 0 and then Y > 0, ""both"");" & LF
+              & "   for I in 1 .. X loop" & LF
+              & "      pragma Loop_Invariant (I > 0);" & LF
+              & "      pragma Loop_Invariant (Y > 0);" & LF
+              & "      Z := I;" & LF
+              & "   end loop;" & LF
+              & "   if Z > 0 and Y > 0 then" & LF
+              & "      pragma Assume (Z > 0);" & LF
+              & "   end if;" & LF
+              & "   pragma Annotate (GNATprove, False_Positive, ""a"", ""b"");" & LF
+              & "   pragma Assert_And_Cut (Z > 0);" & LF
+              & "end Q;",
+              "ConjunctDeletion X > 0 and then Y > 0->Y > 0"
+              & "|ConjunctDeletion X > 0 and then Y > 0->X > 0"
+              & "|ConjunctDeletion X > 1 and Y > 1 and X /= Y->Y > 1 and X /= Y"
+              & "|ConjunctDeletion X > 1 and Y > 1 and X /= Y->X > 1 and X /= Y"
+              & "|ConjunctDeletion X > 1 and Y > 1 and X /= Y->X > 1 and Y > 1"
+              & "|AssertionDeletion pragma Assert (X /= 3);->"
+              & "|AssertionDeletion pragma Assert (X > 0 and then Y > 0, ""both"");->"
+              & "|ConjunctDeletion X > 0 and then Y > 0->Y > 0"
+              & "|ConjunctDeletion X > 0 and then Y > 0->X > 0"
+              & "|AssertionDeletion pragma Loop_Invariant (I > 0);->"
+              & "|AssertionDeletion pragma Loop_Invariant (Y > 0);->"
+              & "|AssertionDeletion pragma Assume (Z > 0);->null;"
+              & "|AssertionDeletion pragma Assert_And_Cut (Z > 0);->",
+              "contract weakening", O);
+      --  The line breaks of what is left out stay.
+      Expect ("procedure R with" & LF
+              & "  Post => A" & LF
+              & "    and then B;",
+              "ConjunctDeletion A" & LF & "    and then B->B" & LF
+              & "|ConjunctDeletion A" & LF & "    and then B->A" & LF,
+              "contract weakening: line breaks", O);
+      --  Applied, every mutant keeps the lines of the source, so the
+      --  lines after it do not move.
+      declare
+         Source : constant String :=
+           "procedure R with" & LF
+           & "  Post => A" & LF
+           & "    and then B" & LF
+           & "    and then C;" & LF
+           & "procedure Q is begin" & LF
+           & "   pragma Assert (X > 0" & LF
+           & "                  and Y > 0);" & LF
+           & "   null;" & LF
+           & "end Q;" & LF;
+
+         function Lines (S : String) return Natural is
+            N : Natural := 0;
+         begin
+            for C of S loop
+               if C = ASCII.LF then
+                  N := N + 1;
+               end if;
+            end loop;
+            return N;
+         end Lines;
+
+         Same  : Boolean := True;
+         Count : Natural := 0;
+      begin
+         for M of Find (Source, O) loop
+            Count := Count + 1;
+            Same := Same and then Lines (Apply (Source, M)) = Lines (Source);
+         end loop;
+         Check (Same and then Count = 6,
+                "contract weakening: applied mutants keep the lines",
+                Count'Image);
+      end;
+      --  Ghost code; not with Mutate_Contracts off.
+      Expect ("procedure Lemma (X : Integer) with Ghost is" & LF
+              & "begin" & LF
+              & "   pragma Assert (X > 0 and X < 5);" & LF
+              & "end Lemma;",
+              "AssertionDeletion pragma Assert (X > 0 and X < 5);->null;"
+              & "|ConjunctDeletion X > 0 and X < 5->X < 5"
+              & "|ConjunctDeletion X > 0 and X < 5->X > 0",
+              "contract weakening: a lemma", O);
+      --  Not a list of interfaces of a ghost type; "null;" before a label
+      --  at the end of a sequence.
+      Expect ("package body Q is" & LF
+              & "   type GT is new Root and I1 with null record with Ghost;" & LF
+              & "   type I3 is interface and I1 with Ghost;" & LF
+              & "   procedure P is begin pragma Assert (X > 1); <<L2>> end P;" & LF
+              & "end Q;",
+              "AssertionDeletion pragma Assert (X > 1);->null;",
+              "contract weakening: interfaces and labels", O);
+      O.Mutate_Contracts := False;
+      Expect ("procedure P with Pre => A and B is begin" & LF
+              & "pragma Assert (C and D); X := Y; end P;",
+              "", "contract weakening: not with Mutate_Contracts off", O);
+   end Test_Weakening;
 
    procedure Test_Proof_Warnings is
       --  The output of GNATprove 16.1 with --proof-warnings=on, and the one
@@ -2373,6 +2482,7 @@ begin
    Test_Comments;
    Test_Assertions_Check;
    Test_Contract_Aspects;
+   Test_Weakening;
    Test_Proof_Warnings;
    Test_Never_Reached;
    Test_Attributes;
