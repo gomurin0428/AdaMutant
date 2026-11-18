@@ -40,8 +40,7 @@ procedure Unit_Tests is
       end if;
    end Check;
 
-   --  "Kind original->replacement" for every mutation, separated by "|";
-   --  ignored mutations get a leading "!".
+   --  "Kind original->replacement" for every mutation, separated by "|".
    function Describe
      (Source : String; Options : Scan_Options := (others => <>)) return String
    is
@@ -51,7 +50,7 @@ procedure Unit_Tests is
          if Length (R) > 0 then
             Append (R, "|");
          end if;
-         Append (R, (if M.Ignored then "!" else "") & Name (M.Kind) & " "
+         Append (R, Name (M.Kind) & " "
                  & Source (M.First .. M.Last) & "->" & To_String (M.Replacement));
       end loop;
       return To_String (R);
@@ -276,31 +275,18 @@ procedure Unit_Tests is
               "return and null are not deleted");
    end Test_Skipped;
 
-   procedure Test_Directives is
+   procedure Test_Comments is
    begin
+      --  A comment changes nothing, whatever it says.
       Expect ("procedure P is begin" & LF
               & "--  adamutant:disable-next-line ArithmeticOperator: reason" & LF
               & "X := A + 1;" & LF
-              & "Y := B - 1;" & LF & "end P;",
-              "StatementDeletion X := A + 1;->null;|!ArithmeticOperator +->-"
-              & "|NumericLiteral 1->0|StatementDeletion Y := B - 1;->null;"
-              & "|ArithmeticOperator -->+|NumericLiteral 1->0",
-              "disable-next-line with a mutator name");
-      Expect ("procedure P is begin" & LF
-              & "--  adamutant:disable" & LF
-              & "X := 1;" & LF
-              & "--  adamutant:enable" & LF
+              & "--  adamutant:disable Nonsense" & LF
               & "Y := 2;" & LF & "end P;",
-              "!StatementDeletion X := 1;->null;|!NumericLiteral 1->0"
-              & "|StatementDeletion Y := 2;->null;|NumericLiteral 2->3",
-              "disable and enable");
-      begin
-         Expect ("--  adamutant:disable Nonsense" & LF & "X := 1;", "?",
-                 "unknown mutator name");
-      exception
-         when Directive_Error =>
-            Check (True, "unknown mutator name");
-      end;
+              "StatementDeletion X := A + 1;->null;|ArithmeticOperator +->-"
+              & "|NumericLiteral 1->0|StatementDeletion Y := 2;->null;"
+              & "|NumericLiteral 2->3",
+              "comments do not disable mutants");
       declare
          O : Scan_Options;
       begin
@@ -309,7 +295,7 @@ procedure Unit_Tests is
          Expect ("procedure P is begin X := A + 1; end P;",
                  "NumericLiteral 1->0", "enabled mutator set", O);
       end;
-   end Test_Directives;
+   end Test_Comments;
 
    procedure Test_Ghost_Names is
       Names : constant Name_Sets.Set := Ghost_Names
@@ -1924,7 +1910,7 @@ begin
    Test_Operators;
    Test_Conditions;
    Test_Skipped;
-   Test_Directives;
+   Test_Comments;
    Test_Ghost_Names;
    Test_Contract_Flag;
    Test_Apply;

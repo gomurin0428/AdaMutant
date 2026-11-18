@@ -1,6 +1,4 @@
 with Ada.Characters.Handling; use Ada.Characters.Handling;
-with Ada.Containers.Ordered_Maps;
-with Ada.Strings.Fixed;
 with AdaMutant.Lexer; use AdaMutant.Lexer;
 
 package body AdaMutant.Mutators is
@@ -157,9 +155,6 @@ package body AdaMutant.Mutators is
       Kind := Mutator_Kind'First;
       return False;
    end Parse;
-
-   package Line_Maps is new Ada.Containers.Ordered_Maps
-     (Positive, Mutator_Set);
 
    type Word is access constant String;
 
@@ -325,104 +320,13 @@ package body AdaMutant.Mutators is
       N : Natural := 0;
       type Token_Array is array (Positive range <>) of Token;
       S : Token_Array (1 .. Natural (All_Tokens.Length));
-
-      --  Disabled mutators per significant token, from directive comments.
-      type Set_Array is array (Positive range <>) of Mutator_Set;
-      Disabled : Set_Array (1 .. Natural (All_Tokens.Length));
-      Next_Line : Line_Maps.Map;
    begin
-      declare
-         Current : Mutator_Set := [others => False];
-
-         function Parse_Set (Args : String; Line : Positive) return Mutator_Set
-         is
-            R     : Mutator_Set := [others => False];
-            Rest  : constant String := Ada.Strings.Fixed.Trim
-              (Args, Ada.Strings.Both);
-            Start : Positive := Rest'First;
-            K     : Mutator_Kind;
-         begin
-            if Rest = "" or else To_Lower (Rest) = "all" then
-               return [others => True];
-            end if;
-            for J in Rest'First .. Rest'Last + 1 loop
-               if J > Rest'Last or else Rest (J) = ',' then
-                  declare
-                     Item : constant String := Ada.Strings.Fixed.Trim
-                       (Rest (Start .. J - 1), Ada.Strings.Both);
-                  begin
-                     if To_Lower (Item) = "all" then
-                        R := [others => True];
-                     elsif Parse (Item, K) then
-                        R (K) := True;
-                     else
-                        raise Directive_Error with
-                          "line" & Line'Image & ": unknown mutator '"
-                          & Item & "' in adamutant directive";
-                     end if;
-                  end;
-                  Start := J + 1;
-               end if;
-            end loop;
-            return R;
-         end Parse_Set;
-
-         procedure Directive (Text : String; Line : Positive) is
-            Body_Text : constant String := Ada.Strings.Fixed.Trim
-              (Text (Text'First + 2 .. Text'Last), Ada.Strings.Both);
-            Prefix    : constant String := "adamutant:";
-         begin
-            if Body_Text'Length <= Prefix'Length
-              or else To_Lower
-                (Body_Text (Body_Text'First
-                            .. Body_Text'First + Prefix'Length - 1)) /= Prefix
-            then
-               return;
-            end if;
-            declare
-               Cmd_Full : constant String :=
-                 Body_Text (Body_Text'First + Prefix'Length .. Body_Text'Last);
-               Colon    : constant Natural :=
-                 Ada.Strings.Fixed.Index (Cmd_Full, ":");
-               Cmd      : constant String :=
-                 (if Colon = 0 then Cmd_Full
-                  else Cmd_Full (Cmd_Full'First .. Colon - 1));
-               Space    : Natural := Ada.Strings.Fixed.Index (Cmd, " ");
-               Verb     : constant String := To_Lower
-                 (if Space = 0 then Cmd else Cmd (Cmd'First .. Space - 1));
-               Args     : constant String :=
-                 (if Space = 0 then "" else Cmd (Space + 1 .. Cmd'Last));
-               Set      : constant Mutator_Set := Parse_Set (Args, Line);
-            begin
-               Space := 0;
-               if Verb = "disable" then
-                  for K in Mutator_Kind loop
-                     Current (K) := Current (K) or Set (K);
-                  end loop;
-               elsif Verb = "enable" then
-                  for K in Mutator_Kind loop
-                     Current (K) := Current (K) and not Set (K);
-                  end loop;
-               elsif Verb = "disable-next-line" then
-                  Next_Line.Include (Line + 1, Set);
-               else
-                  raise Directive_Error with
-                    "line" & Line'Image & ": unknown adamutant directive '"
-                    & Verb & "'";
-               end if;
-            end;
-         end Directive;
-      begin
-         for T of All_Tokens loop
-            if T.Kind = Comment then
-               Directive (Source (T.First .. T.Last), T.Line);
-            else
-               N := N + 1;
-               S (N) := T;
-               Disabled (N) := Current;
-            end if;
-         end loop;
-      end;
+      for T of All_Tokens loop
+         if T.Kind /= Comment then
+            N := N + 1;
+            S (N) := T;
+         end if;
+      end loop;
 
       declare
          function Txt (K : Positive) return String is
@@ -495,22 +399,16 @@ package body AdaMutant.Mutators is
             Replacement : String;
             Anchor      : Natural := 0)
          is
-            A       : constant Positive := (if Anchor = 0 then From else Anchor);
-            Ignored : Boolean := Disabled (A) (Kind);
-            Line    : constant Positive := S (A).Line;
+            A : constant Positive := (if Anchor = 0 then From else Anchor);
          begin
             if not Options.Enabled (Kind) or else Skipped (A) then
                return;
-            end if;
-            if Next_Line.Contains (Line) and then Next_Line (Line) (Kind) then
-               Ignored := True;
             end if;
             Result.Append
               (Mutation'(Kind        => Kind,
                 First       => S (From).First,
                 Last        => S (To).Last,
                 Replacement => To_Unbounded_String (Replacement),
-                Ignored     => Ignored,
                 Contract    => In_Aspect (A) or else In_Ghost (A)));
          end Add;
 

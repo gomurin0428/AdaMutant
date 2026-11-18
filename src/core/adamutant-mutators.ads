@@ -46,22 +46,17 @@ package AdaMutant.Mutators is
       First       : Positive := 1;
       Last        : Natural := 0;
       Replacement : Unbounded_String;
-      Ignored     : Boolean := False;
       Contract    : Boolean := False;
    end record;
-   --  Source (First .. Last) is replaced by Replacement.  Ignored is set when
-   --  an "adamutant:disable" comment covers the mutation, Contract when the
-   --  mutation is in an aspect or in ghost code (which the program only
-   --  contains when assertions are enabled).
+   --  Source (First .. Last) is replaced by Replacement.  Contract is set
+   --  when the mutation is in an aspect or in ghost code (which the
+   --  program only contains when assertions are enabled).
 
    package Mutation_Vectors is new Ada.Containers.Vectors (Positive, Mutation);
 
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector;
-   --  Propagates AdaMutant.Lexer.Lexical_Error and raises Directive_Error
-   --  for malformed adamutant comments.
-
-   Directive_Error : exception;
+   --  Propagates AdaMutant.Lexer.Lexical_Error.
 
    function Apply (Source : String; M : Mutation) return String is
      (Source (Source'First .. M.First - 1) & To_String (M.Replacement)

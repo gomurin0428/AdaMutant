@@ -187,18 +187,7 @@ A reused result rests on nothing but the lines being unchanged. In the following
 
 `with`/`use` clauses, `pragma`s, representation clauses (`for X'Size use ...`) and `digits`/`delta` are not mutated. The default values of the formal parameters of a subprogram are not mutated either, because the program does not compile unless the declaration and the body match (full conformance). The default values in `is null` and `is abstract` subprograms, in expression functions and in generic formal subprograms are mutated. Aspects (`Pre`, `Post`, `Type_Invariant` and so on) and ghost code (the declarations and bodies of the subprograms, objects and types declared with the `Ghost` aspect, and the statements that call them or assign to them) are mutated only when `mutate_contracts = true`. The ghost names are collected from the `.adb` being mutated and from the `.ads` of the same name.
 
-### Disabling with comments
-
-```ada
---  adamutant:disable-next-line EqualityOperator: equivalent mutant
-if A + B > Max then
-
---  adamutant:disable StatementDeletion, StringLiteral
-Log ("...");
---  adamutant:enable
-```
-
-Leave out the names, or write `all`, to disable every mutator. A disabled mutant stays in the report as `Ignored` and is not counted in the score.
+There is no comment that disables a mutant. A mutant that the tests cannot observe is left to the proof (see [Intended workflow](#intended-workflow)), and an equivalent mutant is recognized by `equivalence_build`.
 
 ## Statuses and score
 
@@ -210,7 +199,7 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 | NoCoverage | Not used by this version, which sends a mutant that no test executes to the proof (counted as not detected) |
 | CompileError | The mutant could not be built (not in the score) |
 | RuntimeError | A command could not be started, and the like (not in the score) |
-| Ignored | Disabled by a comment, or found to be an equivalent mutant (not in the score) |
+| Ignored | Found to be an equivalent mutant, or on a line unchanged since the revision of `--since` (not in the score) |
 
 `score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage) * 100`
 

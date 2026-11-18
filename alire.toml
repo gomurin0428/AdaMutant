@@ -18,8 +18,8 @@ time limit and an optional memory limit for the tests.
 
 The mutators cover arithmetic, relational, logical, unary and membership
 operators, Boolean, numeric and string literals, conditions, and statement
-deletion. Comments in the source can disable them, and `--since` limits a
-run to the lines changed since a git revision.
+deletion. `--since` limits a run to the lines changed since a git
+revision.
 
 The reports are a console table, a self-contained HTML file and JSON in
 mutation-testing-report-schema v2. AdaMutant runs on Linux, macOS and
