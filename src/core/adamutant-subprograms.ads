@@ -1,6 +1,6 @@
+with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
-with AdaMutant.Mutators;
 
 --  The subprograms of an Ada source, so that a prover can be limited to
 --  the one that a mutant is in.
@@ -30,9 +30,11 @@ package AdaMutant.Subprograms is
    --  The subprogram bodies, entry bodies and expression functions of
    --  Source.  Propagates AdaMutant.Lexer.Lexical_Error.
 
-   function Visible_Names
-     (Spec : String) return AdaMutant.Mutators.Name_Sets.Set;
-   --  Lower-case names of the subprograms that the visible part of the
+   package Name_Counts is new Ada.Containers.Indefinite_Ordered_Maps
+     (String, Positive);
+
+   function Visible_Names (Spec : String) return Name_Counts.Map;
+   --  How many subprograms of each lower-case name the visible part of the
    --  package specification Spec declares.  Propagates Lexical_Error.
 
    type Place is record
@@ -46,7 +48,7 @@ package AdaMutant.Subprograms is
    function Place_Of
      (Subs    : Subprogram_Vectors.Vector;
       Offset  : Positive;
-      Visible : AdaMutant.Mutators.Name_Sets.Set) return Place;
+      Visible : Name_Counts.Map) return Place;
    --  Where Offset of the source of Subs is.  GNATprove analyses the
    --  callers of an expression function, and of a subprogram without a
    --  contract that the unit does not make visible, with its body: a

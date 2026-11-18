@@ -84,9 +84,11 @@ package body AdaMutant.Subprograms is
       procedure Scan (From : Positive; Stop : out Natural;
                       Contract : out Boolean) is
          --  The first ";", "is", "renames" or "do" outside parentheses
-         --  from From on, or 0; whether Pre, Post or Contract_Cases comes
-         --  before it.
-         Depth : Natural := 0;
+         --  from From on, or 0; whether the aspect Pre, Post or
+         --  Contract_Cases comes before it (not a name or a type that is
+         --  called so).
+         Depth   : Natural := 0;
+         Aspects : Boolean := False;
       begin
          Stop := 0;
          Contract := False;
@@ -100,8 +102,11 @@ package body AdaMutant.Subprograms is
                then
                   Stop := J;
                   return;
-               elsif S (J).Kind = Identifier
+               elsif Word (J) = "with" then
+                  Aspects := True;
+               elsif Aspects and then S (J).Kind = Identifier
                  and then Lower (Txt (J)) in "pre" | "post" | "contract_cases"
+                 and then (Is_Del (J + 1, "=>") or else Is_Del (J + 1, "'"))
                then
                   Contract := True;
                end if;
@@ -139,7 +144,10 @@ package body AdaMutant.Subprograms is
          return False;
       end With_Before_End;
 
-      K : Positive := 1;
+      K     : Positive := 1;
+      Depth : Natural := 0;
+      --  Inside parentheses nothing opens a construct: a declare
+      --  expression "(declare ... begin ...)" has no "end".
    begin
       while K <= S'Last loop
          declare
@@ -147,7 +155,13 @@ package body AdaMutant.Subprograms is
             Stop     : Natural;
             Contract : Boolean;
          begin
-            if W in "procedure" | "function" | "entry"
+            if Is_Del (K, "(") then
+               Depth := Depth + 1;
+            elsif Is_Del (K, ")") then
+               Depth := (if Depth > 0 then Depth - 1 else 0);
+            elsif Depth > 0 then
+               null;
+            elsif W in "procedure" | "function" | "entry"
               --  Not a generic formal subprogram nor an access type.
               and then Word (K - 1) not in "with" | "access"
               and then not (Word (K - 1) = "protected"
@@ -305,11 +319,9 @@ package body AdaMutant.Subprograms is
       return Result;
    end Find;
 
-   function Visible_Names
-     (Spec : String) return AdaMutant.Mutators.Name_Sets.Set
-   is
+   function Visible_Names (Spec : String) return Name_Counts.Map is
       S      : constant Token_Array := Significant (Spec);
-      Result : AdaMutant.Mutators.Name_Sets.Set;
+      Result : Name_Counts.Map;
 
       function Txt (K : Positive) return String is
         (Spec (S (K).First .. S (K).Last));
@@ -338,7 +350,15 @@ package body AdaMutant.Subprograms is
                          and then Word (K - 2) = "access")
            and then K + 1 in S'Range
          then
-            Result.Include (Lower (Txt (K + 1)));
+            declare
+               Name : constant String := Lower (Txt (K + 1));
+            begin
+               if Result.Contains (Name) then
+                  Result.Replace (Name, Result (Name) + 1);
+               else
+                  Result.Insert (Name, 1);
+               end if;
+            end;
          end if;
       end loop;
       return Result;
@@ -347,10 +367,29 @@ package body AdaMutant.Subprograms is
    function Place_Of
      (Subs    : Subprogram_Vectors.Vector;
       Offset  : Positive;
-      Visible : AdaMutant.Mutators.Name_Sets.Set) return Place
+      Visible : Name_Counts.Map) return Place
    is
       Inner  : Natural := 0;
       Result : Place;
+
+      function Visible_Body (I : Positive) return Boolean is
+         --  The spec declares the subprogram of the body Subs (I): its
+         --  name, and no more bodies of that name in the unit than the
+         --  visible part declares (an overload that only the body has
+         --  is not told apart by name).
+         Name  : constant String := Lower (To_String (Subs (I).Name));
+         Count : Natural := 0;
+      begin
+         if Subs (I).Parent /= 0 or else not Visible.Contains (Name) then
+            return False;
+         end if;
+         for J of Subs loop
+            if J.Parent = 0 and then Lower (To_String (J.Name)) = Name then
+               Count := Count + 1;
+            end if;
+         end loop;
+         return Count <= Visible (Name);
+      end Visible_Body;
    begin
       for I in Subs.First_Index .. Subs.Last_Index loop
          if Subs (I).First <= Offset and then Offset <= Subs (I).Last
@@ -368,10 +407,7 @@ package body AdaMutant.Subprograms is
       begin
          while I /= 0 loop
             if not Subs (I).Expression
-              and then (Subs (I).Contract
-                        or else (Subs (I).Parent = 0
-                                 and then Visible.Contains
-                                   (Lower (To_String (Subs (I).Name)))))
+              and then (Subs (I).Contract or else Visible_Body (I))
             then
                Result.Limit := Subs (I).Line;
                exit;

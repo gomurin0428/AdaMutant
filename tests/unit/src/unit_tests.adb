@@ -332,7 +332,7 @@ procedure Unit_Tests is
         & "   procedure Local;" & LF
         & "end Pk;" & LF;
       Subs    : constant Subprogram_Vectors.Vector := Find (Body_Text);
-      Visible : constant Name_Sets.Set := Visible_Names (Spec_Text);
+      Visible : constant Name_Counts.Map := Visible_Names (Spec_Text);
 
       function At_Mark (Mark : String) return String is
          Where : constant Place :=
@@ -348,6 +348,7 @@ procedure Unit_Tests is
       end Expect_Place;
    begin
       Check (Visible.Contains ("p") and then Visible.Contains ("""+""")
+             and then Visible ("p") = 1
              and then not Visible.Contains ("local")
              and then not Visible.Contains ("formal"),
              "subprograms: the visible part of a spec");
@@ -366,6 +367,66 @@ procedure Unit_Tests is
       Expect_Place ("in the package", " 0");
       Check (Natural (Subs.Length) = 7, "subprograms: count",
              Subs.Length'Image);
+
+      --  A declare expression has no "end"; a function called Post is no
+      --  contract; an overload that only the body has is not told apart
+      --  by name.
+      declare
+         Body2 : constant String :=
+           "package body Q is" & LF                                   --  1
+           & "   function F return Integer is" & LF                    --  2
+           & "      X : constant Integer :=" & LF                      --  3
+           & "        (declare Y : constant Integer := 1; begin Y);" & LF
+           & "   begin" & LF                                           --  5
+           & "      return X;  -- in F" & LF                           --  6
+           & "   end;" & LF                                            --  7
+           & "   C : constant Integer := 7;  -- after F" & LF          --  8
+           & "   function Post (A : Pre) return Integer is" & LF       --  9
+           & "   begin" & LF                                           -- 10
+           & "      return 1;  -- in Post" & LF                        -- 11
+           & "   end Post;" & LF                                       -- 12
+           & "   procedure H (X : Integer) is" & LF                   -- 13
+           & "   begin" & LF                                           -- 14
+           & "      null;  -- in H Integer" & LF                       -- 15
+           & "   end H;" & LF                                          -- 16
+           & "   procedure H (X : Boolean) is" & LF                   -- 17
+           & "   begin" & LF                                           -- 18
+           & "      null;  -- in H Boolean" & LF                       -- 19
+           & "   end H;" & LF                                          -- 20
+           & "   procedure K with Post => True is" & LF               -- 21
+           & "   begin" & LF                                           -- 22
+           & "      null;  -- in K" & LF                               -- 23
+           & "   end K;" & LF                                          -- 24
+           & "end Q;" & LF;
+         Spec2 : constant String :=
+           "package Q is" & LF
+           & "   function F return Integer;" & LF
+           & "   procedure H (X : Integer);" & LF
+           & "end Q;" & LF;
+         Subs2 : constant Subprogram_Vectors.Vector := Find (Body2);
+         Vis2  : constant Name_Counts.Map := Visible_Names (Spec2);
+
+         function At2 (Mark : String) return String is
+            Where : constant Place := Place_Of
+              (Subs2, Ada.Strings.Fixed.Index (Body2, Mark), Vis2);
+         begin
+            return To_String (Where.Name) & Where.Limit'Image;
+         end At2;
+      begin
+         Check (At2 ("in F") = "F 2", "subprograms: a declare expression",
+                At2 ("in F"));
+         Check (At2 ("after F") = " 0",
+                "subprograms: after a body with a declare expression",
+                At2 ("after F"));
+         Check (At2 ("in Post") = "Post 0",
+                "subprograms: a function called Post", At2 ("in Post"));
+         Check (At2 ("in H Integer") = "H 0"
+                and then At2 ("in H Boolean") = "H 0",
+                "subprograms: an overload that only the body has",
+                At2 ("in H Integer") & " / " & At2 ("in H Boolean"));
+         Check (At2 ("in K") = "K 21", "subprograms: an aspect Post",
+                At2 ("in K"));
+      end;
    end Test_Subprograms;
 
    procedure Test_Comments is

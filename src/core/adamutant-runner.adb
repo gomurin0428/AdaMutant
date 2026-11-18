@@ -93,7 +93,7 @@ package body AdaMutant.Runner is
                Options : Scan_Options := Settings.Scan;
                Found   : Mutation_Vectors.Vector;
                Subs    : AdaMutant.Subprograms.Subprogram_Vectors.Vector;
-               Visible : Name_Sets.Set;
+               Visible : AdaMutant.Subprograms.Name_Counts.Map;
             begin
                begin
                   --  Also when contracts are mutated: the mutations in
