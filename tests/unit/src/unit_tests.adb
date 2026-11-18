@@ -265,6 +265,19 @@ procedure Unit_Tests is
               & "procedure Q is begin B := 1; C := 2; end Q; end P;",
               "StatementDeletion C := 2;->null;|NumericLiteral 2->3",
               "unnamed ghost body end, ghost object lists, Ghost => False");
+      Expect ("package body P is" & LF
+              & "   function Gh (X : Integer) return Integer with Ghost is" & LF
+              & "   begin" & LF
+              & "      return R : Integer do R := X + 1; end return;" & LF
+              & "   end Gh;" & LF
+              & "   procedure After (Y : in out Integer) is" & LF
+              & "   begin" & LF
+              & "      Y := Y + 2;" & LF
+              & "   end After;" & LF
+              & "end P;",
+              "StatementDeletion Y := Y + 2;->null;|ArithmeticOperator +->-"
+              & "|NumericLiteral 2->3",
+              "a ghost body with an extended return ends at its own end");
       Expect ("function F return T is begin" & LF
               & "   return R : T with Relaxed_Initialization do" & LF
               & "      R := 1;" & LF

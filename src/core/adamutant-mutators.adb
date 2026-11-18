@@ -781,7 +781,8 @@ package body AdaMutant.Mutators is
                      then
                         --  The body ends at the "end" of its own "begin";
                         --  "end if", "end loop" and the like close other
-                        --  constructs.
+                        --  constructs.  "end return" closes the "do" of an
+                        --  extended return.
                         declare
                            Level : Natural := 0;
                         begin
@@ -794,8 +795,7 @@ package body AdaMutant.Mutators is
                                               or else Is_Kw (J + 1, "loop")
                                               or else Is_Kw (J + 1, "case")
                                               or else Is_Kw (J + 1, "record")
-                                              or else Is_Kw (J + 1, "select")
-                                              or else Is_Kw (J + 1, "return"))
+                                              or else Is_Kw (J + 1, "select"))
                                 and then Level > 0
                               then
                                  Level := Level - 1;
