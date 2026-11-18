@@ -31,7 +31,7 @@ AdaMutant is made for projects that use both tests and the GNATprove proof. This
    - If the tests cannot observe it, as with a branch that cannot be reached, leave it to the proof. Nothing needs to be excluded.
    - The second group holds mutants that do not change what the program does (equivalent ones) as well as real bugs, because GNATprove only checks the one counterexample that it picked. Once the contract is stronger, an equivalent mutant proves, and a real bug moves to `Confirmed`.
 3. Handle the mutants that neither the tests nor the proof detect (Survived) as before: add a test or make a contract stronger. Equivalent mutants (those whose object code is the same as before the change) are recognized and excluded automatically when `equivalence_build` is set (Ignored). The others stay Survived.
-4. A mutant whose proof runs out of time is not counted as detected. It counts as Survived and is marked `(the proof timed out)` in the list. Treat it as in 2 or 3.
+4. A mutant whose proof runs out of time is not counted as detected. It counts as Survived and is marked `(the proof timed out)` in the list. Treat it as in 2 or 3. A goal that a mutant makes fail often keeps the provers up to their time limit; the console then says so under the list, and a steps limit for the provers (`--steps`) usually lets such a proof end in time (see [Speeding up the proof of the mutants](#speeding-up-the-proof-of-the-mutants)).
 
 This is part of the output for [examples/spark_counter](examples/spark_counter). The test only calls `Counters.Increment`, so only the proof detects the other mutants.
 

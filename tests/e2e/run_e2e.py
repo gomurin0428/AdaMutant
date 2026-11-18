@@ -972,7 +972,12 @@ def check_proof_log():
                      "Detected only by the proof (candidates for a missing test):",
                      " (range check, postcondition)",
                      " (initialization)",
-                     " (the proof timed out)"):
+                     " (the proof timed out)",
+                     # What to do about it, without a steps limit.
+                     "  (The proof of 1 mutant did not finish in time.  A goal"
+                     " that a mutant makes fail keeps the provers up to their"
+                     " limit: with a steps limit (gnatprove --steps) they stop"
+                     " there"):
             if line not in proc.stdout:
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
@@ -995,6 +1000,19 @@ def check_proof_log():
         # Some failures have a counterexample: no note about them.
         if "The proof gave no counterexample" in proc.stdout:
             errors.append(f"a note about counterexamples\n{proc.stdout}")
+        # With a steps limit in the prove command, the note asks for a lower
+        # one.
+        config.write_text("".join(
+            f"prove = '{python} fake_prove.py --steps=100'\n"
+            if line.startswith("prove =") else line
+            for line in config.read_text().splitlines(True)))
+        proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        want = ("  (The proof of 1 mutant did not finish in time.  A lower steps"
+                " limit (--steps) stops the provers sooner")
+        if proc.returncode != 0 or want not in proc.stdout:
+            errors.append(f"with --steps: exit status {proc.returncode},"
+                          f" output lacks {want!r}\n{proc.stdout}")
         # GNATprove 16 fails when there is no SPARK code.  The error says so,
         # with the command and its log on lines of their own.
         (work / "no_spark.py").write_text(

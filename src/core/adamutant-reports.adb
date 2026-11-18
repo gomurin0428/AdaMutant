@@ -393,6 +393,36 @@ package body AdaMutant.Reports is
                       else ""));
             end if;
          end loop;
+         --  A goal that a mutant makes fail keeps the provers up to their
+         --  limit, and the time limit of the mutant comes from the proof
+         --  of the unmodified project, where nothing fails.
+         declare
+            Timed_Out : Natural := 0;
+         begin
+            for M of R.Mutants loop
+               if Proof_Timed_Out (M) then
+                  Timed_Out := Timed_Out + 1;
+               end if;
+            end loop;
+            if Timed_Out > 0 then
+               Ada.Text_IO.Put_Line
+                 ("  (The proof of" & Timed_Out'Image
+                  & (if Timed_Out = 1 then " mutant" else " mutants")
+                  & " did not finish in time."
+                  & (if Ada.Strings.Fixed.Index
+                          (To_String (R.Settings.Prove), "--steps") > 0
+                     then "  A lower steps limit (--steps) stops the"
+                          & " provers sooner on a goal that a mutant makes"
+                          & " fail, and prove_timeout_ms gives the proofs"
+                          & " more time.)"
+                     else "  A goal that a mutant makes fail keeps the"
+                          & " provers up to their limit: with a steps limit"
+                          & " (gnatprove --steps) they stop there, and the"
+                          & " proof ends without waiting for a time limit."
+                          & "  See ""Speeding up the proof of the mutants"""
+                          & " in the README.)"));
+            end if;
+         end;
       end if;
 
       if (for some M of R.Mutants => M.Equivalent) then
