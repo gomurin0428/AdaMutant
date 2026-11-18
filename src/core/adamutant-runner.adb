@@ -243,7 +243,7 @@ package body AdaMutant.Runner is
          if Colon > T'First
            and then T (T'First .. Colon - 1)
                     in "high" | "medium" | "low" | "error" | "warning"
-                     | "info" | "check"
+                     | "info"
          then
             return T (T'First .. Colon - 1);
          end if;
