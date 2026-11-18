@@ -275,6 +275,63 @@ procedure Unit_Tests is
               "return and null are not deleted");
    end Test_Skipped;
 
+   procedure Test_Attributes is
+      O : Scan_Options;
+   begin
+      O.Enabled := [others => False];
+      O.Enabled (Attribute_Swap) := True;
+      --  Not in the subtype of a declaration; in its initial value, in a
+      --  loop range and in expressions, with the case kept.
+      Expect ("procedure P is" & LF
+              & "   S : String (1 .. A'Last);" & LF
+              & "   L : constant Natural := A'Last;" & LF
+              & "   subtype R is Integer range T'First .. T'Last;" & LF
+              & "   type V is array (T'First .. T'Last) of R;" & LF
+              & "begin" & LF
+              & "   for I in A'First .. A'Last loop" & LF
+              & "      X := Integer'Max (X, T'Succ (I)) + A'Length;" & LF
+              & "   end loop;" & LF
+              & "   Y := Float'FLOOR (Z) + Float'ceiling (Z);" & LF
+              & "   V := Even'First_Valid + Even'First_Bit;" & LF
+              & "   for X'Size use 32;" & LF
+              & "end P;",
+              "AttributeSwap Last->First|AttributeSwap First->Last"
+              & "|AttributeSwap Last->First|AttributeSwap Max->Min"
+              & "|AttributeSwap Succ->Pred|AttributeSwap FLOOR->CEILING"
+              & "|AttributeSwap ceiling->floor"
+              & "|AttributeSwap First_Valid->Last_Valid",
+              "attribute swaps", O);
+      --  A predicate is a contract: mutated with mutate_contracts only,
+      --  also in a subtype declaration.  So are the bounds of a range in
+      --  it (NumericLiteral).
+      declare
+         Pred : constant String :=
+           "package P is" & LF
+           & "   subtype S is Integer range 0 .. T'Last" & LF
+           & "     with Dynamic_Predicate => S <= Integer'Max (10, 20);" & LF
+           & "   subtype U is Integer with Static_Predicate => U in 1 .. 5;" & LF
+           & "end P;";
+         C : Scan_Options := O;
+      begin
+         Expect (Pred, "", "attribute swaps: not in a predicate by default", O);
+         C.Mutate_Contracts := True;
+         C.Enabled (Numeric_Literal) := True;
+         Expect (Pred,
+                 --  The first argument of an attribute is never mutated.
+                 "AttributeSwap Max->Min"
+                 & "|NumericLiteral 20->21|NumericLiteral 1->0"
+                 & "|NumericLiteral 5->6",
+                 "attribute swaps and bounds in a predicate", C);
+      end;
+      declare
+         K : Mutator_Kind;
+      begin
+         Check (Parse ("AttributeSwap", K) and then K = Attribute_Swap
+                and then Parse ("attribute_swap", K),
+                "attribute swap by name");
+      end;
+   end Test_Attributes;
+
    procedure Test_Comments is
    begin
       --  A comment changes nothing, whatever it says.
@@ -1936,6 +1993,7 @@ begin
    Test_Conditions;
    Test_Skipped;
    Test_Comments;
+   Test_Attributes;
    Test_Ghost_Names;
    Test_Contract_Flag;
    Test_Apply;

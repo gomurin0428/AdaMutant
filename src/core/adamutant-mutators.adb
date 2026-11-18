@@ -15,7 +15,8 @@ package body AdaMutant.Mutators is
          when Conditional_Expression => "ConditionalExpression",
          when Statement_Deletion     => "StatementDeletion",
          when Numeric_Literal        => "NumericLiteral",
-         when String_Literal         => "StringLiteral");
+         when String_Literal         => "StringLiteral",
+         when Attribute_Swap         => "AttributeSwap");
 
    function Squash (S : String) return String is
       R    : String (1 .. S'Length);
@@ -361,18 +362,24 @@ package body AdaMutant.Mutators is
             or else (not Options.Mutate_Contracts
                      and then (In_Aspect (K) or else In_Ghost (K))));
 
-         function Is_Declared_Bound (K : Positive) return Boolean;
-         --  K is a bound of a range in the subtype of an object, component,
-         --  type or subtype declaration ("X : String (1 .. 6)",
-         --  "subtype S is Integer range 1 .. 4"). Changing such a bound
-         --  either leaves values out of the subtype (a compile error) or
-         --  only widens it (an equivalent mutant).
+         function In_Declared_Subtype (K : Positive) return Boolean;
+         --  K is in the subtype of an object, component, type or subtype
+         --  declaration ("X : String (1 .. 6)", "subtype S is Integer
+         --  range 1 .. 4"), not in its initial value nor in its aspects
+         --  (a predicate is a contract, see Skipped).
 
          function Is_Declared_Bound (K : Positive) return Boolean is
+           ((Is_Del (K - 1, "..") or else Is_Del (K + 1, ".."))
+            and then In_Declared_Subtype (K));
+         --  K is a bound of a range in such a subtype.  Changing it either
+         --  leaves values out of the subtype (a compile error) or only
+         --  widens it (an equivalent mutant).
+
+         function In_Declared_Subtype (K : Positive) return Boolean is
             First : constant Positive := Seg_Start (K);
             Colon : Boolean := False;
          begin
-            if not (Is_Del (K - 1, "..") or else Is_Del (K + 1, "..")) then
+            if In_Aspect (K) then
                return False;
             end if;
             for J in First .. K - 1 loop
@@ -392,7 +399,7 @@ package body AdaMutant.Mutators is
                        and then (Is_Kw (Seg_Start (First - 1), "type")
                                  or else Is_Kw (Seg_Start (First - 1),
                                                 "subtype")));
-         end Is_Declared_Bound;
+         end In_Declared_Subtype;
 
          procedure Add
            (Kind        : Mutator_Kind;
@@ -946,6 +953,34 @@ package body AdaMutant.Mutators is
                         Add (Boolean_Literal, K, K,
                              Same_Case (Txt (K),
                                         (if Lw = "true" then "False" else "True")));
+                     end if;
+
+                     --  An attribute and its counterpart, which gives a
+                     --  value of the same type: the other bound, the other
+                     --  extreme, the other neighbour, the other rounding.
+                     --  Not in the subtype of a declaration, like the
+                     --  bounds of NumericLiteral (see Is_Declared_Bound).
+                     if Is_Del (K - 1, "'") then
+                        declare
+                           Other : constant String :=
+                             (if Lw = "first" then "Last"
+                              elsif Lw = "last" then "First"
+                              elsif Lw = "min" then "Max"
+                              elsif Lw = "max" then "Min"
+                              elsif Lw = "succ" then "Pred"
+                              elsif Lw = "pred" then "Succ"
+                              elsif Lw = "floor" then "Ceiling"
+                              elsif Lw = "ceiling" then "Floor"
+                              elsif Lw = "first_valid" then "Last_Valid"
+                              elsif Lw = "last_valid" then "First_Valid"
+                              else "");
+                        begin
+                           if Other /= "" and then not In_Declared_Subtype (K)
+                           then
+                              Add (Attribute_Swap, K, K,
+                                   Same_Case (Txt (K), Other));
+                           end if;
+                        end;
                      end if;
 
                      --  Statement deletion: a call or an assignment.
