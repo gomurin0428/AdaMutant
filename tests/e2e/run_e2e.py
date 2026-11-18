@@ -878,11 +878,18 @@ def check_proof_log():
             "print('place: [%s] [%s]' % (os.environ.get('ADAMUTANT_MUTANT_LINE', 'unset'),\n"
             "      'cache' if cache and os.path.isdir(cache) else 'no cache'))\n"
             "print('cache:', cache)\n"
-            "print('switches: [%s]' % os.environ.get('ADAMUTANT_PROVE_SWITCHES', 'unset'))\n"
-            "# The unmodified project: code that the proof never reaches.\n"
+            "switches = os.environ.get('ADAMUTANT_PROVE_SWITCHES', 'unset')\n"
+            "print('switches: [%s]' % switches)\n"
+            "print('args: %s' % sys.argv[1:])\n"
+            "# A warning of the compiler, with proof warnings on and off.\n"
             "if n == '0':\n"
+            "    print('counters.adb:4:1: warning: condition is always False')\n"
+            "# Code that the proof never reaches: only with proof warnings on,\n"
+            "# which fail the proof as --warnings=error does.\n"
+            "if switches == '--proof-warnings=on':\n"
             "    print(' warning: unreachable code')\n"
             "    print('--> counters.adb:13:10')\n"
+            "    sys.exit(1)\n"
             "# The unmodified project has this message too; a mutant moves it.\n"
             "# Both formats: the one line of GNATprove 14, and the place on the\n"
             "# next line (GNATprove 16), for the unmodified project and mutant 3.\n"
@@ -925,7 +932,9 @@ def check_proof_log():
         # No test detects anything, so every mutant goes to the prover.
         lines = [line for line in config.read_text().splitlines(True)
                  if not line.startswith(("prove", "test", "equivalence_build"))]
-        config.write_text(f"prove = '{python} fake_prove.py'\ntimeout_ms = 1000\n"
+        # The switches go to the prover as arguments, as to a script.
+        config.write_text(f"prove = '{python} fake_prove.py $ADAMUTANT_PROVE_SWITCHES'\n"
+                          "timeout_ms = 1000\n"
                           f"test = '{python} -c \"pass\"'\n" + "".join(lines))
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -996,6 +1005,18 @@ def check_proof_log():
             errors.append(f"output lacks {want!r}\n{proc.stdout}")
         if "ADAMUTANT_PROVE_SWITCHES" in proc.stdout:
             errors.append(f"a warning about ADAMUTANT_PROVE_SWITCHES\n{proc.stdout}")
+        # Not what the proof of the unmodified project has too.
+        if "condition is always False" in proc.stdout:
+            errors.append(f"a warning of the compiler is listed\n{proc.stdout}")
+        # Survivors in the statement that is never reached are marked.
+        marked = [line for line in proc.stdout.splitlines()
+                  if "counters.adb:13:" in line and line.startswith("  #")]
+        if not marked or any("(GNATprove: never reached)" not in line
+                             for line in marked
+                             if int(line.split(":")[2].split()[0]) >= 10):
+            errors.append(f"survivors on line 13: {marked}\n{proc.stdout}")
+        if (work / ".adamutant" / "sandbox" / "proof-warnings").exists():
+            errors.append("the sandbox of the proof warnings is left")
         # The line of the mutant, and a cache of proof results for each
         # sandbox, which its proof of the unmodified project fills.
         logs = work / ".adamutant" / "logs"
@@ -1003,7 +1024,10 @@ def check_proof_log():
         for log, want in (("baseline-prove.log", "place: [] [cache]"),
                           ("baseline-prove-2.log", "place: [] [cache]"),
                           ("mutant-1-prove.log", "place: [5] [cache]"),
-                          ("baseline-prove.log", "switches: [--proof-warnings=on]"),
+                          ("baseline-prove.log", "switches: [--proof-warnings=off]"),
+                          ("baseline-proof-warnings.log", "switches: [--proof-warnings=on]"),
+                          ("baseline-proof-warnings.log", "args: ['--proof-warnings=on']"),
+                          ("baseline-proof-warnings.log", "place: [] [cache]"),
                           ("mutant-1-prove.log", "switches: [--proof-warnings=off]")):
             texts[log] = (logs / log).read_text() if (logs / log).exists() else ""
             if want not in texts[log]:
@@ -1013,6 +1037,9 @@ def check_proof_log():
             return [line for line in text.splitlines() if line.startswith("cache:")]
         if cache_of(texts["baseline-prove.log"]) == cache_of(texts["baseline-prove-2.log"]):
             errors.append("two sandboxes share a proof cache")
+        if cache_of(texts["baseline-proof-warnings.log"]) in (
+                cache_of(texts["baseline-prove.log"]), cache_of(texts["baseline-prove-2.log"])):
+            errors.append("the proof warnings share a proof cache with a sandbox")
         # Some failures have a counterexample: no note about them.
         if "The proof gave no counterexample" in proc.stdout:
             errors.append(f"a note about counterexamples\n{proc.stdout}")

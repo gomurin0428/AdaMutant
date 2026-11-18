@@ -202,15 +202,18 @@ An example with GNATprove 16.1: in a unit of 24 functions (480 checks), with a m
 
 A precondition that is always False, a `pragma Assume` that is always False, or code that is never reached makes the proof of anything succeed there: a mutant in such a place survives the proof however wrong it is, and the proof of the unmodified project says nothing about it. GNATprove finds these places with `--proof-warnings=on`.
 
-AdaMutant gives the prove command the switches for this in `ADAMUTANT_PROVE_SWITCHES`: `--proof-warnings=on` for the proof of the unmodified project, `--proof-warnings=off` for the mutants, whose proofs need not look again. Add it to the command (`%ADAMUTANT_PROVE_SWITCHES%` on Windows; the variable is never empty):
+When the prove command mentions `ADAMUTANT_PROVE_SWITCHES`, AdaMutant runs it once more on the unmodified project with `--proof-warnings=on` in that variable; every other proof gets `--proof-warnings=off`. Add it to the command (`%ADAMUTANT_PROVE_SWITCHES%` on Windows; the variable is never empty). When the command runs a script, pass the variable to it (`./prove.sh $ADAMUTANT_PROVE_SWITCHES`) and give it to gnatprove there:
 
 ```toml
 prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
 ```
 
-- The console lists what the proof of the unmodified project found (`precondition is always False`, `pragma Assume is always False`, `unreachable code`, `unreachable branch`) under `The proof of the unmodified project proves anything here`, and marks a survivor on a line that is never reached with `(GNATprove: never reached)`
+- The console lists what that proof found and the proof of the unmodified project did not (`precondition is always False`, `postcondition is always False`, `pragma Assume is always False`, `unreachable code`, `unreachable branch`) under `The proof of the unmodified project proves anything here`. A survivor in the statement that an `unreachable code` warning points at gets `(GNATprove: never reached)`. GNATprove only reports the first statement of code that is never reached, and the other warnings point inside expressions, so look at the list for the rest. The mark is left out when two mutated files have the same name, since GNATprove names files without their directory
 - Fix the contract or remove the code: until then, neither the tests nor the proof can detect a mutant there
-- When the proof is GNATprove's and the prove command does not mention `ADAMUTANT_PROVE_SWITCHES`, AdaMutant warns. The proof warnings take time only in the proof of the unmodified project
+- The extra proof costs about as much as the proof of the unmodified project, and runs before the mutants. With `--proof-warnings=on`, GNATprove makes other goals for the same checks, which a cache filled with them would not answer for the mutants, and leaves files that change the proofs that follow. So the extra proof has a cache of its own, and runs in a copy of the project without the directories `gnatprove` of GNATprove, which is deleted afterwards
+- Its exit status does not count: with `--warnings=error`, the warnings make it fail, and they are read all the same. With `--warnings=off`, GNATprove gives no warnings, and the list stays empty
+- When the prove command names `gnatprove` and mentions neither `ADAMUTANT_PROVE_SWITCHES` nor `--proof-warnings`, AdaMutant warns. Without the variable, the list holds the warnings of the proof of the unmodified project, if its command turns them on itself; a command with `--proof-warnings=on` makes every proof of a mutant look for them as well
+- Checked with GNATprove 16.1. A GNATprove without `--proof-warnings` fails on the switch
 
 ## Mutators
 

@@ -202,15 +202,18 @@ GNATprove 16.1 での例です。24 個の関数（チェック 480 個）から
 
 常に偽の事前条件や `pragma Assume`、到達しないコードがあると、その場所では、どんな証明も通ります。そこにあるミュータントは、どれほど間違っていても証明を通り抜け、変更前のプロジェクトの証明もそれについて何も言いません。GNATprove は、`--proof-warnings=on` でこうした場所を見つけます。
 
-AdaMutant は、そのためのスイッチを `ADAMUTANT_PROVE_SWITCHES` で証明のコマンドに渡します。変更前のプロジェクトの証明には `--proof-warnings=on`、ミュータントの証明には `--proof-warnings=off`（もう一度探す必要がないため）です。コマンドに足してください（Windows では `%ADAMUTANT_PROVE_SWITCHES%`。この変数は空になりません）。
+prove のコマンドに `ADAMUTANT_PROVE_SWITCHES` があると、AdaMutant は、変更前のプロジェクトについて、その変数を `--proof-warnings=on` にして、コマンドをもう 1 回実行します。それ以外の証明では、変数は `--proof-warnings=off` です。コマンドに足してください（Windows では `%ADAMUTANT_PROVE_SWITCHES%`。この変数は空になりません）。コマンドがスクリプトを実行するときは、変数をスクリプトに渡し（`./prove.sh $ADAMUTANT_PROVE_SWITCHES`）、スクリプトの中で gnatprove に渡してください。
 
 ```toml
 prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
 ```
 
-- 変更前のプロジェクトの証明で見つかったもの（`precondition is always False`、`pragma Assume is always False`、`unreachable code`、`unreachable branch`）は、コンソールの `The proof of the unmodified project proves anything here` の下に出ます。到達しない行で生き残ったミュータントには `(GNATprove: never reached)` と付きます
+- その証明で見つかり、変更前のプロジェクトの証明にはなかったもの（`precondition is always False`、`postcondition is always False`、`pragma Assume is always False`、`unreachable code`、`unreachable branch`）は、コンソールの `The proof of the unmodified project proves anything here` の下に出ます。`unreachable code` の警告が指す文の中で生き残ったミュータントには、`(GNATprove: never reached)` と付きます。GNATprove は、到達しないコードの最初の文しか報告せず、ほかの警告は式の中を指すので、残りは一覧で見てください。変異させるファイルに同じ名前のものが 2 つあるときは付けません。GNATprove はディレクトリを付けずにファイルを名指すからです
 - 契約を直すか、コードを消してください。それまでは、テストも証明も、そこのミュータントを検出できません
-- 証明が GNATprove で、prove のコマンドに `ADAMUTANT_PROVE_SWITCHES` がないときは、注意を出します。証明の警告に時間がかかるのは、変更前のプロジェクトの証明のときだけです
+- この追加の証明には、変更前のプロジェクトの証明とほぼ同じ時間がかかり、ミュータントの前に実行します。`--proof-warnings=on` だと、GNATprove は同じチェックに別の目標を作るので、それで埋めたキャッシュは、ミュータントの証明には当たりません。また、GNATprove が残すファイルが、あとの証明を変えてしまいます。そのため、追加の証明は専用のキャッシュを使い、GNATprove のディレクトリ `gnatprove` を除いたプロジェクトのコピーで実行し、終わったらコピーを消します
+- その終了ステータスは見ません。`--warnings=error` だと警告で失敗しますが、警告はそのまま読みます。`--warnings=off` だと GNATprove は警告を出さないので、一覧は空のままです
+- prove のコマンドに `gnatprove` があり、`ADAMUTANT_PROVE_SWITCHES` も `--proof-warnings` もないときは、注意を出します。変数がないときの一覧は、変更前のプロジェクトの証明の警告です（そのコマンドが自分で警告を有効にしている場合）。`--proof-warnings=on` をコマンドに書くと、ミュータントの証明でも毎回探すことになります
+- GNATprove 16.1 で確かめました。`--proof-warnings` のない GNATprove では、このスイッチで失敗します
 
 ## ミュータント
 

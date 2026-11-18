@@ -518,6 +518,34 @@ procedure Unit_Tests is
              To_String (All_Of));
    end Test_Proof_Warnings;
 
+   procedure Test_Never_Reached is
+      Source : constant String :=
+        "procedure P (X : Integer) is" & LF
+        & "begin" & LF
+        & "   if X > 0 then return; end if; Y := 1; Z := 2;" & LF
+        & "end P;" & LF;
+      W : constant String := "p.adb:3:34: warning: unreachable code";
+
+      function At_Col (C : Positive) return Boolean is
+        (AdaMutant.Reports.Never_Reached
+           (W, Source, "p.adb", (3, C), (3, C + 1)));
+   begin
+      Check (At_Col (39), "never reached: in the statement of the warning");
+      Check (not At_Col (47), "never reached: not the next statement");
+      Check (not At_Col (11), "never reached: not before it on the line");
+      Check (not AdaMutant.Reports.Never_Reached
+                   (W, Source, "q.adb", (3, 39), (3, 40)),
+             "never reached: not in another file");
+      Check (not AdaMutant.Reports.Never_Reached
+                   ("unreachable.adb:3:34: warning: precondition is always"
+                    & " False", Source, "unreachable.adb", (3, 39), (3, 40)),
+             "never reached: only unreachable code");
+      Check (not AdaMutant.Reports.Never_Reached
+                   ("p.adb:3:35: warning: unreachable code", Source, "p.adb",
+                    (3, 39), (3, 40)),
+             "never reached: the warning must point at a token");
+   end Test_Never_Reached;
+
    procedure Test_Assertions_Check is
       use AdaMutant.Files;
       Tmp     : constant String :=
@@ -2258,6 +2286,7 @@ begin
    Test_Assertions_Check;
    Test_Contract_Aspects;
    Test_Proof_Warnings;
+   Test_Never_Reached;
    Test_Attributes;
    Test_Loop_Direction;
    Test_Deletions;

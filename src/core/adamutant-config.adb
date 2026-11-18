@@ -490,9 +490,9 @@ package body AdaMutant.Config is
       & "# bail = true" & LF
       & "# A mutant that the tests do not detect goes to the proof; a" & LF
       & "# non-zero exit status of 'prove' kills it there." & LF
-      & "# ADAMUTANT_PROVE_SWITCHES has the proof of the unmodified project" & LF
-      & "# look for contracts that are always False and code that is never" & LF
-      & "# reached (--proof-warnings).  On Windows, write" & LF
+      & "# With ADAMUTANT_PROVE_SWITCHES, the unmodified project is proved" & LF
+      & "# once more to look for contracts that are always False and code" & LF
+      & "# that is never reached (--proof-warnings).  On Windows, write" & LF
       & "# %ADAMUTANT_PROVE_SWITCHES%." & LF
       & "prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on"
       & " --counterexamples=on $ADAMUTANT_PROVE_SWITCHES""" & LF
