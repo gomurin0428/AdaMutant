@@ -922,6 +922,10 @@ def check_proof_log():
                  if not line.startswith(("prove", "test", "equivalence_build"))]
         config.write_text(f"prove = '{python} fake_prove.py'\ntimeout_ms = 1000\n"
                           f"test = '{python} -c \"pass\"'\n" + "".join(lines))
+        # The tests without assertions: a warning about the mutants of
+        # contracts.
+        gpr = work / "counters_tests.gpr"
+        gpr.write_text(gpr.read_text().replace(', "-gnata"', ""))
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if proc.returncode != 0:
@@ -982,6 +986,8 @@ def check_proof_log():
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
             errors.append("a message of the unmodified project is counted")
+        if "the tests are compiled without assertions (no -gnata" not in proc.stdout:
+            errors.append(f"no warning about assertions\n{proc.stdout}")
         # The line of the mutant, and a cache of proof results for each
         # sandbox, which its proof of the unmodified project fills.
         logs = work / ".adamutant" / "logs"
@@ -1056,6 +1062,9 @@ def check_prove_cache():
         if proc.returncode != 0:
             return [f"exit status {proc.returncode}\n{proc.stdout}"]
         errors = []
+        # The tests are compiled with -gnata: no warning about assertions.
+        if "without assertions" in proc.stdout:
+            errors.append(f"a warning about assertions\n{proc.stdout}")
         # Survivors whose proof finished: no note about time limits.
         if "Survived mutants:" not in proc.stdout or "did not finish in time" in proc.stdout:
             errors.append(f"survivors and a note about time limits\n{proc.stdout}")

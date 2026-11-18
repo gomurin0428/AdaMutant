@@ -557,6 +557,67 @@ package body AdaMutant.Runner is
       return Result;
    end Main_Sources;
 
+   function Without_Assertions
+     (Dir : String; Sources : String_Vectors.Vector) return String
+   is
+      Files : constant String_Vectors.Vector :=
+        Find_Files (Dir, String_Vectors.Empty_Vector);
+      Found : Unbounded_String;
+
+      function Lower (S : String) return String renames
+        Ada.Characters.Handling.To_Lower;
+
+      function Has_Extension (Path, Extension : String) return Boolean is
+        (Path'Length > Extension'Length
+         and then Lower (Path (Path'Last - Extension'Length + 1 .. Path'Last))
+                  = Extension);
+
+      function Unit_Of (Path : String) return String is
+         Name : constant String := Base_Name (Path);
+      begin
+         for K in reverse Name'Range loop
+            if Name (K) = '.' then
+               return Name (Name'First .. K - 1);
+            end if;
+         end loop;
+         return Name;
+      end Unit_Of;
+
+      function Has_Line (Text, Line : String) return Boolean is
+        (Ada.Strings.Fixed.Index (Text, ASCII.LF & Line & ASCII.LF) > 0
+         or else (Text'Length >= Line'Length + 1
+                  and then Text (Text'First .. Text'First + Line'Length)
+                           = Line & ASCII.LF));
+   begin
+      for Path of Files loop
+         if Has_Extension (Path, ".adc") or else Has_Extension (Path, ".gpr")
+           or else Sources.Contains (Path)
+         then
+            if Ada.Strings.Fixed.Index
+                 (Lower (Read (Join (Dir, Path))), "assertion_policy") > 0
+            then
+               return "";
+            end if;
+         end if;
+      end loop;
+      for Path of Files loop
+         if Has_Extension (Path, ".ali")
+           and then Ada.Strings.Fixed.Index (Lower (Path), "gnatprove/") = 0
+         then
+            for Source of Sources loop
+               if Unit_Of (Path) = Unit_Of (Source) then
+                  if Has_Line (Read (Join (Dir, Path)), "A -gnata") then
+                     return "";
+                  elsif Length (Found) = 0 then
+                     Found := To_Unbounded_String (Source);
+                  end if;
+               end if;
+            end loop;
+         end if;
+      end loop;
+      return To_String (Found);
+   end Without_Assertions;
+
    function Directory_Of (Path : String) return String is
    begin
       for K in reverse Path'Range loop
@@ -2059,6 +2120,29 @@ package body AdaMutant.Runner is
       begin
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
       end;
+      --  Contracts are always mutated, and only tests built with
+      --  assertions can detect those mutants.
+      if Warn /= null then
+         declare
+            Sources : String_Vectors.Vector;
+         begin
+            for F of R.Files loop
+               Sources.Append (To_String (F.Path));
+            end loop;
+            declare
+               File : constant String :=
+                 Without_Assertions (Slot_Dir (1), Sources);
+            begin
+               if File /= "" then
+                  Warn ("the tests are compiled without assertions (no -gnata"
+                        & " in the GNAT ALI file of " & File & "): mutants of"
+                        & " contracts (aspects and ghost code) are then"
+                        & " detected only by the proof; compile the tests"
+                        & " with -gnata");
+               end if;
+            end;
+         end;
+      end if;
       --  Counted before the coverage analysis, which may take mutants off
       --  the queue, so a few sandboxes may stay idle.
       Slots := Positive'Max (1, Natural'Min (S.Concurrency, Pending_Count));

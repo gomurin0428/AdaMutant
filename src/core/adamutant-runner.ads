@@ -63,6 +63,16 @@ package AdaMutant.Runner is
      (Log : String) return Proof_Message_Vectors.Vector;
    --  The messages of Proof_Failures, each with its counterexample.
 
+   function Without_Assertions
+     (Dir : String; Sources : AdaMutant.Files.String_Vectors.Vector)
+      return String;
+   --  One of Sources (paths relative to Dir) whose GNAT ALI files under
+   --  Dir, outside the directories of GNATprove, show that it was compiled
+   --  without assertions (no "-gnata"), or "" when one of them was
+   --  compiled with them, when there is no such ALI file, or when a
+   --  project file, a configuration pragma file or one of Sources says
+   --  Assertion_Policy, which can turn them on without the switch.
+
    function Check_Kind (Message : String) return String;
    --  What a message of Proof_Failures is about: "postcondition" for
    --  "p.ads:9:17: medium: postcondition might fail", "range check" for
