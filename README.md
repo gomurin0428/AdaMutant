@@ -283,14 +283,14 @@ prove_timeout_ms = 300000   # the time limit of one limited proof
 
 cmd.exe leaves an empty variable as the text `%ADAMUTANT_PROVE_LIMIT%`, so on Windows put a small script in between that adds the switch only when there is one (`check_prove_limit` in `tests/e2e/run_e2e.py` has one in Python).
 
-`ADAMUTANT_PROVE_LIMIT` is empty when GNATprove might find the failures of the mutant only in the proof of the callers:
+`ADAMUTANT_PROVE_LIMIT` limits the proof only to a subprogram of the package itself that meets one of these, and only for a mutant in its own code (not in a subprogram or expression function declared in it):
 
-- A mutant outside any subprogram (declarations of a package and so on), a mutant of a contract (aspects, ghost code), and a mutant in a generic unit (GNATprove proves the instances)
-- A mutant in an expression function: GNATprove proves the callers with the body of the expression function
-- A mutant in a subprogram that only the body has, without a precondition, postcondition or other such aspect: GNATprove proves such a subprogram inlined in its callers. It is also empty when the body has more subprograms of the name than the spec declares (an overload that only the body has cannot be told apart)
-- A mutant that deletes a statement, when the subprogram that the proof would be limited to has neither `Global` nor `Depends`: the Global contract that GNATprove makes from the body changes, and the failure shows only in the flow analysis of the callers
+- The spec declares it (unless the body has more completions of the name, that is, an overload that only the body has; imported declarations do not count)
+- Its body has an aspect after which GNATprove proves it on its own: `Pre`, `Post`, `Contract_Cases`, `Global`, `Depends`, `Subprogram_Variant`, `Always_Terminates` or `Exceptional_Cases`
 
-For a subprogram declared inside another one, the limit is the subprogram itself when it has an aspect such as `Pre`, `Post`, `Global`, `Depends` or `Subprogram_Variant`, or calls itself, because GNATprove then proves it on its own. Otherwise GNATprove proves it inlined in its callers, and the limit is the subprogram around it. With only other aspects it is not clear which, and the limit is empty.
+Otherwise it is empty. GNATprove proves an expression function, and a subprogram without a contract or such an aspect, inlined in its callers, and it may inline a subprogram declared inside another one in the subprogram around it or beside it; the failures of a mutant there can then show in the proof of another subprogram only. A generic unit (GNATprove proves the instances), a subunit (`separate`) and a mutant of a contract (aspects, ghost code) get no limit either.
+
+A deleted statement, a changed condition (ConditionalExpression) and a changed Boolean literal can change which variables the code reads or writes. When GNATprove makes the Global contract from the body, that change shows only in the flow analysis of the callers, so these mutants are limited only when the subprogram has `Global` or `Depends` (on its declaration in the spec or on its body).
 
 These rules come from comparing limited proofs with whole proofs on GNATprove 16.1, and the results were the same on the small projects tried. They are decided from the tokens alone, though, so the results may differ in some case: on a large project, compare them with a whole proof once.
 

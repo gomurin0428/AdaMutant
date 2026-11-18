@@ -333,10 +333,12 @@ procedure Unit_Tests is
         & "end Pk;" & LF;
       Subs    : constant Subprogram_Vectors.Vector := Find (Body_Text);
       Visible : constant Name_Counts.Map := Declared_Names (Spec_Text);
+      No_Globals : constant Name_Counts.Map := Name_Counts.Empty_Map;
 
       function At_Mark (Mark : String) return String is
          Where : constant Place :=
-           Place_Of (Subs, Ada.Strings.Fixed.Index (Body_Text, Mark), Visible);
+           Place_Of (Subs, Ada.Strings.Fixed.Index (Body_Text, Mark), Visible,
+                     No_Globals);
       begin
          return To_String (Where.Name) & Where.Limit'Image;
       end At_Mark;
@@ -358,14 +360,15 @@ procedure Unit_Tests is
       Expect_Place ("in Guarded", "Guarded 6");
       --  An expression function: its callers see its body.
       Expect_Place ("A * 2", "Twice 0");
-      --  A nested subprogram without a contract: the one around it.
-      Expect_Place ("in Nested", "Nested 15");
-      Expect_Place ("in Checked", "Checked 20");
+      --  A nested subprogram may be inlined anywhere around or beside it.
+      Expect_Place ("in Nested", "Nested 0");
+      Expect_Place ("in Checked", "Checked 0");
       Expect_Place ("in P", "P 15");
       Expect_Place ("after the block", "P 15");
       Expect_Place ("in plus", """+"" 35");
       Expect_Place ("in the package", " 0");
-      Check (Natural (Subs.Length) = 7, "subprograms: count",
+      --  With the instantiation and the stub.
+      Check (Natural (Subs.Length) = 9, "subprograms: count",
              Subs.Length'Image);
 
       --  A declare expression has no "end"; a function called Post is no
@@ -408,7 +411,7 @@ procedure Unit_Tests is
 
          function At2 (Mark : String) return String is
             Where : constant Place := Place_Of
-              (Subs2, Ada.Strings.Fixed.Index (Body2, Mark), Vis2);
+              (Subs2, Ada.Strings.Fixed.Index (Body2, Mark), Vis2, No_Globals);
          begin
             return To_String (Where.Name) & Where.Limit'Image;
          end At2;
@@ -467,7 +470,8 @@ procedure Unit_Tests is
          Dec3  : constant Name_Counts.Map := Declared_Names (Spec3);
 
          function At3 (Mark : String) return Place is
-           (Place_Of (Subs3, Ada.Strings.Fixed.Index (Body3, Mark), Dec3));
+           (Place_Of (Subs3, Ada.Strings.Fixed.Index (Body3, Mark), Dec3,
+                      No_Globals));
 
          function Image (P : Place) return String is
            (To_String (P.Name) & P.Limit'Image);
@@ -489,11 +493,10 @@ procedure Unit_Tests is
          Subs4 : constant Subprogram_Vectors.Vector :=
            Find (Body4, Generic_Names (Spec4));
       begin
-         Check (Image (At3 ("in With_Global")) = "With_Global 3"
-                and then At3 ("in With_Global").Globals,
+         Check (Image (At3 ("in With_Global")) = "With_Global 0",
                 "subprograms: a nested subprogram with Global",
                 Image (At3 ("in With_Global")));
-         Check (Image (At3 ("in Again")) = "Again 7",
+         Check (Image (At3 ("in Again")) = "Again 0",
                 "subprograms: a recursive nested subprogram",
                 Image (At3 ("in Again")));
          Check (Image (At3 ("in Inl")) = "Inl 0",
@@ -509,10 +512,55 @@ procedure Unit_Tests is
          Check (not Dec3.Contains ("seven"),
                 "subprograms: an expression function is no declaration");
          Check (Image (Place_Of (Subs4, Ada.Strings.Fixed.Index (Body4, "in Gen"),
-                                Declared_Names (Spec4))) = "P 0",
+                                Declared_Names (Spec4), No_Globals)) = "P 0",
                 "subprograms: a generic unit",
                 Image (Place_Of (Subs4, Ada.Strings.Fixed.Index (Body4, "in Gen"),
-                                 Declared_Names (Spec4))));
+                                 Declared_Names (Spec4), No_Globals)));
+      end;
+
+      --  A subunit, an imported declaration, a renaming that completes a
+      --  declaration, and Global on the spec.
+      declare
+         Spec5 : constant String :=
+           "package T is" & LF
+           & "   procedure Imp with Import, Convention => C;" & LF
+           & "   procedure Ren;" & LF
+           & "   procedure G with Global => (In_Out => X);" & LF
+           & "end T;" & LF;
+         Body5 : constant String :=
+           "package body T is" & LF                         --  1
+           & "   procedure Imp (B : Boolean) is" & LF       --  2
+           & "   begin" & LF                                --  3
+           & "      null;  -- in Imp" & LF                  --  4
+           & "   end Imp;" & LF                             --  5
+           & "   procedure Ren renames Other;" & LF         --  6
+           & "   procedure Ren (B : Boolean) is" & LF       --  7
+           & "   begin" & LF                                --  8
+           & "      null;  -- in Ren" & LF                  --  9
+           & "   end Ren;" & LF                             -- 10
+           & "   procedure G is" & LF                       -- 11
+           & "   begin" & LF                                -- 12
+           & "      X := 0;  -- in G" & LF                  -- 13
+           & "   end G;" & LF                               -- 14
+           & "end T;" & LF;
+         Subs5 : constant Subprogram_Vectors.Vector := Find (Body5);
+
+         function At5 (Mark : String) return Place is
+           (Place_Of (Subs5, Ada.Strings.Fixed.Index (Body5, Mark),
+                      Declared_Names (Spec5),
+                      Declared_Names (Spec5, With_Globals => True)));
+      begin
+         Check (Find ("separate (T)" & LF & "procedure S is" & LF & "begin"
+                      & LF & "   null;" & LF & "end S;" & LF).Is_Empty,
+                "subprograms: a subunit");
+         Check (At5 ("in Imp").Limit = 0, "subprograms: an imported declaration",
+                At5 ("in Imp").Limit'Image);
+         Check (At5 ("in Ren").Limit = 0,
+                "subprograms: a renaming completes a declaration",
+                At5 ("in Ren").Limit'Image);
+         Check (At5 ("in G").Limit = 11 and then At5 ("in G").Globals,
+                "subprograms: Global on the spec",
+                At5 ("in G").Limit'Image);
       end;
    end Test_Subprograms;
 

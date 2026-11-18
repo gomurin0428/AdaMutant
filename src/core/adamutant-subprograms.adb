@@ -77,7 +77,7 @@ package body AdaMutant.Subprograms is
    end Starts_Subprogram;
 
    type Aspect_Info is record
-      Own, Other, Globals : Boolean := False;
+      Own, Other, Globals, Import : Boolean := False;
    end record;
 
    procedure Scan
@@ -125,6 +125,7 @@ package body AdaMutant.Subprograms is
                      Info.Own := True;
                   else
                      Info.Other := True;
+                     Info.Import := Info.Import or else A = "import";
                   end if;
                end;
             end if;
@@ -238,21 +239,6 @@ package body AdaMutant.Subprograms is
          return False;
       end With_Before_End;
 
-      function Calls_Itself (Name : String; From, To : Natural) return Boolean
-      is
-         --  The tokens From .. To name Name, other than in "end Name" or
-         --  as a component of another name.
-      begin
-         for J in From .. To loop
-            if J in S'Range and then S (J).Kind = Identifier
-              and then Lower (Txt (J)) = Name
-              and then Word (J - 1) /= "end" and then not Is_Del (J - 1, ".")
-            then
-               return True;
-            end if;
-         end loop;
-         return False;
-      end Calls_Itself;
 
       procedure Add (K, Stop, Last : Positive; Expression : Boolean;
                      Info : Aspect_Info) is
@@ -268,7 +254,7 @@ package body AdaMutant.Subprograms is
                Own          => Info.Own,
                Other        => Info.Other,
                Globals      => Info.Globals,
-               Recursive    => False,
+               Stub         => False,
                Generic_Unit => In_Generic (Name_At (K + 1)),
                Parent       => Enclosing));
          if not Expression then
@@ -281,6 +267,23 @@ package body AdaMutant.Subprograms is
                       Body_From  => Stop + 1));
          end if;
       end Add;
+
+      procedure Add_Stub (K : Positive) is
+      begin
+         Result.Append
+           (Subprogram'
+              (Name         => To_Unbounded_String (Txt (K + 1)),
+               Line         => S (K + 1).Line,
+               First        => S (K).First,
+               Last         => S (K).First - 1,
+               Expression   => False,
+               Own          => False,
+               Other        => False,
+               Globals      => False,
+               Stub         => True,
+               Generic_Unit => In_Generic (Name_At (K + 1)),
+               Parent       => Enclosing));
+      end Add_Stub;
 
       procedure Push (Name : String; K : Positive;
                       Has_Begin, Begun : Boolean) is
@@ -299,6 +302,11 @@ package body AdaMutant.Subprograms is
       --  Inside parentheses and brackets nothing opens a construct: a
       --  declare expression "(declare ... begin ...)" has no "end".
    begin
+      --  A subunit: whether it is part of a generic unit is in another
+      --  file.
+      if S'Length > 0 and then Word (S'First) = "separate" then
+         return Result;
+      end if;
       for C in Generics.Iterate loop
          Gen.Include (Name_Counts.Key (C), 1);
       end loop;
@@ -321,6 +329,7 @@ package body AdaMutant.Subprograms is
                                         | "null"
                     or else Is_Del (Stop + 1, "<>")
                   then
+                     Add_Stub (K);
                      K := Stop;
                   elsif W = "function" and then Opens (Source, S, Stop + 1)
                   then
@@ -339,6 +348,10 @@ package body AdaMutant.Subprograms is
                      K := Stop;
                   end if;
                elsif Stop /= 0 then
+                  --  A renaming completes a declaration too.
+                  if Word (Stop) = "renames" then
+                     Add_Stub (K);
+                  end if;
                   K := Stop;
                end if;
 
@@ -424,8 +437,6 @@ package body AdaMutant.Subprograms is
                         begin
                            if F.Sub /= 0 then
                               Result (F.Sub).Last := S (Semi).Last;
-                              Result (F.Sub).Recursive := Calls_Itself
-                                (To_String (F.Name), F.Body_From, K - 1);
                            end if;
                         end;
                         Stack.Delete_Last;
@@ -440,7 +451,9 @@ package body AdaMutant.Subprograms is
       return Result;
    end Find;
 
-   function Declared_Names (Spec : String) return Name_Counts.Map is
+   function Declared_Names
+     (Spec : String; With_Globals : Boolean := False) return Name_Counts.Map
+   is
       S      : constant Token_Array := Significant (Spec);
       Result : Name_Counts.Map;
       Stop   : Natural;
@@ -452,7 +465,10 @@ package body AdaMutant.Subprograms is
          then
             Scan (Spec, S, K + 1, Stop, Info);
             --  Only a declaration that a body completes.
-            if Stop /= 0 and then Is_Del (Spec, S, Stop, ";") then
+            if Stop /= 0 and then Is_Del (Spec, S, Stop, ";")
+              and then not Info.Import
+              and then (Info.Globals or else not With_Globals)
+            then
                declare
                   Name : constant String := Lower (Txt (Spec, S, K + 1));
                begin
@@ -469,32 +485,35 @@ package body AdaMutant.Subprograms is
    end Declared_Names;
 
    function Place_Of
-     (Subs     : Subprogram_Vectors.Vector;
-      Offset   : Positive;
-      Declared : Name_Counts.Map) return Place
+     (Subs          : Subprogram_Vectors.Vector;
+      Offset        : Positive;
+      Declared      : Name_Counts.Map;
+      Declared_With : Name_Counts.Map) return Place
    is
       Inner  : Natural := 0;
       Result : Place;
 
+      function Name_Of (I : Positive) return String is
+        (Lower (To_String (Subs (I).Name)));
+
       function Declared_Body (I : Positive) return Boolean is
          --  The spec declares the subprogram of the body Subs (I): its
-         --  name, and no more bodies of that name in the unit than the
-         --  spec declares (an overload that only the body has is not told
-         --  apart by name).
-         Name  : constant String := Lower (To_String (Subs (I).Name));
+         --  name, and no more completions of that name in the package
+         --  than the spec declares (an overload that only the body has is
+         --  not told apart by name).
          Count : Natural := 0;
       begin
-         if Subs (I).Parent /= 0 or else not Declared.Contains (Name) then
+         if not Declared.Contains (Name_Of (I)) then
             return False;
          end if;
-         for J of Subs loop
-            if J.Parent = 0 and then not J.Expression
-              and then Lower (To_String (J.Name)) = Name
+         for J in Subs.First_Index .. Subs.Last_Index loop
+            if Subs (J).Parent = 0 and then not Subs (J).Expression
+              and then Name_Of (J) = Name_Of (I)
             then
                Count := Count + 1;
             end if;
          end loop;
-         return Count <= Declared (Name);
+         return Count <= Declared (Name_Of (I));
       end Declared_Body;
    begin
       for I in Subs.First_Index .. Subs.Last_Index loop
@@ -509,31 +528,22 @@ package body AdaMutant.Subprograms is
       end if;
       Result.Name := Subs (Inner).Name;
       declare
-         I : Natural := Inner;
+         Sub : constant Subprogram := Subs (Inner);
       begin
-         while I /= 0 loop
-            declare
-               Sub : constant Subprogram := Subs (I);
-            begin
-               --  GNATprove analyses the instances, not the generic.
-               exit when Sub.Generic_Unit;
-               if Sub.Expression then
-                  --  Its callers see its body: those around it, if any.
-                  I := Sub.Parent;
-               elsif Sub.Own or else Sub.Recursive
-                 or else (Sub.Parent = 0 and then Declared_Body (I))
-               then
-                  Result.Limit := Sub.Line;
-                  Result.Globals := Sub.Globals;
-                  exit;
-               elsif Sub.Parent /= 0 and then not Sub.Other then
-                  --  Inlined in the subprogram around it.
-                  I := Sub.Parent;
-               else
-                  exit;
-               end if;
-            end;
-         end loop;
+         if Sub.Generic_Unit or else Sub.Expression or else Sub.Parent /= 0
+         then
+            return Result;
+         elsif Declared_Body (Inner) then
+            Result.Limit := Sub.Line;
+            --  Global or Depends on all the declarations of the name.
+            Result.Globals := Sub.Globals
+              or else (Declared_With.Contains (Name_Of (Inner))
+                       and then Declared_With (Name_Of (Inner))
+                                = Declared (Name_Of (Inner)));
+         elsif Sub.Own then
+            Result.Limit := Sub.Line;
+            Result.Globals := Sub.Globals;
+         end if;
       end;
       return Result;
    end Place_Of;

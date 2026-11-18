@@ -94,6 +94,7 @@ package body AdaMutant.Runner is
                Found   : Mutation_Vectors.Vector;
                Subs    : AdaMutant.Subprograms.Subprogram_Vectors.Vector;
                Declared : AdaMutant.Subprograms.Name_Counts.Map;
+               Declared_With : AdaMutant.Subprograms.Name_Counts.Map;
                Generics : AdaMutant.Subprograms.Name_Counts.Map;
             begin
                begin
@@ -116,6 +117,8 @@ package body AdaMutant.Runner is
                      begin
                         Declared := AdaMutant.Subprograms.Declared_Names
                           (Spec_Text);
+                        Declared_With := AdaMutant.Subprograms.Declared_Names
+                          (Spec_Text, With_Globals => True);
                         Generics := AdaMutant.Subprograms.Generic_Names
                           (Spec_Text);
                      end;
@@ -140,7 +143,7 @@ package body AdaMutant.Runner is
                          (Changes, Path, Start_Pos.Line, End_Pos.Line);
                      Where     : constant AdaMutant.Subprograms.Place :=
                        AdaMutant.Subprograms.Place_Of
-                         (Subs, M.First, Declared);
+                         (Subs, M.First, Declared, Declared_With);
                   begin
                      R.Mutants.Append
                        (Mutant'
@@ -162,11 +165,15 @@ package body AdaMutant.Runner is
                            Failed_Checks => String_Vectors.Empty_Vector,
                            Subprogram    => Where.Name,
                            --  A changed contract shows in the callers, and
-                           --  so does a deleted statement where GNATprove
-                           --  makes the Global contract from the body.
+                           --  so does a change of what the body reads or
+                           --  writes (a deleted statement, a condition
+                           --  that becomes static) where GNATprove makes
+                           --  the Global contract from the body.
                            Limit_Line    =>
                              (if M.Contract
-                                or else (M.Kind = Statement_Deletion
+                                or else (M.Kind in Statement_Deletion
+                                           | Conditional_Expression
+                                           | Boolean_Literal
                                          and then not Where.Globals)
                               then 0 else Where.Limit),
                            Evidence      => None,
@@ -838,6 +845,8 @@ package body AdaMutant.Runner is
 
       Prove_Ended : array (1 .. Positive'Max (1, S.Concurrency)) of Time :=
         [others => Started];
+      Prove_Started : array (1 .. Positive'Max (1, S.Concurrency)) of Time :=
+        [others => Started];
 
       --  The libraries that a sandbox holds after the first build, as
       --  relative paths.  gprbuild takes a library to be up to date when
@@ -859,11 +868,16 @@ package body AdaMutant.Runner is
       --  A proof limited to one subprogram (ADAMUTANT_PROVE_LIMIT) leaves
       --  the results of the other units as they are, and the failures of
       --  an earlier mutant in another unit would still count.
+      package Time_Vectors is new Ada.Containers.Vectors (Positive, Time);
+
       type Spark_Files is record
          Paths, Texts : String_Vectors.Vector;
-         Restored     : Time := Clock;
-         --  When they were put back last: a file that has not changed
-         --  since then is not written again.
+         Stamps       : Time_Vectors.Vector;
+         --  The time stamp of each file when it was put back last.  A file
+         --  that still has it has not changed, unless the stamp is so close
+         --  to the start of the last proof that a write during the proof
+         --  could have given the same one (time stamps have whole-second,
+         --  or two-second on FAT, resolution): then its text is compared.
       end record;
       Spark_Results : array (1 .. Positive'Max (1, S.Concurrency))
         of Spark_Files;
@@ -1025,10 +1039,7 @@ package body AdaMutant.Runner is
             if Uses_Gnatprove then
                Wait_For_New_Stamp (Prove_Ended (Slot));
                declare
-                  R    : Spark_Files renames Spark_Results (Slot);
-                  Now  : constant Time := Clock;
-                  --  Two seconds: time stamps of whole (or even) seconds.
-                  Since : constant Time := R.Restored - 2.0;
+                  R : Spark_Files renames Spark_Results (Slot);
                begin
                   for K in R.Paths.First_Index .. R.Paths.Last_Index loop
                      declare
@@ -1036,15 +1047,19 @@ package body AdaMutant.Runner is
                      begin
                         if not Ada.Directories.Exists (Path)
                           or else Ada.Directories.Modification_Time (Path)
-                                  >= Since
+                                  /= R.Stamps (K)
+                          or else (R.Stamps (K) >= Prove_Started (Slot) - 3.0
+                                   and then Read (Path) /= R.Texts (K))
                         then
                            Write (Path, R.Texts (K));
+                           R.Stamps.Replace_Element
+                             (K, Ada.Directories.Modification_Time (Path));
                         end if;
                      end;
                   end loop;
-                  R.Restored := Now;
                end;
             end if;
+            Prove_Started (Slot) := Clock;
             declare
                P : constant Run_Result :=
                  Step ("prove", To_String (S.Prove),
@@ -2172,6 +2187,9 @@ package body AdaMutant.Runner is
                   Spark_Results (Slot).Paths.Append (Path);
                   Spark_Results (Slot).Texts.Append
                     (Read (Join (Slot_Dir (Slot), Path)));
+                  Spark_Results (Slot).Stamps.Append
+                    (Ada.Directories.Modification_Time
+                       (Join (Slot_Dir (Slot), Path)));
                end if;
             end loop;
          end loop;

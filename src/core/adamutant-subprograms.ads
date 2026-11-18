@@ -30,8 +30,9 @@ package AdaMutant.Subprograms is
       --  Another aspect, of which it is not known whether it does.
       Globals      : Boolean := False;
       --  Global or Depends: GNATprove does not generate them from the body.
-      Recursive    : Boolean := False;
-      --  The body names the subprogram (a call to itself).
+      Stub         : Boolean := False;
+      --  A completion without a body here: a renaming, "is separate",
+      --  "is null", "is abstract" or an instantiation (First > Last).
       Generic_Unit : Boolean := False;
       --  In a generic unit, whose instances GNATprove analyses.
       Parent       : Natural := 0;
@@ -49,15 +50,19 @@ package AdaMutant.Subprograms is
      (Source   : String;
       Generics : Name_Counts.Map := Name_Counts.Empty_Map)
       return Subprogram_Vectors.Vector;
-   --  The subprogram bodies, entry bodies and expression functions of
-   --  Source.  The subprograms in the bodies of the generic units that
-   --  Source declares, or that Generics names (those of the spec), get
+   --  The subprogram bodies, entry bodies, expression functions and other
+   --  completions of Source; nothing for a subunit ("separate").  The
+   --  subprograms in the bodies of the generic units that Source
+   --  declares, or that Generics names (those of the spec), get
    --  Generic_Unit.  Propagates AdaMutant.Lexer.Lexical_Error.
 
-   function Declared_Names (Spec : String) return Name_Counts.Map;
+   function Declared_Names
+     (Spec : String; With_Globals : Boolean := False) return Name_Counts.Map;
    --  How many subprograms of each lower-case name the package
-   --  specification Spec declares without completing them (no expression
-   --  functions, null procedures or renamings).  Propagates Lexical_Error.
+   --  specification Spec declares for a body to complete (not expression
+   --  functions, null procedures, renamings or imported ones); with
+   --  With_Globals, only those that have Global or Depends.  Propagates
+   --  Lexical_Error.
 
    type Place is record
       Name    : Unbounded_String;
@@ -70,17 +75,20 @@ package AdaMutant.Subprograms is
    end record;
 
    function Place_Of
-     (Subs     : Subprogram_Vectors.Vector;
-      Offset   : Positive;
-      Declared : Name_Counts.Map) return Place;
-   --  Where Offset of the source of Subs is.  GNATprove proves the callers
-   --  of an expression function, and of a subprogram without a contract
-   --  or other aspect, with its body: a change there can fail in the
-   --  callers only.  The limit is the innermost subprogram around Offset
-   --  that GNATprove analyses on its own and that callers outside do not
-   --  see the body of: one with such an aspect, a recursive one, or one
-   --  that the spec declares.  A plain subprogram declared in another one
-   --  takes the limit of that one.  The limit is 0 in a generic unit, and
-   --  where it is not clear.
+     (Subs          : Subprogram_Vectors.Vector;
+      Offset        : Positive;
+      Declared      : Name_Counts.Map;
+      Declared_With : Name_Counts.Map) return Place;
+   --  Where Offset of the source of Subs is; Declared and Declared_With
+   --  come from Declared_Names of the spec.  GNATprove proves an
+   --  expression function, and a subprogram without a contract or other
+   --  aspect, inlined in its callers, and a subprogram declared in another
+   --  one may be inlined in any subprogram around or beside it: a change
+   --  there can fail elsewhere.  The limit is therefore only a subprogram
+   --  of the package itself (not declared in another subprogram) that the
+   --  spec declares, or that has an aspect after which GNATprove analyses
+   --  it on its own (Own), and only when Offset is in its own code, not in
+   --  a subprogram or expression function declared in it.  It is 0 in a
+   --  generic unit and in a subunit.
 
 end AdaMutant.Subprograms;
