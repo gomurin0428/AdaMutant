@@ -299,6 +299,28 @@ procedure Unit_Tests is
               & "|AttributeSwap Succ->Pred|AttributeSwap FLOOR->CEILING"
               & "|AttributeSwap ceiling->floor",
               "attribute swaps", O);
+      --  A predicate is a contract: mutated with mutate_contracts only,
+      --  also in a subtype declaration.  So are the bounds of a range in
+      --  it (NumericLiteral).
+      declare
+         Pred : constant String :=
+           "package P is" & LF
+           & "   subtype S is Integer range 0 .. T'Last" & LF
+           & "     with Dynamic_Predicate => S <= Integer'Max (10, 20);" & LF
+           & "   subtype U is Integer with Static_Predicate => U in 1 .. 5;" & LF
+           & "end P;";
+         C : Scan_Options := O;
+      begin
+         Expect (Pred, "", "attribute swaps: not in a predicate by default", O);
+         C.Mutate_Contracts := True;
+         C.Enabled (Numeric_Literal) := True;
+         Expect (Pred,
+                 --  The first argument of an attribute is never mutated.
+                 "AttributeSwap Max->Min"
+                 & "|NumericLiteral 20->21|NumericLiteral 1->0"
+                 & "|NumericLiteral 5->6",
+                 "attribute swaps and bounds in a predicate", C);
+      end;
       declare
          K : Mutator_Kind;
       begin

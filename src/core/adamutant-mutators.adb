@@ -365,7 +365,8 @@ package body AdaMutant.Mutators is
          function In_Declared_Subtype (K : Positive) return Boolean;
          --  K is in the subtype of an object, component, type or subtype
          --  declaration ("X : String (1 .. 6)", "subtype S is Integer
-         --  range 1 .. 4"), not in its initial value.
+         --  range 1 .. 4"), not in its initial value nor in its aspects
+         --  (a predicate is a contract, see Skipped).
 
          function Is_Declared_Bound (K : Positive) return Boolean is
            ((Is_Del (K - 1, "..") or else Is_Del (K + 1, ".."))
@@ -378,6 +379,9 @@ package body AdaMutant.Mutators is
             First : constant Positive := Seg_Start (K);
             Colon : Boolean := False;
          begin
+            if In_Aspect (K) then
+               return False;
+            end if;
             for J in First .. K - 1 loop
                if Is_Del (J, ":=") or else Is_Kw (J, "renames") then
                   return False;
