@@ -79,7 +79,9 @@ package AdaMutant.Mutators is
 
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector;
-   --  Propagates AdaMutant.Lexer.Lexical_Error.
+   --  Works on the syntax tree of Libadalang, without name resolution.
+   --  Propagates AdaMutant.Lexer.Lexical_Error ("line N: ...") when
+   --  Source does not parse.
 
    function Apply (Source : String; M : Mutation) return String;
    --  Source with the mutation made.  The line breaks of the text that it

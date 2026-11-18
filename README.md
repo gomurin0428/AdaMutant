@@ -4,7 +4,7 @@
 
 A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/) for .NET: it makes small changes (mutants) to the sources automatically, checks whether the tests and the GNATprove proofs detect each change, and reports the **mutation score**.
 
-- A built-in lexer for Ada up to Ada 2022 (no extra dependencies such as libadalang)
+- Finds the places to mutate on the syntax tree of [Libadalang](https://github.com/AdaCore/libadalang), for Ada up to Ada 2022 (syntax only, without name resolution)
 - **The mutants that the tests do not detect go to the GNATprove proof** (for SPARK). The mutants that only the proof detects are listed as candidates for a missing test
 - **All the mutants are built once**, and the tests run while switching which mutant is active (mutant schemata). It is fast because it does not rebuild for every mutant
 - **Mutants in code that no test executes skip the tests and go straight to the proof.** AdaMutant records which places the tests of the unchanged project execute
