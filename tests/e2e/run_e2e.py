@@ -887,6 +887,8 @@ def check_proof_log():
             "if n == '2':\n"
             "    print('2026-11-17T08:00:00 /x/counters.adb:5:16: medium: range check'\n"
             "          ' might fail, cannot prove lower bound')\n"
+            "    print('  e.g. when C = 0')\n"
+            "    print('        and D = 1')\n"
             "    print('counters.ads:9:17: medium: postcondition might fail')\n"
             "    print('counters.ali:0:0: note: not a message')\n"
             "    sys.exit(1)\n"
@@ -918,12 +920,15 @@ def check_proof_log():
         expected = {
             # Only the message that the unmodified project has too.
             "1": ("Killed", ["proof"], "proof failed with exit status 1"),
+            # A counterexample that the real code does not reach (medium).
             "2": ("Killed", ["proof: range check", "proof: postcondition"],
-                  "proof failed: counters.adb:5:16: medium: range check might fail,"
-                  " cannot prove lower bound (and 1 more)"),
+                  "proof failed, with a counterexample that the real code does not"
+                  " reach: counters.adb:5:16: medium: range check might fail,"
+                  " cannot prove lower bound (e.g. when C = 0 and D = 1) (and 1 more)"),
+            # A message of severity high.
             "3": ("Killed", ["proof: initialization"],
-                  'proof failed: counters.adb:7:8: high: "Y" is not initialized in "Init"'
-                  " (and 1 more)"),
+                  "proof failed, confirmed by a counterexample: counters.adb:7:8:"
+                  ' high: "Y" is not initialized in "Init" (and 1 more)'),
             # A proof that does not finish detects nothing.
             "4": ("Survived", None,
                   "the tests passed, and the proof did not finish within the timeout"),
@@ -935,7 +940,15 @@ def check_proof_log():
             got = (m["status"], m.get("killedBy"), m.get("statusReason"))
             if got != want:
                 errors.append(f"mutant {n}: {got}, expected {want}")
-        for line in ("  range check    |     1 |     0 alone",
+        for line in ("Detected only by the proof (candidates for a missing test):\n"
+                     "  Confirmed: the check fails in the real code\n  #3 ",
+                     "  A counterexample that the real code does not reach: a contract"
+                     " says less than the code relies on\n  #2 ",
+                     "\n    e.g. when C = 0 and D = 1\n",
+                     "  Undecided: no counterexample\n  #1 ",
+                     "  (GNATprove gives counterexamples only with --counterexamples=on"
+                     " in the prove command.)",
+                     "  range check    |     1 |     0 alone",
                      "  postcondition  |     1 |     0 alone",
                      "  initialization |     1 |     1 alone",
                      "Detected only by the proof (candidates for a missing test):",

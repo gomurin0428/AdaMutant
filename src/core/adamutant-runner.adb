@@ -142,6 +142,8 @@ package body AdaMutant.Runner is
                               else Null_Unbounded_String),
                            Killed_By     => None,
                            Failed_Checks => String_Vectors.Empty_Vector,
+                           Evidence      => None,
+                           Example       => Null_Unbounded_String,
                            Reached       => Unknown,
                            Covered_By    => String_Vectors.Empty_Vector,
                            Killers       => String_Vectors.Empty_Vector,
@@ -304,24 +306,88 @@ package body AdaMutant.Runner is
       return To_String (Result);
    end One_Line_Messages;
 
+   function Proof_Messages
+     (Log : String) return Proof_Message_Vectors.Vector
+   is
+      Text       : constant String := One_Line_Messages (Log);
+      Result     : Proof_Message_Vectors.Vector;
+      --  The lines after a message that makes a proof fail belong to it.
+      Current    : Boolean := False;
+      In_Example : Boolean := False;
+      First      : Positive := Text'First;
+      Last       : Natural;
+
+      function Starts_With (S, Prefix : String) return Boolean is
+        (S'Length >= Prefix'Length
+         and then S (S'First .. S'First + Prefix'Length - 1) = Prefix);
+   begin
+      while First <= Text'Last loop
+         Last := First;
+         while Last <= Text'Last and then Text (Last) /= ASCII.LF loop
+            Last := Last + 1;
+         end loop;
+         declare
+            L : constant String := Text (First .. Last - 1);
+            D : constant AdaMutant.Schemata.Diagnostic_Vectors.Vector :=
+              AdaMutant.Schemata.Diagnostics (L);
+         begin
+            if not D.Is_Empty then
+               declare
+                  Line : constant String := To_String (D.First_Element.Text);
+                  --  Without what precedes the file name: its directories,
+                  --  or what a wrapper of the prover puts in front.
+                  Msg  : constant String :=
+                    Line (Line'First + D.First_Element.Name_First - 1
+                          .. Line'Last);
+                  F    : Positive;
+                  Sev  : constant String := Severity_Of (Msg, F);
+                  pragma Unreferenced (F);
+               begin
+                  Current := Sev in "high" | "medium" | "low" | "error";
+                  In_Example := False;
+                  if Current then
+                     Result.Append
+                       (Proof_Message'(Text    => To_Unbounded_String (Msg),
+                                       Example => Null_Unbounded_String));
+                  end if;
+               end;
+            elsif Current then
+               --  "  e.g. when A = 0" then "        and B = 1" (GNATprove
+               --  14), "      + e.g. when A = 0" then "      and B = 1"
+               --  (GNATprove 16).
+               declare
+                  T0 : constant String :=
+                    Ada.Strings.Fixed.Trim (L, Ada.Strings.Both);
+                  T  : constant String :=
+                    (if Starts_With (T0, "+ ")
+                     then Ada.Strings.Fixed.Trim
+                       (T0 (T0'First + 2 .. T0'Last), Ada.Strings.Both)
+                     else T0);
+               begin
+                  if Starts_With (T, "e.g. when ")
+                    and then Length (Result.Last_Element.Example) = 0
+                  then
+                     Result (Result.Last_Index).Example :=
+                       To_Unbounded_String (T);
+                     In_Example := True;
+                  elsif In_Example and then Starts_With (T, "and ") then
+                     Append (Result (Result.Last_Index).Example, " " & T);
+                  else
+                     In_Example := False;
+                  end if;
+               end;
+            end if;
+         end;
+         First := Last + 1;
+      end loop;
+      return Result;
+   end Proof_Messages;
+
    function Proof_Failures (Log : String) return String_Vectors.Vector is
       Result : String_Vectors.Vector;
    begin
-      for D of AdaMutant.Schemata.Diagnostics (One_Line_Messages (Log)) loop
-         declare
-            Line  : constant String := To_String (D.Text);
-            --  Without what precedes the file name: its directories, or
-            --  what a wrapper of the prover puts in front of the line.
-            Text  : constant String :=
-              Line (Line'First + D.Name_First - 1 .. Line'Last);
-            First : Positive;
-            Sev   : constant String := Severity_Of (Text, First);
-            pragma Unreferenced (First);
-         begin
-            if Sev in "high" | "medium" | "low" | "error" then
-               Result.Append (Text);
-            end if;
-         end;
+      for M of Proof_Messages (Log) loop
+         Result.Append (To_String (M.Text));
       end loop;
       return Result;
    end Proof_Failures;
@@ -857,20 +923,23 @@ package body AdaMutant.Runner is
                     ("proof failed with exit status" & P.Exit_Code'Image);
                   --  What the log says is an addition: when it cannot be
                   --  read, the mutant is detected all the same.
+                  M.Evidence := Undecided;
                   begin
                      declare
-                        Failures : String_Vectors.Vector;
+                        Failures : Proof_Message_Vectors.Vector;
                         Known    : String_Vectors.Vector := Baseline_Failures;
+                        --  The message that decides the evidence.
+                        Shown    : Natural := 0;
                      begin
                         --  A message that the unmodified project has as
                         --  well is not what stops the mutant: each of
                         --  those accounts for one message of the mutant
                         --  with the same text in the same file.
-                        for F of Proof_Failures (Read (Log_Base & "-prove.log"))
+                        for F of Proof_Messages (Read (Log_Base & "-prove.log"))
                         loop
                            declare
-                              Found : constant Natural :=
-                                Known.Find_Index (Without_Place (F));
+                              Found : constant Natural := Known.Find_Index
+                                (Without_Place (To_String (F.Text)));
                            begin
                               if Found = 0 then
                                  Failures.Append (F);
@@ -879,15 +948,49 @@ package body AdaMutant.Runner is
                               end if;
                            end;
                         end loop;
-                        for F of Failures loop
-                           if not M.Failed_Checks.Contains (Check_Kind (F))
-                           then
-                              M.Failed_Checks.Append (Check_Kind (F));
-                           end if;
+                        for K in Failures.First_Index .. Failures.Last_Index
+                        loop
+                           declare
+                              F     : constant String :=
+                                To_String (Failures (K).Text);
+                              First : Positive;
+                              Sev   : constant String := Severity_Of (F, First);
+                              pragma Unreferenced (First);
+                           begin
+                              if not M.Failed_Checks.Contains (Check_Kind (F))
+                              then
+                                 M.Failed_Checks.Append (Check_Kind (F));
+                              end if;
+                              --  A failure that GNATprove confirmed counts
+                              --  before one with a counterexample that
+                              --  the real code does not reach.
+                              if Sev in "high" | "error" then
+                                 if M.Evidence /= Confirmed then
+                                    M.Evidence := Confirmed;
+                                    Shown := K;
+                                 end if;
+                              elsif Length (Failures (K).Example) > 0
+                                and then M.Evidence = Undecided
+                              then
+                                 M.Evidence := Weak_Contract;
+                                 Shown := K;
+                              end if;
+                           end;
                         end loop;
                         if not Failures.Is_Empty then
+                           if Shown = 0 then
+                              Shown := Failures.First_Index;
+                           end if;
+                           M.Example := Failures (Shown).Example;
                            M.Status_Reason := To_Unbounded_String
-                             ("proof failed: " & Failures.First_Element
+                             ((case M.Evidence is
+                                 when Confirmed     => Confirmed_Failure,
+                                 when Weak_Contract => Unreached_Example,
+                                 when others        => "proof failed: ")
+                              & To_String (Failures (Shown).Text)
+                              & (if Length (M.Example) > 0
+                                 then " (" & To_String (M.Example) & ")"
+                                 else "")
                               & (if Natural (Failures.Length) > 1
                                  then " (and" & Natural'Image
                                         (Natural (Failures.Length) - 1)
@@ -898,6 +1001,8 @@ package body AdaMutant.Runner is
                   exception
                      when E : others =>
                         M.Failed_Checks.Clear;
+                        M.Evidence := Undecided;
+                        M.Example := Null_Unbounded_String;
                         if Warn /= null then
                            Output.Seize;
                            begin

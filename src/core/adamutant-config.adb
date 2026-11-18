@@ -469,7 +469,8 @@ package body AdaMutant.Config is
       & "# bail = true" & LF
       & "# A mutant that the tests do not detect goes to the proof; a" & LF
       & "# non-zero exit status of 'prove' kills it there." & LF
-      & "prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on""" & LF
+      & "prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on"
+      & " --counterexamples=on""" & LF
       & "# A build with optimization and without debug information.  A" & LF
       & "# surviving mutant whose object files are the same as those of the" & LF
       & "# unmodified project is an equivalent mutant and becomes Ignored." & LF

@@ -282,6 +282,40 @@ package body AdaMutant.Baselines is
             end if;
          end loop;
       end if;
+      --  What GNATprove gave with a failure: from the start of the reason,
+      --  and the counterexample from its end, "... (e.g. when X = 1)" or
+      --  "... (e.g. when X = 1) (and 2 more)".
+      M.Evidence := None;
+      M.Example := Null_Unbounded_String;
+      if M.Status = Killed and then M.Killed_By = Proof then
+         declare
+            Plain : constant String :=
+              (if Reason'Length >= From_Baseline'Length
+                 and then Reason (Reason'Last - From_Baseline'Length + 1
+                                  .. Reason'Last) = From_Baseline
+               then Reason (Reason'First .. Reason'Last - From_Baseline'Length)
+               else Reason);
+            More  : constant Natural := Ada.Strings.Fixed.Index
+              (Plain, " (and ", Ada.Strings.Backward);
+            Rest  : constant String :=
+              (if More > 0 and then Plain'Length > 6
+                 and then Plain (Plain'Last - 5 .. Plain'Last) = " more)"
+               then Plain (Plain'First .. More - 1) else Plain);
+            Start : constant Natural :=
+              Ada.Strings.Fixed.Index (Rest, " (e.g. when ");
+         begin
+            M.Evidence :=
+              (if Starts_With (Plain, Confirmed_Failure) then Confirmed
+               elsif Starts_With (Plain, Unreached_Example)
+               then Weak_Contract
+               else Undecided);
+            if Start > 0 and then Rest (Rest'Last) = ')' then
+               M.Example := To_Unbounded_String
+                 (Rest (Start + 2 .. Rest'Last - 1));
+            end if;
+         end;
+      end if;
+
       --  An earlier version counted a proof that did not finish as a
       --  detection.
       if M.Status = Timeout and then Starts_With (Reason, Old_Proof_Timeout)

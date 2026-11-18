@@ -325,22 +325,57 @@ package body AdaMutant.Reports is
          Name_Width := Natural'Max (Name_Width, Length (F.Path));
       end loop;
 
-      --  The tests run first, so the proof only sees what they miss.
+      --  The tests run first, so the proof only sees what they miss.  The
+      --  mutants are in three groups by what GNATprove gives with the
+      --  failure (see Proof_Evidence).
       if (for some M of R.Mutants =>
             M.Status = Killed and then M.Killed_By = Proof)
       then
          Ada.Text_IO.New_Line;
          Ada.Text_IO.Put_Line
            ("Detected only by the proof (candidates for a missing test):");
-         for M of R.Mutants loop
-            if M.Status = Killed and then M.Killed_By = Proof then
-               Put_Mutant
-                 (M, Checks (M)
-                     & (if M.Reached /= Not_Covered then ""
-                        elsif M.Failed_Checks.Is_Empty
-                        then "no test executes this code"
-                        else "; no test executes this code"));
-            end if;
+         for Group in Confirmed .. Undecided loop
+            declare
+               function In_Group (M : Mutant) return Boolean is
+                 (M.Status = Killed and then M.Killed_By = Proof
+                  and then (if M.Evidence = None then Group = Undecided
+                            else M.Evidence = Group));
+            begin
+               if (for some M of R.Mutants => In_Group (M)) then
+                  Ada.Text_IO.Put_Line
+                    (case Group is
+                        when Confirmed =>
+                          "  Confirmed: the check fails in the real code",
+                        when Weak_Contract =>
+                          "  A counterexample that the real code does not"
+                          & " reach: a contract says less than the code"
+                          & " relies on",
+                        when others =>
+                          "  Undecided: no counterexample");
+                  for M of R.Mutants loop
+                     if In_Group (M) then
+                        Put_Mutant
+                          (M, Checks (M)
+                              & (if M.Reached /= Not_Covered then ""
+                                 elsif M.Failed_Checks.Is_Empty
+                                 then "no test executes this code"
+                                 else "; no test executes this code"));
+                        if Length (M.Example) > 0 then
+                           Ada.Text_IO.Put_Line
+                             ("    " & To_String (M.Example));
+                        end if;
+                     end if;
+                  end loop;
+                  if Group = Undecided
+                    and then Index (R.Settings.Prove, "counterexamples=on")
+                             = 0
+                  then
+                     Ada.Text_IO.Put_Line
+                       ("  (GNATprove gives counterexamples only with"
+                        & " --counterexamples=on in the prove command.)");
+                  end if;
+               end if;
+            end;
          end loop;
       end if;
 

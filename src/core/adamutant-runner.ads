@@ -1,3 +1,5 @@
+with Ada.Containers.Vectors;
+with Ada.Strings.Unbounded;
 with AdaMutant.Config;
 with AdaMutant.Files;
 with AdaMutant.Results;
@@ -43,6 +45,21 @@ package AdaMutant.Runner is
    --  medium, low or error, each from the name of its file on.  The
    --  messages of GNATprove 16, which puts the place on the next line
    --  ("--> file:line:col"), are read too, as such lines.
+
+   type Proof_Message is record
+      Text    : Ada.Strings.Unbounded.Unbounded_String;
+      --  "file:line:col: severity: text", as Proof_Failures gives it.
+      Example : Ada.Strings.Unbounded.Unbounded_String;
+      --  The counterexample that GNATprove prints under the message, on
+      --  one line ("e.g. when A = 0 and B = 1"), or "".
+   end record;
+
+   package Proof_Message_Vectors is new Ada.Containers.Vectors
+     (Positive, Proof_Message);
+
+   function Proof_Messages
+     (Log : String) return Proof_Message_Vectors.Vector;
+   --  The messages of Proof_Failures, each with its counterexample.
 
    function Check_Kind (Message : String) return String;
    --  What a message of Proof_Failures is about: "postcondition" for

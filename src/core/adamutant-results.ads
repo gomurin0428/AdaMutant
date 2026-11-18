@@ -16,6 +16,15 @@ package AdaMutant.Results is
 
    type Detector is (None, Tests, Proof);
 
+   type Proof_Evidence is (None, Confirmed, Weak_Contract, Undecided);
+   --  For a mutant that only the proof detects, what GNATprove gives with
+   --  the failure.  Confirmed: a message of severity high (GNATprove ran
+   --  a counterexample with the real code and the check failed), or an
+   --  error.  Weak_Contract: a counterexample that the real code does
+   --  not reach, which happens when the code relies on more than the
+   --  contracts of what it calls (or a loop invariant) say.  Undecided:
+   --  no counterexample, or no message that can be read.
+
    type Coverage is (Unknown, Covered, Not_Covered);
    --  Whether the unmodified tests execute the place of a mutant.
 
@@ -33,6 +42,10 @@ package AdaMutant.Results is
       --  For a mutant that the proof detects: the kinds of the checks that
       --  could not be proved ("postcondition", "range check", ...), each
       --  once, in the order of the messages.
+      Evidence      : Proof_Evidence := None;
+      Example       : Unbounded_String;
+      --  With Evidence = Weak_Contract or Confirmed: the counterexample,
+      --  "e.g. when H = 51", or "".
       Reached       : Coverage := Unknown;
       Covered_By    : AdaMutant.Config.String_Vector;
       --  With Reached = Covered: the names of the tests that execute the
@@ -90,6 +103,15 @@ package AdaMutant.Results is
 
    function Score_Image (C : Status_Counts) return String;
    --  "83.33" or "n/a".
+
+   Confirmed_Failure : constant String :=
+     "proof failed, confirmed by a counterexample: ";
+   Unreached_Example : constant String :=
+     "proof failed, with a counterexample that the real code does not"
+     & " reach: ";
+   --  How the reason of a mutant with Evidence = Confirmed or
+   --  Weak_Contract starts.  The other proof failures start with "proof
+   --  failed".
 
    Proof_Unfinished : constant String :=
      "the proof did not finish within the timeout";

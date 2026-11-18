@@ -20,29 +20,50 @@ Ada / SPARK 向けのミューテーションテストツールです。.NET の
 AdaMutant は、テストと GNATprove の証明を両方使う前提のツールです。次の流れで使うことを想定しています。
 
 1. テストと証明の両方を設定して回します。ミュータントはまずテストにかけ、テストが検出できなかったものだけを証明にかけます（テスト先行）。テストだけ、証明だけで回す設定はありません。
-2. 証明だけが検出したミュータントは、「テストの穴の候補」として一覧で見ます。コンソールの `Detected only by the proof (candidates for a missing test):` に出ます。
-   - テストで観測できる振る舞いなら、テストを足します。
+2. 証明だけが検出したミュータントは、「テストの穴の候補」として一覧で見ます。コンソールの `Detected only by the proof (candidates for a missing test):` に、GNATprove が失敗と一緒に出したものによって 3 つに分けて出ます（prove のコマンドに `--counterexamples=on` が要ります）。
+
+   | 区分 | 判定の材料 | 人がすること |
+   |---|---|---|
+   | `Confirmed`（確定） | severity が high（GNATprove が反例を本物のコードで実行し、検査が落ちた）、またはエラー | テストで観測できる振る舞いなら、テストを足す |
+   | `A counterexample that the real code does not reach`（契約が足りない） | severity が medium で、本物のコードでは起こらない反例がある | 反例の値を見て、どの契約（呼び出し先の事後条件、ループ不変条件）が緩いかを探し、強める |
+   | `Undecided`（不明） | severity が medium で、反例がない | 人が判断する |
+
    - 到達しない分岐のように、テストでは観測できないものは、証明に任せてそのままにします。除外の指定は要りません。
+   - 「契約が足りない」に入るのは、本当は動作が変わらない（同値な）ミュータントのことも、本物のバグのこともあります。GNATprove が確かめるのは、自分が選んだ反例 1 つだけだからです。契約を強めると、同値なものは証明が通り、本物のバグは「確定」に移ります。
 3. テストも証明も検出できなかったミュータント（Survived）は、テストを足すか、契約を強めます。等価ミュータント（オブジェクトコードが変更前と同じになるもの）は、`equivalence_build` を設定すると自動で見分けて外します（Ignored）。それ以外は Survived のまま残します。
 4. 証明が時間切れになったミュータントは、検出扱いにしません。Survived として数え、一覧に `(the proof timed out)` と出ます。2 か 3 として扱い直します。
 
-[examples/spark_counter](examples/spark_counter) では、次のように出ます。テストは `Increment` しか呼ばないので、`Saturating_Add` のミュータントは証明だけが検出します（2 の候補）。生き残った #6 は、`A + B = Max` のときにどちらの分岐も `Max` を返す等価ミュータントです。`equivalence_build` を設定しても（この例では設定していません）、最適化したオブジェクトコードが変わるので自動では外れず、Survived のまま残ります（3）。
+[examples/spark_counter](examples/spark_counter) では、次のように出ます（一部）。テストは `Counters.Increment` しか呼ばないので、ほかのミュータントは証明だけが検出します。
 
 ```
 Detected only by the proof (candidates for a missing test):
-  #3 src/counters.adb:10:10 ConditionalExpression (postcondition; no test executes this code)
-    - A + B > Max
-    + True
-  #5 src/counters.adb:10:12 ArithmeticOperator (range check; no test executes this code)
+  Confirmed: the check fails in the real code
+  #8 src/counters.adb:13:19 ArithmeticOperator (range check, postcondition; no test executes this code)
     - +
     + -
-  ...
+    e.g. when A = 0 and B = 1
+  A counterexample that the real code does not reach: a contract says less than the code relies on
+  #12 src/halves.adb:13:10 ConditionalExpression (range check; no test executes this code)
+    - H > 50
+    + False
+    e.g. when H = 51
+  #18 src/halves.adb:16:18 NumericLiteral (range check; no test executes this code)
+    - 2
+    + 3
+    e.g. when H = 34
 
 Survived mutants:
   #6 src/counters.adb:10:16 EqualityOperator
     - >
     + >=
+  #10 src/halves.adb:5:18 NumericLiteral
+    - 2
+    + 3
 ```
+
+- #8 は `Saturating_Add` の `A + B` を `A - B` にする変異で、A = 0、B = 1 で本当に事後条件が落ちます。テストを足す候補です（2）。
+- `Halves.Half` の本体は `X / 2` を返しますが、契約は「結果は X 以下」としか言っていません。#12 は `H > 50` の判定を消す変異で、実際には H が 50 を超えないので、動作は変わりません（同値）。#18 は `H * 2` を `H * 3` にする変異で、X = 100 のとき 150 になる本物のバグです。どちらも、GNATprove の反例（H = 51、H = 34）は本物の `Half` では起こりません。`Half` の事後条件を `Half'Result = X / 2` に強めると、#12 は証明が通り、#18 は確定に移ります。
+- 生き残った #6 は、`A + B = Max` のときにどちらの分岐も `Max` を返す等価ミュータントです。`equivalence_build` を設定しても（この例では設定していません）、最適化したオブジェクトコードが変わるので自動では外れず、Survived のまま残ります（3）。#10 は `X / 2` を `X / 3` にする変異で、`Half` の契約が緩いので、証明でも検出できません。これも契約を強める箇所を示しています（3）。
 
 ## 必要なもの
 
@@ -92,7 +113,7 @@ mutate = ["src/**/*.adb", "src/**/*.ads"]   # 変異させるファイル
 exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr"       # 必須。失敗したミュータントは CompileError
 test = "bin/run_tests"                      # 必須（または [tests]）。終了コード 0 以外なら Killed
-prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on"  # 必須。テストが通ったミュータントだけに実行。0 以外なら Killed (証明)
+prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on"  # 必須。テストが通ったミュータントだけに実行。0 以外なら Killed (証明)
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # 省略可。等価ミュータントの判定に使うビルド
 concurrency = 4                             # 既定は CPU 数の半分
 timeout_factor = 1.5                        # テスト時間の上限 = 元の時間 * factor + timeout_ms
@@ -244,7 +265,9 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - 変更前のプロジェクトの証明にも出ているメッセージは数えません（同じファイルの同じ文面のメッセージを、行と桁が違っても同じものとみなします）
 - メッセージを読み取れなかったときは、これまでどおり `killedBy` は `["proof"]` です
 - GNATprove 16 は、メッセージの場所を次の行（`--> file:line:col`）に出します。AdaMutant は、この形式も、それより前の版の 1 行の形式も読みます
-- 証明だけが検出したミュータントは、コンソールの `Detected only by the proof (candidates for a missing test):` にも 1 つずつ出ます。括弧の中は証明できなかった検査の種類です。どのテストも実行しない場所のミュータントには `no test executes this code` が付きます
+- 証明だけが検出したミュータントは、コンソールの `Detected only by the proof (candidates for a missing test):` にも 1 つずつ出ます。括弧の中は証明できなかった検査の種類です。どのテストも実行しない場所のミュータントには `no test executes this code` が付きます。GNATprove が反例を出したときは、その下の行に出ます
+- 3 つの区分（[想定している使い方](#想定している使い方)）は、`statusReason` の書き出しでも分かります。`proof failed, confirmed by a counterexample: ` が確定、`proof failed, with a counterexample that the real code does not reach: ` が契約が足りないもの、それ以外の `proof failed` が不明です。反例は、メッセージのあとの括弧に入ります（`... (e.g. when H = 51)`）。`--baseline` で結果を再利用するときも、ここから区分を読み取ります
+- 区分の材料は、変更前のプロジェクトの証明にないメッセージのうち、high かエラーのもの（確定）、反例のあるもの（契約が足りない）の順に選びます。prove のコマンドに `--counterexamples=on` がないと、GNATprove は反例を出さず、検査を high にもしないので、ほとんどが不明になります。不明のものがあって、コマンドに `--counterexamples=on` がないときは、コンソールにその旨が出ます
 - 証明が時間内に終わらなかったミュータントは Survived です（`statusReason` は `... the proof did not finish within the timeout`）。証明が失敗するはずなのか、遅いだけなのかを区別できないためです。`--baseline` では、以前の版のレポートにある証明の Timeout は実行し直します。`--since` のリビジョンから変わっていない行では、Survived として再利用します
 - 以前の版は、テストだけ、証明だけでも回せました。`--baseline` では、今の版なら出さない結果は再利用しません。NoCoverage、テストだけまたは証明だけで生き残ったもの、テストをせずに証明が検出したものです。そのミュータントは実行し直します。ただし、`--since` のリビジョンから変わっていない行では、`--since` だけのときと同じく Ignored（`unchanged since REF`）のままです
 
@@ -345,7 +368,7 @@ AdaMutant は、誤って等価と判定しないために、次のことをし�
 ## サンプル
 
 - [examples/calculator](examples/calculator): わざと境界値を検査しないテスト。生き残ったミュータント、タイムアウト、どのテストも実行しない行、等価ミュータントの判定が見られる
-- [examples/spark_counter](examples/spark_counter): テストが一部の振る舞いしか確かめず、残りを GNATprove の証明が検出する例。証明だけが検出したミュータントの一覧が見られる
+- [examples/spark_counter](examples/spark_counter): テストが一部の振る舞いしか確かめず、残りを GNATprove の証明が検出する例。証明だけが検出したミュータントの一覧で、確定したものと、契約が足りないもの（`Halves.Half` の緩い事後条件）が見られる
 
 ```sh
 cd examples/calculator && ../../bin/adamutant run

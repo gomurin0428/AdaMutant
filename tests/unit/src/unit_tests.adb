@@ -547,6 +547,44 @@ procedure Unit_Tests is
                Check (Ada.Exceptions.Exception_Message (E) = "short"
                       and then Details = "", "run error: a short message");
          end;
+         --  The counterexample under a message, in both formats; a
+         --  message without one, and one that a warning follows.
+         declare
+            use AdaMutant.Runner.Proof_Message_Vectors;
+            Log : constant String :=
+              "counters.adb:13:19: high: range check might fail" & LF
+              & "   13 |         return A + B;" & LF
+              & "  e.g. when A = Count'Last" & LF
+              & "        and B = 1" & LF
+              & "  reason for check: returned value must fit" & LF
+              & " medium: range check might fail, cannot prove upper bound"
+              & " for H * 2" & LF
+              & "--> weak.adb:13:19" & LF
+              & "      + e.g. when H = 51" & LF
+              & "      + reason for check: returned value must fit" & LF
+              & "      and so on" & LF
+              & " medium: postcondition might fail" & LF
+              & "--> hard.ads:4:19" & LF
+              & "      + provers reached time limit before completing the"
+              & " proof" & LF
+              & " warning: statement has no effect" & LF
+              & "--> weak.adb:10:07" & LF
+              & "      + e.g. when X = 3" & LF;
+            P : constant Vector := Proof_Messages (Log);
+         begin
+            Check (Natural (P.Length) = 3
+                   and then To_String (P (1).Example)
+                            = "e.g. when A = Count'Last and B = 1"
+                   and then To_String (P (2).Text)
+                            = "weak.adb:13:19: medium: range check might"
+                              & " fail, cannot prove upper bound for H * 2"
+                   and then To_String (P (2).Example) = "e.g. when H = 51"
+                   and then To_String (P (3).Example) = "",
+                   "proof messages: counterexamples",
+                   P.Length'Image
+                   & (if P.Is_Empty then ""
+                      else " [" & To_String (P (P.Last_Index).Example) & "]"));
+         end;
          Check (Proof_Failures ("gnatprove: error" & LF).Is_Empty,
                 "proof failures: none");
       end;
@@ -1196,8 +1234,35 @@ procedure Unit_Tests is
          R := One (Before, 2);
          Apply (R, Report_With (Before, ",""killedBy"":[""proof""]"), Reused);
          Check (Reused = 1 and then R.Mutants (1).Killed_By = Proof
-                and then R.Mutants (1).Killers.Is_Empty,
+                and then R.Mutants (1).Killers.Is_Empty
+                and then R.Mutants (1).Evidence = Undecided,
                 "baseline: ""proof"" alone is the proof");
+         --  What GNATprove gave with the failure comes back from the
+         --  reason.
+         R := One (Before, 2);
+         Apply (R, Report_With
+                     (Before, ",""killedBy"":[""proof: range check""],"
+                      & """statusReason"":""" & Unreached_Example
+                      & "weak.adb:13:19: medium: x (e.g. when H = (1, 2))"
+                      & " (and 1 more) (from the baseline report)"",""testsCompleted"":1"),
+                Reused);
+         Check (Reused = 1 and then R.Mutants (1).Evidence = Weak_Contract
+                and then To_String (R.Mutants (1).Example)
+                         = "e.g. when H = (1, 2)",
+                "baseline: a counterexample that the real code does not"
+                & " reach", To_String (R.Mutants (1).Example));
+         R := One (Before, 2);
+         Apply (R, Report_With
+                     (Before, ",""killedBy"":[""proof: postcondition""],"
+                      & """statusReason"":""" & Confirmed_Failure
+                      & "p.ads:9:17: high: postcondition might fail"
+                      & " (e.g. when A = 0)"",""testsCompleted"":1"),
+                Reused);
+         Check (Reused = 1 and then R.Mutants (1).Evidence = Confirmed
+                and then To_String (R.Mutants (1).Example)
+                         = "e.g. when A = 0",
+                "baseline: a confirmed failure",
+                To_String (R.Mutants (1).Example));
          R := One ("begin" & LF & "   Call (1," & LF & "         3);" & LF
                    & "end;" & LF, 2);
          Apply (R, Report_With (Before, ""), Reused);
