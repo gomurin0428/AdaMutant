@@ -113,12 +113,12 @@ mutate = ["src/**/*.adb", "src/**/*.ads"]   # files to mutate
 exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr"       # required. A mutant that fails to build is CompileError
 test = "bin/run_tests"                      # required (or [tests]); Killed when the exit status is not 0
-prove = 'gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # optional. The build used to recognize equivalent mutants
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
 timeout_ms = 5000
-prove_timeout_ms = 300000                   # time limit of the proof of one mutant. The default 0 takes it from the original proof
+prove_timeout_ms = 0                        # time limit (ms) of the proof of one mutant. The default 0 takes it from the original proof
 test_memory_limit_mb = 2048                 # memory limit of each test process. The default 0 means no limit
 coverage_analysis = true                    # false also runs the mutants in code that no test executes
 bail = true                                 # false runs the remaining tests after one has detected the mutant (for [tests])
@@ -175,18 +175,20 @@ A reused result rests on nothing but the lines being unchanged. In the following
 
 The prove command proves the whole unit (or what the command says) for each mutant. In a large unit, the goals that the mutant does not change take time again for every mutant.
 
-GNATprove can keep a cache of proof results (`--memcached-server=file:<directory>`). AdaMutant gives the prove command a directory for it in `ADAMUTANT_PROVE_CACHE`; add it to the command:
+GNATprove can keep a cache of proof results (`--memcached-server=file:<directory>`). AdaMutant gives the prove command a directory for it in `ADAMUTANT_PROVE_CACHE`; add it to the command, with a steps limit for the provers (`--steps`, see below):
 
 ```toml
-prove = 'gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
 ```
 
 On Windows (cmd.exe), write `%ADAMUTANT_PROVE_CACHE%`.
 
 - The proof of the unmodified project fills the cache. In the proof of a mutant, the goals that did not change get their answers from the cache, and only the goals that the mutant changes are proved again
-- The keys of the cache are the goals themselves, so the results are those of a whole proof without the cache. With GNATprove 16.1, the messages were the same, counterexamples and `possible fix` included. AdaMutant does not guess which subprograms a mutant affects
-- Each sandbox has its own cache (`.adamutant/sandbox/prove-cache/<n>`). It starts empty in every run and goes with the sandbox
-- The goals that a mutant makes fail are not faster: the provers may keep at them up to their time limit. Keep that time down with GNATprove's `--timeout` or `--steps`, or with `prove_timeout_ms`
+- The keys of the cache are the goals themselves, so a goal gets the answer that a prover gave to the same goal before, and the results are those of a whole proof without the cache. With GNATprove 16.1, the messages were the same, counterexamples and `possible fix` included (a counterexample is checked with the real code again, also for a goal whose answer comes from the cache). AdaMutant does not guess which subprograms a mutant affects
+- Give the provers a steps limit (`--steps`; the value must be enough for the unmodified project). With the cache, GNATprove 16.1 runs a prover that stops at a time limit, rather than at a steps limit, about four times as long as the limit: in a test, CVC5 with `--timeout=2` ran 8 s for each goal that it could not prove. The goals that a mutant makes fail then take much longer than without the cache, and their proof may not finish within the time limit of the mutant, which is taken from the proof of the unmodified project, where nothing fails: the mutant is then Survived. With a steps limit, the provers took the same time with and without the cache. Steps also make the results independent of the load of the machine
+- The goals carry their lines. AdaMutant keeps the line breaks of the text that a mutant replaces after the replacement (a deleted statement over several lines, for example), so the lines after it do not move and their goals still hit the cache
+- Each sandbox has its own cache (`.adamutant/sandbox/prove-cache/<n>`). It starts empty in every run and goes with the sandbox. The entries that a proof wrote are removed when it does not finish in time (an entry cut short stops GNATprove)
+- The goals that a mutant makes fail are not faster, nor is a mutant that changes many goals (a constant used in many places, for example). When you set `prove_timeout_ms`, leave the time of a whole proof without the cache
 
 An example with GNATprove 16.1: in a unit of 24 functions (480 checks), with a mutant in the body of one function, the whole proof took 40.9 s without the cache and 1.4 s with the cache filled by the proof of the unmodified project. Both found the same 2 failed checks.
 

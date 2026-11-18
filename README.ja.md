@@ -113,12 +113,12 @@ mutate = ["src/**/*.adb", "src/**/*.ads"]   # 変異させるファイル
 exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr"       # 必須。失敗したミュータントは CompileError
 test = "bin/run_tests"                      # 必須（または [tests]）。終了コード 0 以外なら Killed
-prove = 'gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # 必須。テストが通ったミュータントだけに実行。0 以外なら Killed (証明)
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # 必須。テストが通ったミュータントだけに実行。0 以外なら Killed (証明)
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # 省略可。等価ミュータントの判定に使うビルド
 concurrency = 4                             # 既定は CPU 数の半分
 timeout_factor = 1.5                        # テスト時間の上限 = 元の時間 * factor + timeout_ms
 timeout_ms = 5000
-prove_timeout_ms = 300000                   # ミュータントの証明 1 回の制限時間。既定 0 は、変更前の証明の時間から決める
+prove_timeout_ms = 0                        # ミュータントの証明 1 回の制限時間（ミリ秒）。既定 0 は、変更前の証明の時間から決める
 test_memory_limit_mb = 2048                 # テスト 1 プロセスあたりのメモリ上限。既定 0 は無制限
 coverage_analysis = true                    # false で、テストが実行しないコードのミュータントも実行する
 bail = true                                 # false で、ミュータントを検出したあとも残りのテストを実行する（[tests] 用）
@@ -175,18 +175,20 @@ break = 0
 
 証明のコマンドは、ミュータントごとにユニット全体（またはコマンドが指定する範囲）を証明します。大きなユニットでは、ミュータントが変えていない目標の証明に、毎回時間がかかります。
 
-GNATprove には、証明結果のキャッシュがあります（`--memcached-server=file:<ディレクトリ>`）。AdaMutant は、証明のコマンドに、キャッシュのディレクトリを `ADAMUTANT_PROVE_CACHE` で渡します。これをコマンドに足してください。
+GNATprove には、証明結果のキャッシュがあります（`--memcached-server=file:<ディレクトリ>`）。AdaMutant は、証明のコマンドに、キャッシュのディレクトリを `ADAMUTANT_PROVE_CACHE` で渡します。これを、証明器のステップ数の上限（`--steps`、下記）と一緒に、コマンドに足してください。
 
 ```toml
-prove = 'gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
 ```
 
 Windows（cmd.exe）では `%ADAMUTANT_PROVE_CACHE%` と書きます。
 
 - キャッシュは、変更前のプロジェクトの証明で埋まります。ミュータントの証明では、変わっていない目標の答えがキャッシュから返り、証明し直すのは、ミュータントで変わった目標だけです
-- キャッシュのキーは目標そのものなので、結果はキャッシュなしの全体の証明と同じです。GNATprove 16.1 で、反例や `possible fix` を含むメッセージが同じになることを確かめました。どの手続きの証明に影響するかを、AdaMutant が推測することはありません
-- キャッシュはサンドボックスごとに別のディレクトリで（`.adamutant/sandbox/prove-cache/<番号>`）、実行のたびに空から始まり、サンドボックスと一緒に消えます
-- 速くならないのは、ミュータントで新しく失敗する目標です。証明器は、そこで制限時間まで粘ることがあります。その時間は、GNATprove の `--timeout` や `--steps`、または `prove_timeout_ms` で抑えてください
+- キャッシュのキーは目標そのものなので、目標は、同じ目標に証明器が前に出した答えを受け取ります。結果は、キャッシュなしの全体の証明と同じです。GNATprove 16.1 で、反例や `possible fix` を含むメッセージが同じになることを確かめました（反例は、キャッシュから答えが返った目標でも、本物のコードで確かめ直します）。どの手続きの証明に影響するかを、AdaMutant が推測することはありません
+- 証明器には、ステップ数の上限（`--steps`。変更前のプロジェクトを証明できる値）を付けてください。GNATprove 16.1 は、キャッシュを使うと、ステップ数ではなく時間の上限で止まる証明器を、上限のおよそ 4 倍の時間動かします。試したときは、`--timeout=2` の CVC5 が、証明できない目標 1 つにつき 8 秒動きました。ミュータントで失敗する目標がキャッシュなしよりずっと遅くなり、ミュータントの証明の制限時間（何も失敗しない、変更前のプロジェクトの証明の時間から決めます）に収まらないと、そのミュータントは Survived になります。ステップ数の上限があれば、証明器の時間は、キャッシュのあるなしで同じでした。ステップ数なら、結果がマシンの負荷にも左右されません
+- 目標には行番号が入っています。AdaMutant は、置き換えた部分にあった改行を置き換えのあとに残すので（複数行の文を削除したときなど）、後ろの行はずれず、その目標もキャッシュに当たります
+- キャッシュはサンドボックスごとに別のディレクトリで（`.adamutant/sandbox/prove-cache/<番号>`）、実行のたびに空から始まり、サンドボックスと一緒に消えます。時間内に終わらなかった証明が書いた項目は、消します（途中で止めたために壊れた項目は、GNATprove を止めてしまうため）
+- 速くならないのは、ミュータントで新しく失敗する目標と、ミュータントが多くの目標を変えるとき（多くの場所で使う定数を変えたときなど）です。`prove_timeout_ms` を決めるときは、キャッシュなしの全体の証明が終わる時間を残してください
 
 GNATprove 16.1 での例です。24 個の関数（チェック 480 個）からなるユニットで、1 つの関数の本体を変異させました。全体の証明はキャッシュなしで 40.9 秒、変更前の証明で埋めたキャッシュありで 1.4 秒でした。失敗したチェックは、どちらも同じ 2 つです。
 

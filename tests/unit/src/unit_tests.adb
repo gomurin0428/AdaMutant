@@ -356,6 +356,22 @@ procedure Unit_Tests is
       end loop;
       Check (Apply ("procedure P is begin " & S & " end P;", M)
              = "procedure P is begin X := A - B; end P;", "apply");
+      --  A deleted statement over two lines keeps its line breaks.
+      declare
+         T : constant String :=
+           "procedure P is begin" & LF & "X := F" & ASCII.CR & LF
+           & "  (A);  -- c" & LF & "Y := 1; end P;";
+      begin
+         M := (others => <>);
+         for Each of Find (T, (others => <>)) loop
+            if Each.Kind = Statement_Deletion and then M.Last = 0 then
+               M := Each;
+            end if;
+         end loop;
+         Check (Apply (T, M) = "procedure P is begin" & LF & "null;"
+                & ASCII.CR & LF & "  -- c" & LF & "Y := 1; end P;",
+                "apply keeps the line breaks", Apply (T, M));
+      end;
    end Test_Apply;
 
    procedure Test_Files is

@@ -649,6 +649,26 @@ package body AdaMutant.Runner is
       function Cache_Dir (Slot : Positive) return String is
         (Join (Prove_Caches, Image (Slot)));
 
+      procedure Forget_Since (Slot : Positive; Since : Time) is
+         --  A proof stopped at its time limit may have left an entry of the
+         --  cache cut short, which stops GNATprove ("GNAT BUG DETECTED")
+         --  when a later proof reads it: remove what the proof wrote.  Time
+         --  stamps have whole-second (two-second on FAT) resolution; an
+         --  entry removed in excess is only proved again.
+         Dir : constant String := Cache_Dir (Slot);
+      begin
+         if not Ada.Directories.Exists (Dir) then
+            return;
+         end if;
+         for Path of Find_Files (Dir, String_Vectors.Empty_Vector) loop
+            if Ada.Directories.Modification_Time (Join (Dir, Path))
+              >= Since - 2.0
+            then
+               Ada.Directories.Delete_File (Join (Dir, Path));
+            end if;
+         end loop;
+      end Forget_Since;
+
       Coverage_Dir : constant String := Join (Logs, "coverage");
       --  Where the programs of the combined build record the places that
       --  they execute while no mutant is active, a file per process.
@@ -982,13 +1002,15 @@ package body AdaMutant.Runner is
                Wait_For_New_Stamp (Prove_Ended (Slot));
             end if;
             declare
-               P : constant Run_Result :=
+               Since : constant Time := Clock;
+               P     : constant Run_Result :=
                  Step ("prove", To_String (S.Prove),
                        (if S.Prove_Timeout_Ms > 0 then Ms (S.Prove_Timeout_Ms)
                         else Prove_TO));
             begin
                Prove_Ended (Slot) := Clock;
                if P.Timed_Out then
+                  Forget_Since (Slot, Since);
                   M.Status := Survived;
                   M.Status_Reason := To_Unbounded_String
                     ((if M.Reached = Not_Covered
