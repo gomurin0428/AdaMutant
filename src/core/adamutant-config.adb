@@ -483,10 +483,10 @@ package body AdaMutant.Config is
       & "# concurrency = 4" & LF
       & "timeout_factor = 1.5" & LF
       & "timeout_ms = 5000" & LF
-      & "# The time limit of the proof of one mutant, in ms.  By default it" & LF
-      & "# comes from the proof of the unmodified project, like that of the" & LF
-      & "# tests; set it when the proof of a mutant is much shorter (see" & LF
-      & "# ADAMUTANT_PROVE_LIMIT in the README)." & LF
+      & "# The time limit, in ms, of the proof of a mutant that can be" & LF
+      & "# limited to its subprogram (ADAMUTANT_PROVE_LIMIT in the README)." & LF
+      & "# Other proofs, and all by default, take it from the proof of the" & LF
+      & "# unmodified project, like the tests." & LF
       & "# prove_timeout_ms = 300000" & LF
       & "# test_memory_limit_mb = 2048" & LF
       & "# Mutants in code that no test executes skip the tests and go to" & LF

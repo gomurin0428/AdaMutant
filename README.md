@@ -118,7 +118,7 @@ equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # optional.
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
 timeout_ms = 5000
-prove_timeout_ms = 0                        # the time limit of the proof of one mutant; 0 takes it from the unchanged proof
+prove_timeout_ms = 0                        # the time limit of one limited proof; 0 takes it from the unchanged proof
 test_memory_limit_mb = 2048                 # memory limit of each test process. The default 0 means no limit
 coverage_analysis = true                    # false also runs the mutants in code that no test executes
 bail = true                                 # false runs the remaining tests after one has detected the mutant (for [tests])
@@ -272,26 +272,31 @@ The build, the tests and the proof of a mutant receive environment variables tha
 |---|---|
 | `ADAMUTANT_MUTANT_LINE` | The line of the mutant |
 | `ADAMUTANT_MUTANT_SUBPROGRAM` | The name of the innermost subprogram around the mutant, or empty |
-| `ADAMUTANT_PROVE_LIMIT` | A GNATprove switch that limits the proof to the subprogram of the mutant (such as `--limit-subp=counters.adb:8`), or empty when limiting could miss a failure |
+| `ADAMUTANT_PROVE_LIMIT` | A GNATprove switch that limits the proof to the subprogram of the mutant (such as `--limit-subp=counters.adb:8`, at the line of its name), or empty in the cases below |
 
 On POSIX, add it at the end of the prove command. When it is empty nothing is added, so the unchanged project is proved as a whole:
 
 ```toml
 prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_LIMIT"
-prove_timeout_ms = 300000   # the time limit of the proof of one mutant
+prove_timeout_ms = 300000   # the time limit of one limited proof
 ```
 
 cmd.exe leaves an empty variable as the text `%ADAMUTANT_PROVE_LIMIT%`, so on Windows put a small script in between that adds the switch only when there is one (`check_prove_limit` in `tests/e2e/run_e2e.py` has one in Python).
 
-`ADAMUTANT_PROVE_LIMIT` is empty in these cases, because GNATprove finds the failures of such a mutant only in the proof of the callers:
+`ADAMUTANT_PROVE_LIMIT` is empty when GNATprove might find the failures of the mutant only in the proof of the callers:
 
-- A mutant outside any subprogram (declarations of a package and so on), and a mutant of a contract (aspects, ghost code)
+- A mutant outside any subprogram (declarations of a package and so on), a mutant of a contract (aspects, ghost code), and a mutant in a generic unit (GNATprove proves the instances)
 - A mutant in an expression function: GNATprove proves the callers with the body of the expression function
-- A mutant in a subprogram without a precondition or postcondition (`Pre`, `Post`, `Contract_Cases`) that the visible part of the spec does not declare: GNATprove proves such a subprogram inlined in its callers. For one declared inside another subprogram, the limit is the subprogram around it
+- A mutant in a subprogram that only the body has, without a precondition, postcondition or other such aspect: GNATprove proves such a subprogram inlined in its callers. It is also empty when the body has more subprograms of the name than the spec declares (an overload that only the body has cannot be told apart)
+- A mutant that deletes a statement, when the subprogram that the proof would be limited to has neither `Global` nor `Depends`: the Global contract that GNATprove makes from the body changes, and the failure shows only in the flow analysis of the callers
 
-A limited proof leaves the results of the other units as they were. So that the failures of an earlier mutant do not stay, AdaMutant puts back GNATprove's results of the unchanged project (the `.spark` files in the `gnatprove` directories) before the proof of each mutant.
+For a subprogram declared inside another one, the limit is the subprogram itself when it has an aspect such as `Pre`, `Post`, `Global`, `Depends` or `Subprogram_Variant`, or calls itself, because GNATprove then proves it on its own. Otherwise GNATprove proves it inlined in its callers, and the limit is the subprogram around it. With only other aspects it is not clear which, and the limit is empty.
 
-`prove_timeout_ms` is the time limit of the proof of one mutant (0 takes it from the proof of the unchanged project, as for the tests). A limited proof is much shorter than the whole one, so set it when you limit. A mutant whose proof does not finish in time is not counted as detected (Survived).
+These rules come from comparing limited proofs with whole proofs on GNATprove 16.1, and the results were the same on the small projects tried. They are decided from the tokens alone, though, so the results may differ in some case: on a large project, compare them with a whole proof once.
+
+A limited proof leaves the results of the other units as they were. So that the failures of an earlier mutant do not stay, AdaMutant puts back GNATprove's results of the unchanged project (the `.spark` files in the `gnatprove` directories) before the proof of each mutant (those that have changed since). A limited proof that ends with "no checks generated by GNATprove" (a body without `SPARK_Mode`, for example) proved nothing, and does not count as a detection.
+
+`prove_timeout_ms` is the time limit of one limited proof. A proof that cannot be limited, and all proofs when `prove_timeout_ms` is 0 (the default), take their time limit from the proof of the unchanged project, as the tests do. A mutant whose proof does not finish in time is not counted as detected (Survived).
 
 ## How it works
 

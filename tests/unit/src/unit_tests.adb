@@ -332,7 +332,7 @@ procedure Unit_Tests is
         & "   procedure Local;" & LF
         & "end Pk;" & LF;
       Subs    : constant Subprogram_Vectors.Vector := Find (Body_Text);
-      Visible : constant Name_Counts.Map := Visible_Names (Spec_Text);
+      Visible : constant Name_Counts.Map := Declared_Names (Spec_Text);
 
       function At_Mark (Mark : String) return String is
          Where : constant Place :=
@@ -349,11 +349,11 @@ procedure Unit_Tests is
    begin
       Check (Visible.Contains ("p") and then Visible.Contains ("""+""")
              and then Visible ("p") = 1
-             and then not Visible.Contains ("local")
+             and then Visible.Contains ("local")
              and then not Visible.Contains ("formal"),
-             "subprograms: the visible part of a spec");
-      --  A local subprogram without a contract: its callers see its body.
-      Expect_Place ("in Local", "Local 0");
+             "subprograms: the declarations of a spec");
+      --  Declared in the private part: GNATprove does not inline it.
+      Expect_Place ("in Local", "Local 2");
       --  A local subprogram with a contract.
       Expect_Place ("in Guarded", "Guarded 6");
       --  An expression function: its callers see its body.
@@ -404,7 +404,7 @@ procedure Unit_Tests is
            & "   procedure H (X : Integer);" & LF
            & "end Q;" & LF;
          Subs2 : constant Subprogram_Vectors.Vector := Find (Body2);
-         Vis2  : constant Name_Counts.Map := Visible_Names (Spec2);
+         Vis2  : constant Name_Counts.Map := Declared_Names (Spec2);
 
          function At2 (Mark : String) return String is
             Where : constant Place := Place_Of
@@ -426,6 +426,93 @@ procedure Unit_Tests is
                 At2 ("in H Integer") & " / " & At2 ("in H Boolean"));
          Check (At2 ("in K") = "K 21", "subprograms: an aspect Post",
                 At2 ("in K"));
+      end;
+
+      --  Nested subprograms that GNATprove analyses on their own, one it
+      --  may inline, an expression function with an aggregate, the line
+      --  of the name, and a generic unit.
+      declare
+         Body3 : constant String :=
+           "package body R is" & LF                                    --  1
+           & "   procedure Outer is" & LF                               --  2
+           & "      procedure With_Global with Global => null is" & LF  --  3
+           & "      begin" & LF                                         --  4
+           & "         null;  -- in With_Global" & LF                   --  5
+           & "      end With_Global;" & LF                              --  6
+           & "      procedure Again (N : Natural) is" & LF              --  7
+           & "      begin" & LF                                         --  8
+           & "         if N > 0 then Again (N - 1); end if;  -- in Again" & LF
+           & "      end Again;" & LF                                    -- 10
+           & "      procedure Inl with Inline is" & LF                  -- 11
+           & "      begin" & LF                                         -- 12
+           & "         null;  -- in Inl" & LF                           -- 13
+           & "      end Inl;" & LF                                      -- 14
+           & "   begin" & LF                                            -- 15
+           & "      null;" & LF                                         -- 16
+           & "   end Outer;" & LF                                       -- 17
+           & "   function Zeros return Arr is [others => 0];" & LF      -- 18
+           & "   function" & LF                                         -- 19
+           & "     Half (X : Integer) return Integer is" & LF           -- 20
+           & "   begin" & LF                                            -- 21
+           & "      return X / 2;  -- in Half" & LF                     -- 22
+           & "   end Half;" & LF                                        -- 23
+           & "end R;" & LF;
+         Spec3 : constant String :=
+           "package R is" & LF
+           & "   procedure Outer;" & LF
+           & "   function Half (X : Integer) return Integer;" & LF
+           & "   function Seven return Integer is (7);" & LF
+           & "end R;" & LF;
+         Subs3 : constant Subprogram_Vectors.Vector := Find (Body3);
+         Dec3  : constant Name_Counts.Map := Declared_Names (Spec3);
+
+         function At3 (Mark : String) return Place is
+           (Place_Of (Subs3, Ada.Strings.Fixed.Index (Body3, Mark), Dec3));
+
+         function Image (P : Place) return String is
+           (To_String (P.Name) & P.Limit'Image);
+
+         Body4 : constant String :=
+           "package body Gen is" & LF
+           & "   procedure P is" & LF
+           & "   begin" & LF
+           & "      null;  -- in Gen" & LF
+           & "   end P;" & LF
+           & "end Gen;" & LF;
+         Spec4 : constant String :=
+           "generic" & LF
+           & "   type T is private;" & LF
+           & "   with procedure Formal (X : T);" & LF
+           & "package Gen is" & LF
+           & "   procedure P;" & LF
+           & "end Gen;" & LF;
+         Subs4 : constant Subprogram_Vectors.Vector :=
+           Find (Body4, Generic_Names (Spec4));
+      begin
+         Check (Image (At3 ("in With_Global")) = "With_Global 3"
+                and then At3 ("in With_Global").Globals,
+                "subprograms: a nested subprogram with Global",
+                Image (At3 ("in With_Global")));
+         Check (Image (At3 ("in Again")) = "Again 7",
+                "subprograms: a recursive nested subprogram",
+                Image (At3 ("in Again")));
+         Check (Image (At3 ("in Inl")) = "Inl 0",
+                "subprograms: a nested subprogram with another aspect",
+                Image (At3 ("in Inl")));
+         Check (Image (At3 ("others => 0")) = "Zeros 0",
+                "subprograms: an expression function with an aggregate",
+                Image (At3 ("others => 0")));
+         Check (Image (At3 ("in Half")) = "Half 20"
+                and then not At3 ("in Half").Globals,
+                "subprograms: the line of the name",
+                Image (At3 ("in Half")));
+         Check (not Dec3.Contains ("seven"),
+                "subprograms: an expression function is no declaration");
+         Check (Image (Place_Of (Subs4, Ada.Strings.Fixed.Index (Body4, "in Gen"),
+                                Declared_Names (Spec4))) = "P 0",
+                "subprograms: a generic unit",
+                Image (Place_Of (Subs4, Ada.Strings.Fixed.Index (Body4, "in Gen"),
+                                 Declared_Names (Spec4))));
       end;
    end Test_Subprograms;
 

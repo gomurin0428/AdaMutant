@@ -43,8 +43,10 @@ package AdaMutant.Config is
       Timeout_Ms       : Natural := 5_000;
       Build_Timeout_Ms : Natural := 600_000;
       Prove_Timeout_Ms : Natural := 0;
-      --  The time limit of the proof of one mutant; 0 takes it from the
-      --  proof of the unmodified project, as for the tests.
+      --  The time limit of the proof of one mutant when it can be limited
+      --  to the subprogram of the mutant (ADAMUTANT_PROVE_LIMIT); 0, and
+      --  any other proof, take it from the proof of the unmodified
+      --  project, as for the tests.
       Test_Memory_Limit_Mb : Natural := 0;
       Coverage_Analysis : Boolean := True;
       Scan             : AdaMutant.Mutators.Scan_Options;
