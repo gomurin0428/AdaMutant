@@ -118,6 +118,7 @@ equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # 省略可
 concurrency = 4                             # 既定は CPU 数の半分
 timeout_factor = 1.5                        # テスト時間の上限 = 元の時間 * factor + timeout_ms
 timeout_ms = 5000
+prove_timeout_ms = 0                        # ミュータント 1 つの証明の制限時間。0 は変更前の証明の時間から決める
 test_memory_limit_mb = 2048                 # テスト 1 プロセスあたりのメモリ上限。既定 0 は無制限
 coverage_analysis = true                    # false で、テストが実行しないコードのミュータントも実行する
 bail = true                                 # false で、ミュータントを検出したあとも残りのテストを実行する（[tests] 用）
@@ -139,7 +140,7 @@ break = 0
 
 「元の時間」は、変異させていないプロジェクトのテスト（証明）を全サンドボックスで同時に流したときの最も遅い実行時間です。ミュータントを並列で流すときと同じ負荷で測るので、並列にすると遅くなるテストでも誤って Timeout になりません。
 
-`build`、テスト（`test` か `[tests]`）、`prove` は必須です。ミュータントはまずテストにかけ、テストが通ったものだけを証明にかけます。コマンドは POSIX では `/bin/sh -c`、Windows では `cmd.exe /c` で実行され、環境変数 `ADAMUTANT_MUTANT_ID` が渡されます。ミュータントのビルド・テスト・証明には、変異させたファイルのパス（`files` に書いたとおりのプロジェクトルートからの相対パス）が `ADAMUTANT_MUTANT_FILE` でも渡されます（ベースラインの実行では空です）。cmd.exe は `bin/test` の `/` 以降をスイッチとして解釈するため、`/` を含むパスは `test = '"bin/test"'` のように引用符で囲んでください（`/bin/sh` でもそのまま動きます）。未知のキーはエラーになります。
+`build`、テスト（`test` か `[tests]`）、`prove` は必須です。ミュータントはまずテストにかけ、テストが通ったものだけを証明にかけます。コマンドは POSIX では `/bin/sh -c`、Windows では `cmd.exe /c` で実行され、環境変数 `ADAMUTANT_MUTANT_ID` が渡されます。ミュータントのビルド・テスト・証明には、変異させたファイルのパス（`files` に書いたとおりのプロジェクトルートからの相対パス）が `ADAMUTANT_MUTANT_FILE` でも渡されます（ベースラインの実行では空です）。ミュータントの行と手続きも渡されます（[証明を、変異した手続きに絞る](#証明を変異した手続きに絞る)）。cmd.exe は `bin/test` の `/` 以降をスイッチとして解釈するため、`/` を含むパスは `test = '"bin/test"'` のように引用符で囲んでください（`/bin/sh` でもそのまま動きます）。未知のキーはエラーになります。
 
 ### 前回の結果の再利用
 
@@ -260,6 +261,37 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - 読むのは GNATprove の既定の出力（`--output=pretty`）です。`--output=oneline` でも、メッセージの中の反例と `possible fix` を読みます。`--output=brief` には反例が出ません
 - 証明が時間内に終わらなかったミュータントは Survived です（`statusReason` は `... the proof did not finish within the timeout`）。証明が失敗するはずなのか、遅いだけなのかを区別できないためです。`--baseline` では、以前の版のレポートにある証明の Timeout は実行し直します。`--since` のリビジョンから変わっていない行では、Survived として再利用します
 - 以前の版は、テストだけ、証明だけでも回せました。`--baseline` では、今の版なら出さない結果は再利用しません。NoCoverage、テストだけまたは証明だけで生き残ったもの、テストをせずに証明が検出したものです。そのミュータントは実行し直します。ただし、`--since` のリビジョンから変わっていない行では、`--since` だけのときと同じく Ignored（`unchanged since REF`）のままです
+
+### 証明を、変異した手続きに絞る
+
+既定では、ミュータントごとに prove のコマンドがユニット全体（コマンドの指定どおりなら、プロジェクト全体）を証明します。大きなユニットでは、これに時間がかかります。変異で落ちるゴールは、プローバの制限時間いっぱいまで粘るためです。
+
+ミュータントのビルド、テスト、証明には、ミュータントの場所を表す環境変数が渡されます（変更前のプロジェクトの実行では空です）。
+
+| 環境変数 | 値 |
+|---|---|
+| `ADAMUTANT_MUTANT_LINE` | ミュータントの行 |
+| `ADAMUTANT_MUTANT_SUBPROGRAM` | ミュータントを囲むいちばん内側の手続き・関数の名前。なければ空 |
+| `ADAMUTANT_PROVE_LIMIT` | 証明をそのミュータントの手続きに絞る GNATprove のスイッチ（`--limit-subp=counters.adb:8` など）。絞ると見逃すおそれがあるときは空 |
+
+POSIX では、prove のコマンドの最後に付けるだけです。空のときは何も足されないので、変更前のプロジェクトは全体を証明します。
+
+```toml
+prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_LIMIT"
+prove_timeout_ms = 300000   # ミュータント 1 つの証明の制限時間
+```
+
+cmd.exe は空の変数を `%ADAMUTANT_PROVE_LIMIT%` という文字のまま残すので、Windows では、値があるときだけスイッチを足す小さなスクリプトを挟みます（`tests/e2e/run_e2e.py` の `check_prove_limit` に Python の例があります）。
+
+`ADAMUTANT_PROVE_LIMIT` が空になるのは、次のときです。GNATprove は、これらのミュータントによる失敗を、呼び出し側の証明でしか見つけられないためです。
+
+- 手続きの外のミュータント（パッケージの宣言など）と、契約（アスペクト、ゴーストコード）のミュータント
+- 式関数の中のミュータント。GNATprove は、呼び出し側を式関数の本体ごと証明します
+- 事前条件・事後条件（`Pre`、`Post`、`Contract_Cases`）がなく、仕様の公開部にも宣言がない手続きの中のミュータント。GNATprove は、このような手続きを呼び出し側に展開して証明します。手続きの中で宣言した手続きなら、それを囲む手続きに絞ります
+
+絞った証明は、ほかのユニットの結果を前回のままにします。前のミュータントの失敗が残らないように、AdaMutant は、変更前のプロジェクトを証明したあとの GNATprove の結果（`gnatprove` ディレクトリの `.spark` ファイル）を、各ミュータントの証明の前に戻します。
+
+`prove_timeout_ms` は、ミュータント 1 つの証明の制限時間です（0 なら、テストと同じく、変更前のプロジェクトの証明の時間から決めます）。絞った証明は全体の証明よりずっと短いので、絞るときに設定してください。時間内に終わらなかったミュータントは、検出扱いにしません（Survived）。
 
 ## 仕組み
 

@@ -235,7 +235,8 @@ package body AdaMutant.Config is
             --  A setting written after [tests] would be a test.
             if Key in "mutate" | "exclude" | "build" | "test" | "prove"
                  | "equivalence_build" | "concurrency" | "timeout_factor"
-                 | "timeout_ms" | "build_timeout_ms" | "test_memory_limit_mb"
+                 | "timeout_ms" | "build_timeout_ms" | "prove_timeout_ms"
+                 | "test_memory_limit_mb"
                  | "bail" | "coverage_analysis" | "mutators"
                  | "exclude_mutators" | "mutate_contracts" | "sandbox_exclude"
                  | "report_dir" | "reporters"
@@ -288,6 +289,8 @@ package body AdaMutant.Config is
             C.Timeout_Ms := Integer_Value;
          elsif Full = "build_timeout_ms" then
             C.Build_Timeout_Ms := Integer_Value;
+         elsif Full = "prove_timeout_ms" then
+            C.Prove_Timeout_Ms := Integer_Value;
          elsif Full = "test_memory_limit_mb" then
             C.Test_Memory_Limit_Mb :=
               Integer_Value
@@ -480,6 +483,11 @@ package body AdaMutant.Config is
       & "# concurrency = 4" & LF
       & "timeout_factor = 1.5" & LF
       & "timeout_ms = 5000" & LF
+      & "# The time limit of the proof of one mutant, in ms.  By default it" & LF
+      & "# comes from the proof of the unmodified project, like that of the" & LF
+      & "# tests; set it when the proof of a mutant is much shorter (see" & LF
+      & "# ADAMUTANT_PROVE_LIMIT in the README)." & LF
+      & "# prove_timeout_ms = 300000" & LF
       & "# test_memory_limit_mb = 2048" & LF
       & "# Mutants in code that no test executes skip the tests and go to" & LF
       & "# the proof at once." & LF

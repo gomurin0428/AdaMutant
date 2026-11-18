@@ -118,6 +118,7 @@ equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # optional.
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
 timeout_ms = 5000
+prove_timeout_ms = 0                        # the time limit of the proof of one mutant; 0 takes it from the unchanged proof
 test_memory_limit_mb = 2048                 # memory limit of each test process. The default 0 means no limit
 coverage_analysis = true                    # false also runs the mutants in code that no test executes
 bail = true                                 # false runs the remaining tests after one has detected the mutant (for [tests])
@@ -139,7 +140,7 @@ break = 0
 
 The "original time" is the slowest run when the tests (proofs) of the unmutated project run in all the sandboxes at the same time. It is measured under the same load as the parallel runs of the mutants, so tests that become slower in parallel are not reported as Timeout by mistake.
 
-`build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report; it is empty in the baseline runs). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
+`build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report; it is empty in the baseline runs), and the line and subprogram of the mutant (see [Limiting the proof to the mutated subprogram](#limiting-the-proof-to-the-mutated-subprogram)). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
 
 ### Reusing the results of an earlier run
 
@@ -260,6 +261,37 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - AdaMutant reads the default output of GNATprove (`--output=pretty`). With `--output=oneline` it reads the counterexample and the `possible fix` in the message; `--output=brief` has no counterexamples
 - A mutant whose proof does not finish in time is Survived (its `statusReason` ends with `the proof did not finish within the timeout`), because a proof that would fail cannot be told apart from one that is only slow. With `--baseline`, a proof Timeout in a report of an earlier version runs again, or is reused as Survived on lines unchanged since the revision of `--since`
 - Earlier versions could run the tests alone or the proof alone. With `--baseline`, their results that this version would not give are never reused: NoCoverage, a survivor of the tests alone or of the proof alone, and a mutant that the proof killed without any test. Such a mutant runs again, or, on a line unchanged since the revision of `--since`, stays Ignored (`unchanged since REF`) as with `--since` alone
+
+### Limiting the proof to the mutated subprogram
+
+By default the prove command proves the whole unit for each mutant (or the whole project, as the command says). In a large unit this takes long: a goal that the mutant makes fail keeps the provers busy up to their time limit.
+
+The build, the tests and the proof of a mutant receive environment variables that tell where the mutant is (they are empty for the unchanged project):
+
+| Variable | Value |
+|---|---|
+| `ADAMUTANT_MUTANT_LINE` | The line of the mutant |
+| `ADAMUTANT_MUTANT_SUBPROGRAM` | The name of the innermost subprogram around the mutant, or empty |
+| `ADAMUTANT_PROVE_LIMIT` | A GNATprove switch that limits the proof to the subprogram of the mutant (such as `--limit-subp=counters.adb:8`), or empty when limiting could miss a failure |
+
+On POSIX, add it at the end of the prove command. When it is empty nothing is added, so the unchanged project is proved as a whole:
+
+```toml
+prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_LIMIT"
+prove_timeout_ms = 300000   # the time limit of the proof of one mutant
+```
+
+cmd.exe leaves an empty variable as the text `%ADAMUTANT_PROVE_LIMIT%`, so on Windows put a small script in between that adds the switch only when there is one (`check_prove_limit` in `tests/e2e/run_e2e.py` has one in Python).
+
+`ADAMUTANT_PROVE_LIMIT` is empty in these cases, because GNATprove finds the failures of such a mutant only in the proof of the callers:
+
+- A mutant outside any subprogram (declarations of a package and so on), and a mutant of a contract (aspects, ghost code)
+- A mutant in an expression function: GNATprove proves the callers with the body of the expression function
+- A mutant in a subprogram without a precondition or postcondition (`Pre`, `Post`, `Contract_Cases`) that the visible part of the spec does not declare: GNATprove proves such a subprogram inlined in its callers. For one declared inside another subprogram, the limit is the subprogram around it
+
+A limited proof leaves the results of the other units as they were. So that the failures of an earlier mutant do not stay, AdaMutant puts back GNATprove's results of the unchanged project (the `.spark` files in the `gnatprove` directories) before the proof of each mutant.
+
+`prove_timeout_ms` is the time limit of the proof of one mutant (0 takes it from the proof of the unchanged project, as for the tests). A limited proof is much shorter than the whole one, so set it when you limit. A mutant whose proof does not finish in time is not counted as detected (Survived).
 
 ## How it works
 

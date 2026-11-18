@@ -48,6 +48,11 @@ package AdaMutant.Results is
       Example       : Unbounded_String;
       --  The counterexample that GNATprove gives with the failure, "e.g.
       --  when H = 51", or "".
+      Subprogram    : Unbounded_String;
+      --  The innermost subprogram around the mutant, or "".
+      Limit_Line    : Natural := 0;
+      --  The line of the subprogram that the proof of the mutant can be
+      --  limited to, or 0 (see Subprograms.Place_Of).
       Reached       : Coverage := Unknown;
       Covered_By    : AdaMutant.Config.String_Vector;
       --  With Reached = Covered: the names of the tests that execute the

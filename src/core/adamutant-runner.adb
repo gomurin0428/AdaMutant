@@ -12,6 +12,7 @@ with AdaMutant.Mutators; use AdaMutant.Mutators;
 with AdaMutant.Positions;
 with AdaMutant.Processes; use AdaMutant.Processes;
 with AdaMutant.Schemata;
+with AdaMutant.Subprograms;
 
 package body AdaMutant.Runner is
 
@@ -91,6 +92,8 @@ package body AdaMutant.Runner is
                   then Path (Path'First .. Path'Last - 1) & "s" else "");
                Options : Scan_Options := Settings.Scan;
                Found   : Mutation_Vectors.Vector;
+               Subs    : AdaMutant.Subprograms.Subprogram_Vectors.Vector;
+               Visible : Name_Sets.Set;
             begin
                begin
                   --  Also when contracts are mutated: the mutations in
@@ -102,6 +105,15 @@ package body AdaMutant.Runner is
                        (Ghost_Names (Read (Join (Root, Spec))));
                   end if;
                   Found := Find (Source, Options);
+                  --  Which subprogram the proof of each mutant can be
+                  --  limited to.
+                  Subs := AdaMutant.Subprograms.Find (Source);
+                  if Spec /= ""
+                    and then Ada.Directories.Exists (Join (Root, Spec))
+                  then
+                     Visible := AdaMutant.Subprograms.Visible_Names
+                       (Read (Join (Root, Spec)));
+                  end if;
                exception
                   when E : AdaMutant.Lexer.Lexical_Error =>
                      Fail (Path & ": " & Ada.Exceptions.Exception_Message (E));
@@ -119,6 +131,8 @@ package body AdaMutant.Runner is
                        Since /= ""
                        and then not AdaMutant.Changes.Touches
                          (Changes, Path, Start_Pos.Line, End_Pos.Line);
+                     Where     : constant AdaMutant.Subprograms.Place :=
+                       AdaMutant.Subprograms.Place_Of (Subs, M.First, Visible);
                   begin
                      R.Mutants.Append
                        (Mutant'
@@ -138,6 +152,10 @@ package body AdaMutant.Runner is
                               else Null_Unbounded_String),
                            Killed_By     => None,
                            Failed_Checks => String_Vectors.Empty_Vector,
+                           Subprogram    => Where.Name,
+                           --  A changed contract shows in the callers.
+                           Limit_Line    => (if M.Contract then 0
+                                             else Where.Limit),
                            Evidence      => None,
                            Example       => Null_Unbounded_String,
                            Reached       => Unknown,
@@ -164,6 +182,21 @@ package body AdaMutant.Runner is
    begin
       return S (S'First + 1 .. S'Last);
    end Image;
+
+   function Place_Env (M : Mutant; Rel : String) return String is
+      --  The variables that tell the commands where M is (see
+      --  Processes.Run).  ADAMUTANT_PROVE_LIMIT is a switch of GNATprove,
+      --  or "" when the whole unit has to be proved.
+   begin
+      return "ADAMUTANT_MUTANT_LINE=" & Image (M.Start_Pos.Line) & ASCII.NUL
+        & "ADAMUTANT_MUTANT_SUBPROGRAM=" & To_String (M.Subprogram)
+        & ASCII.NUL
+        & "ADAMUTANT_PROVE_LIMIT="
+        & (if M.Limit_Line = 0 then ""
+           else "--limit-subp=" & Ada.Directories.Simple_Name (Rel) & ":"
+             & Image (M.Limit_Line))
+        & ASCII.NUL;
+   end Place_Env;
 
    function Build_Error (Log : String) return String is
       First : Positive := Log'First;
@@ -808,6 +841,17 @@ package body AdaMutant.Runner is
       --  command such as "exit 0" needs no wait.
       Uses_Gnatprove : Boolean := False;
 
+      --  GNATprove's results of the unmodified project in each sandbox
+      --  (its ".spark" files), put back before the proof of each mutant.
+      --  A proof limited to one subprogram (ADAMUTANT_PROVE_LIMIT) leaves
+      --  the results of the other units as they are, and the failures of
+      --  an earlier mutant in another unit would still count.
+      type Spark_Files is record
+         Paths, Texts : String_Vectors.Vector;
+      end record;
+      Spark_Results : array (1 .. Positive'Max (1, S.Concurrency))
+        of Spark_Files;
+
       --  GNATprove skips its proof phase when the files it regenerates get
       --  the same time stamp as the previous run's results.  Time stamps
       --  have whole-second (two-second on FAT) resolution, so start the next
@@ -879,7 +923,7 @@ package body AdaMutant.Runner is
                          M.Id,
                          (if In_Combined then Combined_Test_TO (T)
                           else Test_TO (T)),
-                         S.Test_Memory_Limit_Mb, Rel);
+                         S.Test_Memory_Limit_Mb, Rel, Place_Env (M, Rel));
                   Who    : constant String :=
                     (if S.Named_Tests then "test " & Test_Name (T)
                      else "tests");
@@ -932,7 +976,7 @@ package body AdaMutant.Runner is
          function Step (Name, Command : String; Timeout : Duration)
            return Run_Result is
            (Run (Command, Dir, Log_Base & "-" & Name & ".log", M.Id, Timeout,
-                 Mutant_File => Rel));
+                 Mutant_File => Rel, More_Env => Place_Env (M, Rel)));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          if not Built then
@@ -964,6 +1008,12 @@ package body AdaMutant.Runner is
          if M.Status = Pending then
             if Uses_Gnatprove then
                Wait_For_New_Stamp (Prove_Ended (Slot));
+               for K in Spark_Results (Slot).Paths.First_Index
+                 .. Spark_Results (Slot).Paths.Last_Index
+               loop
+                  Write (Join (Dir, Spark_Results (Slot).Paths (K)),
+                         Spark_Results (Slot).Texts (K));
+               end loop;
             end if;
             declare
                P : constant Run_Result :=
@@ -1759,7 +1809,7 @@ package body AdaMutant.Runner is
          begin
             Write_Changed (Path, Apply (Original, M.Mutation));
             B := Run (Command, Dir, Join (Logs, Log_Name), M.Id, Build_TO,
-                      Mutant_File => Rel);
+                      Mutant_File => Rel, More_Env => Place_Env (M, Rel));
             Now := Objects (Dir);
             After := Dependents (Dir, Base_Name (Rel));
             --  The mutant can show in the object of any unit that depends
@@ -2037,7 +2087,8 @@ package body AdaMutant.Runner is
                         Slots => Slots);
          Prove_Ended := [others => Clock];
          Prove_TO :=
-           Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+           (if S.Prove_Timeout_Ms > 0 then Ms (S.Prove_Timeout_Ms)
+            else Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms));
          for F of Proof_Failures (Read (Join (Logs, "baseline-prove.log")))
          loop
             Baseline_Failures.Append (Without_Place (F));
@@ -2069,6 +2120,21 @@ package body AdaMutant.Runner is
             end if;
          end;
       end loop;
+      if Uses_Gnatprove then
+         for Slot in 1 .. Slots loop
+            for Path of Find_Files (Slot_Dir (Slot), String_Vectors.Empty_Vector)
+            loop
+               if Path'Length > 6
+                 and then Path (Path'Last - 5 .. Path'Last) = ".spark"
+                 and then Ada.Strings.Fixed.Index (Path, "gnatprove/") > 0
+               then
+                  Spark_Results (Slot).Paths.Append (Path);
+                  Spark_Results (Slot).Texts.Append
+                    (Read (Join (Slot_Dir (Slot), Path)));
+               end if;
+            end loop;
+         end loop;
+      end if;
 
       if Pending_Count > 0 then
          Run_Combined;

@@ -19,6 +19,7 @@ with AdaMutant.Reports;
 with AdaMutant.Results;
 with AdaMutant.Runner;
 with AdaMutant.Schemata;
+with AdaMutant.Subprograms;
 with Ada.Strings.Fixed;
 
 procedure Unit_Tests is
@@ -274,6 +275,98 @@ procedure Unit_Tests is
       Expect ("procedure P is begin return; end P;", "",
               "return and null are not deleted");
    end Test_Skipped;
+
+   procedure Test_Subprograms is
+      use AdaMutant.Subprograms;
+      Body_Text : constant String :=
+        "package body Pk is" & LF                                  --  1
+        & "   procedure Local is" & LF                              --  2
+        & "   begin" & LF                                           --  3
+        & "      X := 1;  -- in Local" & LF                         --  4
+        & "   end Local;" & LF                                      --  5
+        & "   function Guarded (A : Integer) return Integer" & LF  --  6
+        & "     with Post => Guarded'Result > A is" & LF            --  7
+        & "   begin" & LF                                           --  8
+        & "      return A + 1;  -- in Guarded" & LF                 --  9
+        & "   end Guarded;" & LF                                    -- 10
+        & "   function Twice (A : Integer) return Integer is" & LF  -- 11
+        & "     (A * 2);  -- in Twice" & LF                         -- 12
+        & "   procedure Inst is new Gen;" & LF                      -- 13
+        & "   procedure Stub is separate;" & LF                     -- 14
+        & "   procedure P (X : in out Integer) is" & LF             -- 15
+        & "      procedure Nested is" & LF                          -- 16
+        & "      begin" & LF                                        -- 17
+        & "         X := 0;  -- in Nested" & LF                     -- 18
+        & "      end Nested;" & LF                                  -- 19
+        & "      procedure Checked with Pre => X > 0 is" & LF       -- 20
+        & "      begin" & LF                                        -- 21
+        & "         X := 2;  -- in Checked" & LF                    -- 22
+        & "      end Checked;" & LF                                 -- 23
+        & "   begin" & LF                                           -- 24
+        & "      Blk : declare" & LF                                -- 25
+        & "         Y : Integer := 0;" & LF                         -- 26
+        & "      begin" & LF                                        -- 27
+        & "         if X > 0 then" & LF                             -- 28
+        & "            X := Y;  -- in P" & LF                       -- 29
+        & "         end if;" & LF                                   -- 30
+        & "      end Blk;" & LF                                     -- 31
+        & "      loop exit; end loop;" & LF                         -- 32
+        & "      X := 3;  -- after the block" & LF                  -- 33
+        & "   end P;" & LF                                          -- 34
+        & "   function ""+"" (A, B : T) return T is" & LF          -- 35
+        & "   begin" & LF                                           -- 36
+        & "      return A;  -- in plus" & LF                        -- 37
+        & "   end ""+"";" & LF                                      -- 38
+        & "begin" & LF                                              -- 39
+        & "   X := 4;  -- in the package" & LF                     -- 40
+        & "end Pk;" & LF;                                           -- 41
+      Spec_Text : constant String :=
+        "package Pk is" & LF
+        & "   type T is private;" & LF
+        & "   procedure P (X : in out Integer);" & LF
+        & "   function ""+"" (A, B : T) return T;" & LF
+        & "   generic" & LF
+        & "      with procedure Formal;" & LF
+        & "   package G is end G;" & LF
+        & "private" & LF
+        & "   procedure Local;" & LF
+        & "end Pk;" & LF;
+      Subs    : constant Subprogram_Vectors.Vector := Find (Body_Text);
+      Visible : constant Name_Sets.Set := Visible_Names (Spec_Text);
+
+      function At_Mark (Mark : String) return String is
+         Where : constant Place :=
+           Place_Of (Subs, Ada.Strings.Fixed.Index (Body_Text, Mark), Visible);
+      begin
+         return To_String (Where.Name) & Where.Limit'Image;
+      end At_Mark;
+
+      procedure Expect_Place (Mark, Expected : String) is
+      begin
+         Check (At_Mark (Mark) = Expected, "subprograms: " & Mark,
+                At_Mark (Mark));
+      end Expect_Place;
+   begin
+      Check (Visible.Contains ("p") and then Visible.Contains ("""+""")
+             and then not Visible.Contains ("local")
+             and then not Visible.Contains ("formal"),
+             "subprograms: the visible part of a spec");
+      --  A local subprogram without a contract: its callers see its body.
+      Expect_Place ("in Local", "Local 0");
+      --  A local subprogram with a contract.
+      Expect_Place ("in Guarded", "Guarded 6");
+      --  An expression function: its callers see its body.
+      Expect_Place ("A * 2", "Twice 0");
+      --  A nested subprogram without a contract: the one around it.
+      Expect_Place ("in Nested", "Nested 15");
+      Expect_Place ("in Checked", "Checked 20");
+      Expect_Place ("in P", "P 15");
+      Expect_Place ("after the block", "P 15");
+      Expect_Place ("in plus", """+"" 35");
+      Expect_Place ("in the package", " 0");
+      Check (Natural (Subs.Length) = 7, "subprograms: count",
+             Subs.Length'Image);
+   end Test_Subprograms;
 
    procedure Test_Comments is
    begin
@@ -1911,6 +2004,7 @@ begin
    Test_Conditions;
    Test_Skipped;
    Test_Comments;
+   Test_Subprograms;
    Test_Ghost_Names;
    Test_Contract_Flag;
    Test_Apply;

@@ -874,6 +874,9 @@ def check_proof_log():
         (work / "fake_prove.py").write_text(
             "import os, sys, time\n"
             "n = os.environ.get('ADAMUTANT_MUTANT_ID', '0')\n"
+            "print('place: [%s] [%s] [%s]' % tuple(os.environ.get(v, 'unset') for v in\n"
+            "      ('ADAMUTANT_MUTANT_LINE', 'ADAMUTANT_MUTANT_SUBPROGRAM',\n"
+            "       'ADAMUTANT_PROVE_LIMIT')))\n"
             "# The unmodified project has this message too; a mutant moves it.\n"
             "# Both formats: the one line of GNATprove 14, and the place on the\n"
             "# next line (GNATprove 16), for the unmodified project and mutant 3.\n"
@@ -973,6 +976,15 @@ def check_proof_log():
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
             errors.append("a message of the unmodified project is counted")
+        # Where a mutant is: the variables of its proof.  Increment is
+        # declared in the spec, so the proof can be limited to it.
+        logs = work / ".adamutant" / "logs"
+        for log, want in (("baseline-prove.log", "place: [] [] []"),
+                          ("mutant-1-prove.log",
+                           "place: [5] [Increment] [--limit-subp=counters.adb:3]")):
+            text = (logs / log).read_text() if (logs / log).exists() else ""
+            if want not in text:
+                errors.append(f"{log} lacks {want!r}\n{text}")
         # Some failures have a counterexample: no note about them.
         if "The proof gave no counterexample" in proc.stdout:
             errors.append(f"a note about counterexamples\n{proc.stdout}")
@@ -997,6 +1009,52 @@ def check_proof_log():
                 errors.append(f"no SPARK code: exit status {proc.returncode},"
                               f" output lacks {line!r}\n{proc.stdout}")
                 break
+        return errors
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_prove_limit():
+    """The proof of each mutant limited to its subprogram gives the same results."""
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-limit-"))
+    work = root / "p"
+    try:
+        shutil.copytree(ROOT / "examples" / "spark_counter", work,
+                        ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
+        # A wrapper adds the switch only when there is one, in every shell.
+        (work / "limited.py").write_text(
+            "import os, subprocess, sys\n"
+            "limit = os.environ.get('ADAMUTANT_PROVE_LIMIT', '')\n"
+            "cmd = ['gnatprove', '-P', 'counters.gpr', '--level=1', '--report=fail',\n"
+            "       '--checks-as-errors=on', '--counterexamples=on', '-j1']\n"
+            "cmd += [limit] if limit else []\n"
+            "print('command:', ' '.join(cmd), flush=True)\n"
+            "sys.exit(subprocess.call(cmd))\n")
+        python = (f'"{sys.executable}"' if " " in sys.executable
+                  else sys.executable).replace("\\", "/")
+        config = work / "adamutant.toml"
+        config.write_text("".join(
+            f"prove = '{python} limited.py'\n" if line.startswith("prove =") else line
+            for line in config.read_text().splitlines(True)))
+        proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        report = work / ".adamutant" / "reports" / "mutation-report.json"
+        if proc.returncode != 0 or not report.exists():
+            return [f"exit status {proc.returncode}\n{proc.stdout}"]
+        errors = []
+        expected = json.loads((ROOT / "tests" / "e2e" / "expected"
+                               / "spark_counter.json").read_text(encoding="utf-8"))
+        got = statuses(json.loads(report.read_text(encoding="utf-8")))
+        if got != expected:
+            errors.append(f"not the results of the whole proof: {got}")
+        logs = work / ".adamutant" / "logs"
+        if "--limit-subp" in (logs / "baseline-prove.log").read_text():
+            errors.append("the proof of the unmodified project is limited")
+        limited = [p.name for p in logs.glob("mutant-*-prove.log")
+                   if "--limit-subp=halves.adb:8" in p.read_text()]
+        if not limited:
+            errors.append("no proof is limited to Even_Down")
         return errors
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -1245,7 +1303,8 @@ def main():
     failed = False
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
     checks = (("since", check_since), ("proof_log", check_proof_log),
-              ("baseline", check_baseline), ("library", check_library))
+              ("baseline", check_baseline), ("library", check_library),
+              ("prove_limit", check_prove_limit))
     unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:
         sys.exit("no such case: " + " ".join(unknown))
