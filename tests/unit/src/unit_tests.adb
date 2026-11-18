@@ -265,6 +265,26 @@ procedure Unit_Tests is
               & "procedure Q is begin B := 1; C := 2; end Q; end P;",
               "StatementDeletion C := 2;->null;|NumericLiteral 2->3",
               "unnamed ghost body end, ghost object lists, Ghost => False");
+      Expect ("package body P is" & LF
+              & "   function Gh (X : Integer) return Integer with Ghost is" & LF
+              & "   begin" & LF
+              & "      return R : Integer do R := X + 1; end return;" & LF
+              & "   end Gh;" & LF
+              & "   procedure After (Y : in out Integer) is" & LF
+              & "   begin" & LF
+              & "      Y := Y + 2;" & LF
+              & "   end After;" & LF
+              & "end P;",
+              "StatementDeletion Y := Y + 2;->null;|ArithmeticOperator +->-"
+              & "|NumericLiteral 2->3",
+              "a ghost body with an extended return ends at its own end");
+      Expect ("function F return T is begin" & LF
+              & "   return R : T with Relaxed_Initialization do" & LF
+              & "      R := 1;" & LF
+              & "   end return;" & LF
+              & "end F;",
+              "StatementDeletion R := 1;->null;|NumericLiteral 1->0",
+              "the aspects of an extended return end at do");
       Expect ("package P is pragma Assert (X > 0); end P;", "",
               "pragmas are skipped even with mutate_contracts",
               (Mutate_Contracts => True, others => <>));
@@ -2039,6 +2059,14 @@ procedure Unit_Tests is
          "an expression function that is a unit");
       Expect_None
         ("package P is new G (1);", "1", "an instantiation");
+      Expect_None
+        ("package P is function F (X : Integer) return Integer is"
+         & " (Integer'Max (X, 1)) with Static; end P;", "1",
+         "a static expression function");
+      Expect_None
+        ("package P is function F (X : Integer) return Integer is"
+         & " (X + 1) with Inline, Static => True; end P;", "1",
+         "a static expression function with other aspects");
       Expect_None
         ("procedure Q is X : constant Integer := 1; begin null; end Q;",
          "1", "a declaration");

@@ -588,7 +588,11 @@ package body AdaMutant.Mutators is
                   D := (if D > 0 then D - 1 else 0);
                elsif D = 0 then
                   if Aspect then
-                     if Is_Del (K, ";") or else Is_Kw (K, "is") then
+                     --  "do" ends the aspects of an extended return
+                     --  statement ("return R : T with ... do").
+                     if Is_Del (K, ";") or else Is_Kw (K, "is")
+                       or else Is_Kw (K, "do")
+                     then
                         Aspect := False;
                         Start := K + 1;
                      end if;
@@ -777,7 +781,8 @@ package body AdaMutant.Mutators is
                      then
                         --  The body ends at the "end" of its own "begin";
                         --  "end if", "end loop" and the like close other
-                        --  constructs.
+                        --  constructs.  "end return" closes the "do" of an
+                        --  extended return.
                         declare
                            Level : Natural := 0;
                         begin
@@ -790,8 +795,7 @@ package body AdaMutant.Mutators is
                                               or else Is_Kw (J + 1, "loop")
                                               or else Is_Kw (J + 1, "case")
                                               or else Is_Kw (J + 1, "record")
-                                              or else Is_Kw (J + 1, "select")
-                                              or else Is_Kw (J + 1, "return"))
+                                              or else Is_Kw (J + 1, "select"))
                                 and then Level > 0
                               then
                                  Level := Level - 1;
