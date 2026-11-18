@@ -332,6 +332,59 @@ procedure Unit_Tests is
       end;
    end Test_Attributes;
 
+   procedure Test_Loop_Direction is
+      O : Scan_Options;
+      Loops : constant String :=
+        "procedure P is" & LF
+        & "   subtype Index is Positive range 1 .. 9;" & LF
+        & "begin" & LF
+        & "   for I in 1 .. N loop X := X + I; end loop;" & LF
+        & "   Outer : for J in reverse A'Range loop null; end loop;" & LF
+        & "   for K in Index loop null; end loop;" & LF
+        & "   for L in A'Range (2) loop null; end loop;" & LF
+        & "   for M in Small range 1 .. 3 loop null; end loop;" & LF
+        & "   FOR Q IN 1 .. 2 LOOP null; END LOOP;" & LF
+        & "   for C in V.Iterate loop null; end loop;" & LF
+        & "   for D in reverse V.Iterate loop null; end loop;" & LF
+        & "   for S in Types.Index loop null; end loop;" & LF
+        & "   for B in Boolean loop null; end loop;" & LF
+        & "   for F in Index when F > 1 loop null; end loop;" & LF
+        & "   for G in Ext loop null; end loop;" & LF
+        & "   for H in L loop null; end loop;" & LF
+        & "   for M in Mp.Iterate when Key (M) in 1 .. 3 loop null; end loop;" & LF
+        & "   for E of A loop null; end loop;" & LF
+        & "   X := (for all I in 1 .. N => A (I) > 0);" & LF
+        & "   Y := [for I in 1 .. 3 => I];" & LF
+        & "   for T'Size use 8;" & LF
+        & "end P;";
+   begin
+      O.Enabled := [others => False];
+      O.Enabled (Loop_Direction) := True;
+      O.Type_Names.Include ("ext");
+      --  Over a range or a declared subtype (of the source, of the spec
+      --  through Type_Names, or of Standard), both ways, also before an
+      --  iterator filter; not over another name (a container, an
+      --  iterator or a qualified name), in a quantified expression or an
+      --  aggregate.  Removing "reverse" always compiles, also for an
+      --  iterator.
+      Expect (Loops,
+              "LoopDirection in->in reverse|LoopDirection in reverse->in"
+              & "|LoopDirection in->in reverse|LoopDirection in->in reverse"
+              & "|LoopDirection in->in reverse|LoopDirection IN->IN REVERSE"
+              & "|LoopDirection in reverse->in"
+              & "|LoopDirection in->in reverse|LoopDirection in->in reverse"
+              & "|LoopDirection in->in reverse",
+              "loop direction", O);
+      --  Off by default.
+      Check (Ada.Strings.Fixed.Index (Describe (Loops), "LoopDirection") = 0,
+             "loop direction is off by default");
+      Check (Type_Names ("package Q is type T is (A, B); subtype S is T;"
+                         & " task type Worker; X : Integer; end Q;").Contains ("s")
+             and then not Type_Names ("package Q is X : Integer; end Q;")
+                            .Contains ("x"),
+             "type names of a spec");
+   end Test_Loop_Direction;
+
    procedure Test_Comments is
    begin
       --  A comment changes nothing, whatever it says.
@@ -914,6 +967,28 @@ procedure Unit_Tests is
              "config numbers");
       Check (C.Scan.Enabled (Arithmetic_Operator)
              and then not C.Scan.Enabled (Numeric_Literal), "config mutators");
+      declare
+         Base : constant String :=
+           "build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF;
+         D : constant Configuration := Parse (Base, "/r");
+         I : constant Configuration := Parse
+           (Base & "include_mutators = [""LoopDirection""]" & LF
+            & "exclude_mutators = [""StringLiteral""]" & LF, "/r");
+         M : constant Configuration := Parse
+           (Base & "mutators = [""LoopDirection""]" & LF, "/r");
+      begin
+         Check (not D.Scan.Enabled (Loop_Direction)
+                and then D.Scan.Enabled (Attribute_Swap)
+                and then I.Scan.Enabled (Loop_Direction)
+                and then I.Scan.Enabled (Numeric_Literal)
+                and then not I.Scan.Enabled (String_Literal)
+                and then M.Scan.Enabled (Loop_Direction)
+                and then not M.Scan.Enabled (Numeric_Literal),
+                "config: include_mutators adds to the default mutators");
+      end;
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF
+               & "include_mutators = [""Nonsense""]",
+               "config: an unknown mutator to include");
       Check (C.High = 90 and then C.Break = 10, "config thresholds");
       Check (Natural (C.Tests.Length) = 1
              and then To_String (C.Tests (1).Name) = "tests"
@@ -1994,6 +2069,7 @@ begin
    Test_Skipped;
    Test_Comments;
    Test_Attributes;
+   Test_Loop_Direction;
    Test_Ghost_Names;
    Test_Contract_Flag;
    Test_Apply;

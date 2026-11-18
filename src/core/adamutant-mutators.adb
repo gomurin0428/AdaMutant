@@ -16,7 +16,8 @@ package body AdaMutant.Mutators is
          when Statement_Deletion     => "StatementDeletion",
          when Numeric_Literal        => "NumericLiteral",
          when String_Literal         => "StringLiteral",
-         when Attribute_Swap         => "AttributeSwap");
+         when Attribute_Swap         => "AttributeSwap",
+         when Loop_Direction         => "LoopDirection");
 
    function Squash (S : String) return String is
       R    : String (1 .. S'Length);
@@ -169,6 +170,13 @@ package body AdaMutant.Mutators is
       new String'("rem"), new String'("**"), new String'("abs"),
       new String'("not")];
 
+   Standard_Discrete : constant array (1 .. 11) of Word :=
+     [new String'("boolean"), new String'("character"),
+      new String'("wide_character"), new String'("wide_wide_character"),
+      new String'("integer"), new String'("natural"), new String'("positive"),
+      new String'("short_integer"), new String'("short_short_integer"),
+      new String'("long_integer"), new String'("long_long_integer")];
+
    type Byte_Range is record
       First, Last : Natural := 0;
    end record;
@@ -312,6 +320,25 @@ package body AdaMutant.Mutators is
       return Names;
    end Ghost_Names;
 
+   function Type_Names (Source : String) return Name_Sets.Set is
+      Names   : Name_Sets.Set;
+      After_Type : Boolean := False;
+   begin
+      for T of Tokenize (Source) loop
+         if T.Kind /= Comment then
+            declare
+               W : constant String := Lower (Source (T.First .. T.Last));
+            begin
+               if After_Type and then T.Kind = Identifier then
+                  Names.Include (W);
+               end if;
+               After_Type := T.Kind = Reserved_Word and then W in "type" | "subtype";
+            end;
+         end if;
+      end loop;
+      return Names;
+   end Type_Names;
+
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector
    is
@@ -355,6 +382,13 @@ package body AdaMutant.Mutators is
          Seg_Pragma : array (1 .. N) of Boolean := [others => False];
          In_Default : array (1 .. N) of Boolean := [others => False];
          In_Ghost   : array (1 .. N) of Boolean := [others => False];
+
+         --  The types and subtypes that a loop can run over backwards when
+         --  it names one of them alone ("for I in Index loop"): those of
+         --  the spec, of Source and the discrete ones of Standard.  Any
+         --  other name may be a container or an iterator, which need not
+         --  go backwards.
+         Types : Name_Sets.Set := Options.Type_Names;
 
          function Skipped (K : Positive) return Boolean is
            (Seg_Skip (Seg_Start (K)) or else Seg_Pragma (Seg_Start (K))
@@ -794,6 +828,11 @@ package body AdaMutant.Mutators is
             end loop;
          end;
 
+         Types.Union (Type_Names (Source));
+         for Name of Standard_Discrete loop
+            Types.Include (Name.all);
+         end loop;
+
          --  Pass 3: mutations.
          for K in 1 .. N loop
             declare
@@ -878,6 +917,59 @@ package body AdaMutant.Mutators is
 
                      elsif Lw = "abs" then
                         Add (Unary_Operator, K, K, "");
+
+                     --  The direction of a loop over a range ("for I in A ..
+                     --  B loop", "for I in X'Range loop") or over a subtype
+                     --  ("for I in Index loop").  Not over an iterator ("for
+                     --  C in V.Iterate", "for E of A"), which need not go
+                     --  backwards; a quantified expression or an aggregate is
+                     --  inside parentheses.
+                     elsif Lw = "for" and then Depth (K) = 0
+                       and then K + 3 <= N
+                       and then S (K + 1).Kind = Identifier
+                       and then Is_Kw (K + 2, "in")
+                     then
+                        declare
+                           J        : Positive := K + 3;
+                           Filter   : Natural := 0;
+                           --  The "when" of an iterator filter ("for I in
+                           --  Index when P (I) loop"), which is no part of
+                           --  the range.
+                           Discrete : Boolean := False;
+                        begin
+                           while J <= N
+                             and then not (Depth (J) = 0
+                                           and then (Is_Kw (J, "loop")
+                                                     or else Is_Del (J, ";")))
+                           loop
+                              if Depth (J) = 0 and then Filter = 0 then
+                                 if Is_Kw (J, "when") then
+                                    Filter := J;
+                                 elsif Is_Del (J, "..")
+                                   or else (Lower (Txt (J)) = "range"
+                                            and then Is_Del (J - 1, "'"))
+                                 then
+                                    Discrete := True;
+                                 end if;
+                              end if;
+                              J := J + 1;
+                           end loop;
+                           if J <= N and then Is_Kw (J, "loop") then
+                              if Is_Kw (K + 3, "reverse") then
+                                 Add (Loop_Direction, K + 2, K + 3,
+                                      Same_Case (Txt (K + 2), "in"));
+                              elsif Discrete
+                                or else ((if Filter > 0 then Filter else J)
+                                           = K + 4
+                                         and then S (K + 3).Kind = Identifier
+                                         and then Types.Contains
+                                                    (Lower (Txt (K + 3))))
+                              then
+                                 Add (Loop_Direction, K + 2, K + 2,
+                                      Same_Case (Txt (K + 2), "in reverse"));
+                              end if;
+                           end if;
+                        end;
 
                      elsif Lw = "in" and then Binary
                        and then not Is_Kw (K - 1, "not")

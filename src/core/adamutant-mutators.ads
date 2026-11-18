@@ -16,11 +16,18 @@ package AdaMutant.Mutators is
       Statement_Deletion,
       Numeric_Literal,
       String_Literal,
-      Attribute_Swap);
+      Attribute_Swap,
+      Loop_Direction);
 
    type Mutator_Set is array (Mutator_Kind) of Boolean;
 
    All_Mutators : constant Mutator_Set := [others => True];
+
+   Default_Mutators : constant Mutator_Set :=
+     [Loop_Direction => False, others => True];
+   --  The mutators that run unless the configuration says otherwise.
+   --  LoopDirection is left out: in many loops the order does not matter,
+   --  and its mutants are then equivalent.
 
    function Name (Kind : Mutator_Kind) return String;
    --  Report name, for example "ArithmeticOperator".
@@ -31,16 +38,23 @@ package AdaMutant.Mutators is
    package Name_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
 
    type Scan_Options is record
-      Enabled          : Mutator_Set := All_Mutators;
+      Enabled          : Mutator_Set := Default_Mutators;
       Mutate_Contracts : Boolean := False;
       --  Lower-case names of ghost entities declared outside the scanned
       --  source (usually in its spec).
       Ghost_Names      : Name_Sets.Set;
+      --  Lower-case names of types and subtypes declared outside the
+      --  scanned source (usually in its spec): LoopDirection takes a loop
+      --  over one of these names for a loop over a range.
+      Type_Names       : Name_Sets.Set;
    end record;
 
    function Ghost_Names (Source : String) return Name_Sets.Set;
    --  Lower-case names of the subprograms, objects and types that Source
    --  declares with the Ghost aspect.
+
+   function Type_Names (Source : String) return Name_Sets.Set;
+   --  Lower-case names of the types and subtypes that Source declares.
 
    type Mutation is record
       Kind        : Mutator_Kind := Arithmetic_Operator;

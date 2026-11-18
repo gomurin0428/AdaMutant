@@ -17,7 +17,7 @@ package body AdaMutant.Config is
       Seen  : String_Vector;
       Have_Mutate, Have_Sandbox_Exclude : Boolean := False;
       Have_Mutators : Boolean := False;
-      Mutators_List, Excluded_List, Reporters : String_Vector;
+      Mutators_List, Excluded_List, Included_List, Reporters : String_Vector;
 
       function Line return String is
          N : Natural := 1;
@@ -238,7 +238,8 @@ package body AdaMutant.Config is
                  | "timeout_ms" | "build_timeout_ms" | "prove_timeout_ms"
                  | "test_memory_limit_mb"
                  | "bail" | "coverage_analysis" | "mutators"
-                 | "exclude_mutators" | "mutate_contracts" | "sandbox_exclude"
+                 | "exclude_mutators" | "include_mutators" | "mutate_contracts"
+                 | "sandbox_exclude"
                  | "report_dir" | "reporters"
             then
                Fail ("'" & Key & "' is a setting, not a test: write the"
@@ -304,6 +305,8 @@ package body AdaMutant.Config is
             Have_Mutators := True;
          elsif Full = "exclude_mutators" then
             Excluded_List := Array_Value;
+         elsif Full = "include_mutators" then
+            Included_List := Array_Value;
          elsif Full = "mutate_contracts" then
             C.Scan.Mutate_Contracts := Boolean_Value;
          elsif Full = "sandbox_exclude" then
@@ -389,6 +392,7 @@ package body AdaMutant.Config is
 
       Check_Mutators (Mutators_List, "mutators");
       Check_Mutators (Excluded_List, "exclude_mutators");
+      Check_Mutators (Included_List, "include_mutators");
       declare
          K : Mutator_Kind;
       begin
@@ -400,6 +404,11 @@ package body AdaMutant.Config is
                end if;
             end loop;
          end if;
+         for Name of Included_List loop
+            if AdaMutant.Mutators.Parse (Name, K) then
+               C.Scan.Enabled (K) := True;
+            end if;
+         end loop;
          for Name of Excluded_List loop
             if AdaMutant.Mutators.Parse (Name, K) then
                C.Scan.Enabled (K) := False;
@@ -501,6 +510,8 @@ package body AdaMutant.Config is
       & "coverage_analysis = true" & LF
       & "# mutators = [""ArithmeticOperator"", ""EqualityOperator""]" & LF
       & "# exclude_mutators = [""StringLiteral""]" & LF
+      & "# Off unless named in mutators or here: LoopDirection." & LF
+      & "# include_mutators = [""LoopDirection""]" & LF
       & "mutate_contracts = false" & LF
       & "sandbox_exclude = ["".git"", ""obj"", ""bin""]" & LF
       & "reporters = [""console"", ""html"", ""json""]" & LF
