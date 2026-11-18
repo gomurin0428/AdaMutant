@@ -36,6 +36,7 @@ project-files = ["adamutant.gpr"]
 
 [[depends-on]]
 gnat = ">=14"
+libadalang = "^26"
 
 # The project files stop at any warning by default, which suits development.
 # A build from the index must not fail because a newer compiler has a new
