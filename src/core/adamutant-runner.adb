@@ -635,29 +635,39 @@ package body AdaMutant.Runner is
       for Path of Files loop
          if Has_Extension (Path, ".adc") or else Sources.Contains (Path) then
             --  "pragma Assertion_Policy (Check)" or "(Pre => Check, ...)":
-            --  a Check before the end of the pragma.
+            --  the word Check in the arguments of the pragma, not in a
+            --  comment.
             declare
-               Text : constant String := Lower (Read (Join (Dir, Path)));
-               At_K : Natural := Ada.Strings.Fixed.Index
-                                   (Text, "assertion_policy");
+               use AdaMutant.Lexer;
+               Text : constant String := Read (Join (Dir, Path));
             begin
-               while At_K > 0 loop
-                  declare
-                     Stop  : Natural := Ada.Strings.Fixed.Index
-                                          (Text (At_K .. Text'Last), ";");
-                  begin
-                     if Stop = 0 then
-                        Stop := Text'Last;
+               declare
+                  T : constant Token_Vectors.Vector := Tokenize (Text);
+                  K : Positive := 1;
+                  In_Policy : Boolean := False;
+               begin
+                  while K <= T.Last_Index loop
+                     if T (K).Kind /= Comment then
+                        declare
+                           W : constant String := Lower (Image (Text, T (K)));
+                        begin
+                           if W = ";" then
+                              In_Policy := False;
+                           elsif W = "assertion_policy" and then K > 1
+                             and then Lower (Image (Text, T (K - 1))) = "pragma"
+                           then
+                              In_Policy := True;
+                           elsif In_Policy and then W = "check" then
+                              return "";
+                           end if;
+                        end;
                      end if;
-                     if Ada.Strings.Fixed.Index
-                          (Text (At_K .. Stop), "check") > 0
-                     then
-                        return "";
-                     end if;
-                     At_K := Ada.Strings.Fixed.Index
-                               (Text (Stop .. Text'Last), "assertion_policy");
-                  end;
-               end loop;
+                     K := K + 1;
+                  end loop;
+               end;
+            exception
+               when Lexical_Error =>
+                  null;
             end;
          end if;
       end loop;

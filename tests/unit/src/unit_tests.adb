@@ -483,6 +483,23 @@ procedure Unit_Tests is
               & "|NumericLiteral 5->6|BooleanLiteral True->False"
               & "|NumericLiteral 6->7",
               "only contract aspects are mutated", O);
+      --  Aspects after "end record", "null record" and a private type.
+      O.Enabled (Statement_Deletion) := True;
+      Expect ("package Q is" & LF
+              & "   type R is record" & LF
+              & "      C : Integer := 7;" & LF
+              & "   end record with Size => 64, Dynamic_Predicate => R.C > 8;" & LF
+              & "   type E is null record with Size => 0;" & LF
+              & "   type T is private with Type_Invariant => Valid (T)," & LF
+              & "     Size => 32;" & LF
+              & "   type L is limited private with Size => 16;" & LF
+              & "   type D is new R with private with Size => 128;" & LF
+              & "   procedure Go;" & LF
+              & "private" & LF
+              & "   type T is new Integer;" & LF
+              & "end Q;",
+              "NumericLiteral 7->8|NumericLiteral 8->9",
+              "aspects after end record and private", O);
    end Test_Contract_Aspects;
 
    procedure Test_Proof_Warnings is
@@ -586,7 +603,15 @@ procedure Unit_Tests is
       Check (AdaMutant.Runner.Without_Assertions (Tmp, Sources)
                = "src/counters.adb",
              "assertions: an Assertion_Policy that ignores them");
-      Write (Tmp & "/gnat.adc", "pragma Assertion_Policy (Check);" & LF);
+      Write (Tmp & "/gnat.adc",
+             "pragma Assertion_Policy (Ignore);  --  Check later" & LF
+             & "pragma Assertion_Policy (Unchecked_Name => Ignore);" & LF
+             & "--  pragma Assertion_Policy (Check);" & LF);
+      Check (AdaMutant.Runner.Without_Assertions (Tmp, Sources)
+               = "src/counters.adb",
+             "assertions: Check in a comment or in another word");
+      Write (Tmp & "/gnat.adc",
+             "pragma Assertion_Policy (Pre => Ignore, Post => CHECK);" & LF);
       Check (AdaMutant.Runner.Without_Assertions (Tmp, Sources) = "",
              "assertions: turned on by a configuration pragma");
    end Test_Assertions_Check;
@@ -630,6 +655,29 @@ procedure Unit_Tests is
              and then Natural (Names.Length) = 4,
              "ghost names: null procedures and abstract subprograms too",
              Names.Length'Image);
+      declare
+         Types : constant Name_Sets.Set := Ghost_Names
+           ("package T is" & LF
+            & "   type Model is record" & LF
+            & "      V : Integer := 0;" & LF
+            & "   end record with Ghost;" & LF
+            & "   type Index is range 1 .. 10 with Ghost;" & LF
+            & "   type Hidden is private with Ghost;" & LF
+            & "   type Seq is array (Index) of Integer with Ghost;" & LF
+            & "   subtype Small is Integer range 0 .. 5 with Ghost;" & LF
+            & "   type Pair (D : Integer) is null record with Ghost;" & LF
+            & "   type Plain is range 1 .. 3;" & LF
+            & "private" & LF
+            & "   type Hidden is new Integer with Ghost;" & LF
+            & "end T;" & LF);
+         Image : Unbounded_String;
+      begin
+         for Name of Types loop
+            Append (Image, Name & " ");
+         end loop;
+         Check (To_String (Image) = "hidden index model pair seq small ",
+                "ghost names: types", To_String (Image));
+      end;
    end Test_Ghost_Names;
 
    procedure Test_Contract_Flag is
