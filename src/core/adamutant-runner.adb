@@ -643,31 +643,63 @@ package body AdaMutant.Runner is
             begin
                declare
                   T : constant Token_Vectors.Vector := Tokenize (Text);
-                  K : Positive := 1;
-                  In_Policy : Boolean := False;
+                  In_Policy    : Boolean := False;
+                  After_Pragma : Boolean := False;
+                  --  The token before, comments left out, is "pragma".
                begin
-                  while K <= T.Last_Index loop
-                     if T (K).Kind /= Comment then
+                  for Tok of T loop
+                     if Tok.Kind /= Comment then
                         declare
-                           W : constant String := Lower (Image (Text, T (K)));
+                           W : constant String := Lower (Image (Text, Tok));
                         begin
                            if W = ";" then
                               In_Policy := False;
-                           elsif W = "assertion_policy" and then K > 1
-                             and then Lower (Image (Text, T (K - 1))) = "pragma"
+                           elsif W = "assertion_policy" and then After_Pragma
                            then
                               In_Policy := True;
                            elsif In_Policy and then W = "check" then
                               return "";
                            end if;
+                           After_Pragma := W = "pragma";
                         end;
                      end if;
-                     K := K + 1;
                   end loop;
                end;
             exception
                when Lexical_Error =>
-                  null;
+                  --  Not Ada (a file for gnatprep, say): the text after
+                  --  "assertion_policy", up to the next semicolon, has the
+                  --  word "check".
+                  declare
+                     L : constant String := Lower (Text);
+                     A : Natural := Ada.Strings.Fixed.Index (L, "assertion_policy");
+                  begin
+                     while A > 0 loop
+                        declare
+                           Stop : Natural :=
+                             Ada.Strings.Fixed.Index (L (A .. L'Last), ";");
+                           C    : Natural;
+                        begin
+                           if Stop = 0 then
+                              Stop := L'Last;
+                           end if;
+                           C := Ada.Strings.Fixed.Index (L (A .. Stop), "check");
+                           while C > 0 loop
+                              if (C = L'First or else not (L (C - 1) in 'a' .. 'z' | '0' .. '9' | '_'))
+                                and then (C + 5 > L'Last
+                                          or else not (L (C + 5) in 'a' .. 'z' | '0' .. '9' | '_'))
+                              then
+                                 return "";
+                              end if;
+                              C := Ada.Strings.Fixed.Index (L (C + 1 .. Stop), "check");
+                           end loop;
+                           A := (if Stop < L'Last
+                                 then Ada.Strings.Fixed.Index
+                                        (L (Stop + 1 .. L'Last), "assertion_policy")
+                                 else 0);
+                        end;
+                     end loop;
+                  end;
             end;
          end if;
       end loop;

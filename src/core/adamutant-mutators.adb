@@ -280,6 +280,7 @@ package body AdaMutant.Mutators is
                            loop
                               J := J - 1;
                            end loop;
+                           exit when J < 1;
                         end if;
                         exit when At_Top (J, ";") or else At_Top (J, "begin")
                           or else At_Top (J, "declare")
@@ -325,7 +326,15 @@ package body AdaMutant.Mutators is
                           and then S (Name_At).Kind in Identifier
                                                      | String_Literal
                         then
-                           Names.Include (Lower (Txt (Name_At)));
+                           --  Not the name of a type: no statement calls or
+                           --  assigns it, and a component or subprogram of
+                           --  the same name elsewhere would be taken for
+                           --  ghost code.  The declaration itself is ghost.
+                           if not (Is_Kw (First, "type")
+                                   or else Is_Kw (First, "subtype"))
+                           then
+                              Names.Include (Lower (Txt (Name_At)));
+                           end if;
                            if Name_At = First then
                               --  "A, B : T with Ghost" declares every name.
                               declare
