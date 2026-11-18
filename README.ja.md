@@ -26,7 +26,7 @@ AdaMutant は、テストと GNATprove の証明を両方使う前提のツー�
 3. テストも証明も検出できなかったミュータント（Survived）は、テストを足すか、契約を強めます。等価ミュータント（オブジェクトコードが変更前と同じになるもの）は、`equivalence_build` を設定すると自動で見分けて外します（Ignored）。それ以外は Survived のまま残します。
 4. 証明が時間切れになったミュータントは、検出扱いにしません。Survived として数え、一覧に `(the proof timed out)` と出ます。2 か 3 として扱い直します。
 
-[examples/spark_counter](examples/spark_counter) では、次のように出ます。テストは `Increment` しか呼ばないので、`Saturating_Add` のミュータントは証明だけが検出します（2 の候補）。生き残った #6 は、`A + B = Max` のときにどちらの分岐も `Max` を返す等価ミュータントです。最適化してもオブジェクトコードが変わるので自動では外れず、Survived のまま残ります（3）。
+[examples/spark_counter](examples/spark_counter) では、次のように出ます。テストは `Increment` しか呼ばないので、`Saturating_Add` のミュータントは証明だけが検出します（2 の候補）。生き残った #6 は、`A + B = Max` のときにどちらの分岐も `Max` を返す等価ミュータントです。`equivalence_build` を設定しても（この例では設定していません）、最適化したオブジェクトコードが変わるので自動では外れず、Survived のまま残ります（3）。
 
 ```
 Detected only by the proof (candidates for a missing test):
@@ -47,7 +47,7 @@ Survived mutants:
 ## 必要なもの
 
 - GNAT（Ada 2022 対応）と GPRbuild（GNAT 16.1 と GPRbuild 26 で確認。GNAT 14 でもビルドできます）
-- GNATprove（必須。GNATprove 16.1 で確認）。GNATprove は SPARK のコード（`SPARK_Mode`）しか解析しないので、それ以外のコードのミュータントを証明が検出することはありません。SPARK のコードが 1 つもないと、GNATprove 16 は失敗で終わります。そのようなプロジェクトでは `prove = "exit 0"`（必ず通るコマンド）と書きます（[examples/calculator](examples/calculator) がこの例です）
+- 証明に GNATprove（GNATprove 16.1 で確認）。`prove` のコマンドは必須です。GNATprove は SPARK のコード（`SPARK_Mode`）しか解析しないので、それ以外のコードのミュータントを証明が検出することはありません。SPARK のコードが 1 つもないと、GNATprove 16 は失敗で終わります。そのようなプロジェクトでは `prove = "exit 0"`（必ず通るコマンドで、GNATprove は要りません）と書きます（[examples/calculator](examples/calculator) がこの例です）
 - E2E テストを動かす場合は Python 3
 
 ## ビルド
@@ -132,8 +132,8 @@ break = 0
 
 | 使い方 | 再利用する結果 | 実行するミュータント |
 |---|---|---|
-| `--baseline FILE` | レポートのソースから変わっていない行の Killed、Timeout、CompileError | レポートのソースから変わった行のミュータントと、前回検出できなかったミュータント（Survived、NoCoverage など） |
-| `--since REF --baseline FILE` | REF から変わっていない行は、レポートにあるすべての結果（Survived、NoCoverage、等価ミュータントの Ignored を含む）。REF から変わった行は、上の行と同じ | REF から変わった行のミュータント（レポートのソースから変わっていない行で、すでに検出済みのものを除く） |
+| `--baseline FILE` | レポートのソースから変わっていない行の Killed、Timeout、CompileError | レポートのソースから変わった行のミュータントと、前回検出できなかったミュータント（Survived など） |
+| `--since REF --baseline FILE` | REF から変わっていない行は、レポートにあるすべての結果（Survived、等価ミュータントの Ignored を含む）。REF から変わった行は、上の行と同じ | REF から変わった行のミュータント（レポートのソースから変わっていない行で、すでに検出済みのものを除く） |
 
 - `--baseline` だけのときは、テストを足したあとの再実行に向いています。前回検出できたミュータントは飛ばし、生き残っていたミュータントだけを試し直します
 - `--since` と組み合わせると、PR の CI で、変更した行だけを実行しつつ、全体のスコアとレポートを出せます。このとき、変更のないファイルも読み込みます。FILE には、たとえばメインブランチで全体を実行したときのレポートを使います
@@ -186,7 +186,7 @@ Log ("...");
 | Killed | テストまたは証明が失敗した（検出できた） |
 | Timeout | テストが時間内に終わらなかった（検出扱い） |
 | Survived | テストも証明も通った、または証明が時間内に終わらなかった（検出できなかった） |
-| NoCoverage | 以前の版のレポートを `--baseline` で再利用したときだけ出る（未検出扱い）。今の版は、どのテストも実行しないミュータントも証明にかける |
+| NoCoverage | 今の版では使わない。どのテストも実行しないミュータントも証明にかける（未検出扱い） |
 | CompileError | ミュータントがビルドできなかった（スコア対象外） |
 | RuntimeError | コマンドを起動できなかったなど（スコア対象外） |
 | Ignored | コメントで無効化、または等価ミュータントと判定（スコア対象外） |
@@ -245,7 +245,8 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - メッセージを読み取れなかったときは、これまでどおり `killedBy` は `["proof"]` です
 - GNATprove 16 は、メッセージの場所を次の行（`--> file:line:col`）に出します。AdaMutant は、この形式も、それより前の版の 1 行の形式も読みます
 - 証明だけが検出したミュータントは、コンソールの `Detected only by the proof (candidates for a missing test):` にも 1 つずつ出ます。括弧の中は証明できなかった検査の種類です。どのテストも実行しない場所のミュータントには `no test executes this code` が付きます
-- 証明が時間内に終わらなかったミュータントは Survived です（`statusReason` は `... the proof did not finish within the timeout`）。証明が失敗するはずなのか、遅いだけなのかを区別できないためです。以前の版のレポートにある、証明の Timeout は、`--baseline` で読むときに同じように扱います
+- 証明が時間内に終わらなかったミュータントは Survived です（`statusReason` は `... the proof did not finish within the timeout`）。証明が失敗するはずなのか、遅いだけなのかを区別できないためです。`--baseline` では、以前の版のレポートにある証明の Timeout は実行し直します。`--since` のリビジョンから変わっていない行では、Survived として再利用します
+- 以前の版は、テストだけ、証明だけでも回せました。`--baseline` では、今の版なら出さない結果は、どの場合も実行し直します。NoCoverage、テストだけまたは証明だけで生き残ったもの、テストをせずに証明が検出したものです
 
 ## 仕組み
 

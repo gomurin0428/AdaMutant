@@ -10,9 +10,9 @@ mutation score.
 It has its own lexer for Ada up to Ada 2022 and does not depend on
 libadalang. Each mutant goes to the tests first, and the mutants that the
 tests do not detect go to the proof; those that only the proof detects are
-listed as candidates for a missing test. Where it can, AdaMutant builds all the mutants once (mutant schemata)
-and switches the active mutant with an environment variable while the tests
-run; the other mutants are built one at a time. Mutants run in parallel in
+listed as candidates for a missing test. Where it can, AdaMutant builds
+all the mutants once (mutant schemata) and switches the active mutant with
+an environment variable while the tests run; the other mutants are built one at a time. Mutants run in parallel in
 copies of the project, with a time limit and an optional memory limit for
 the tests.
 

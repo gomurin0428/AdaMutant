@@ -7,6 +7,10 @@ package AdaMutant.Runner is
 
    Run_Error : exception;
 
+   procedure Fail (Text : String) with No_Return;
+   --  Raises Run_Error with Text.  A Text longer than an exception message
+   --  can be (200 characters) is cut there, and Details gives all of it.
+
    function Details return String;
    --  More about the Run_Error that Execute raised last (the command, its
    --  log and the end of it, what to do), or "".  GNAT keeps no more than

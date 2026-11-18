@@ -26,7 +26,7 @@ AdaMutant is made for projects that use both tests and the GNATprove proof. This
 3. Handle the mutants that neither the tests nor the proof detect (Survived) as before: add a test or make a contract stronger. Equivalent mutants (those whose object code is the same as before the change) are recognized and excluded automatically when `equivalence_build` is set (Ignored). The others stay Survived.
 4. A mutant whose proof runs out of time is not counted as detected. It counts as Survived and is marked `(the proof timed out)` in the list. Treat it as in 2 or 3.
 
-This is the output for [examples/spark_counter](examples/spark_counter). The test only calls `Increment`, so only the proof detects the mutants of `Saturating_Add` (candidates, as in 2). The survivor #6 is an equivalent mutant: when `A + B = Max`, both branches return `Max`. The optimized object code still differs, so it is not excluded automatically and stays Survived (as in 3).
+This is the output for [examples/spark_counter](examples/spark_counter). The test only calls `Increment`, so only the proof detects the mutants of `Saturating_Add` (candidates, as in 2). The survivor #6 is an equivalent mutant: when `A + B = Max`, both branches return `Max`. Even with `equivalence_build` (which this example does not set) it is not excluded automatically, because the optimized object code still differs, so it stays Survived (as in 3).
 
 ```
 Detected only by the proof (candidates for a missing test):
@@ -47,7 +47,7 @@ Survived mutants:
 ## Requirements
 
 - GNAT with Ada 2022 support and GPRbuild (tested with GNAT 16.1 and GPRbuild 26; GNAT 14 builds it too)
-- GNATprove (required; tested with GNATprove 16.1). GNATprove only analyses SPARK code (`SPARK_Mode`), so the proof never detects a mutant in other code. GNATprove 16 fails when there is no SPARK code at all; for such a project, write `prove = "exit 0"` (a command that always passes), as [examples/calculator](examples/calculator) does
+- GNATprove, for the proof (tested with GNATprove 16.1). The `prove` command is required. GNATprove only analyses SPARK code (`SPARK_Mode`), so the proof never detects a mutant in other code. GNATprove 16 fails when there is no SPARK code at all; for such a project, write `prove = "exit 0"` (a command that always passes, so GNATprove is not needed), as [examples/calculator](examples/calculator) does
 - Python 3, to run the end-to-end tests
 
 ## Building
@@ -132,8 +132,8 @@ The results that are reused depend on whether `--since` is given.
 
 | Usage | Results reused | Mutants run |
 |---|---|---|
-| `--baseline FILE` | Killed, Timeout and CompileError on lines unchanged since the source in the report | The mutants on lines changed since the source in the report, and the mutants that were not detected last time (Survived, NoCoverage and so on) |
-| `--since REF --baseline FILE` | On lines unchanged since REF, every result that the report has (including Survived, NoCoverage, and Ignored for an equivalent mutant). On lines changed since REF, as in the row above | The mutants on lines changed since REF (except those on lines unchanged since the source in the report that are already detected) |
+| `--baseline FILE` | Killed, Timeout and CompileError on lines unchanged since the source in the report | The mutants on lines changed since the source in the report, and the mutants that were not detected last time (Survived and so on) |
+| `--since REF --baseline FILE` | On lines unchanged since REF, every result that the report has (including Survived, and Ignored for an equivalent mutant). On lines changed since REF, as in the row above | The mutants on lines changed since REF (except those on lines unchanged since the source in the report that are already detected) |
 
 - `--baseline` alone suits a run after tests have been added. It skips the mutants that were detected last time and tries only the survivors again
 - Together with `--since`, CI on a pull request runs only the changed lines and still reports the score and the report of the whole project. Unchanged files are read in this case. FILE is, for example, the report of a full run on the main branch
@@ -186,7 +186,7 @@ Leave out the names, or write `all`, to disable every mutator. A disabled mutant
 | Killed | A test or a proof failed (detected) |
 | Timeout | The tests did not finish in time (counted as detected) |
 | Survived | The tests and the proof both passed, or the proof did not finish in time (not detected) |
-| NoCoverage | Only from a report of an earlier version reused with `--baseline` (counted as not detected). This version sends a mutant that no test executes to the proof |
+| NoCoverage | Not used by this version, which sends a mutant that no test executes to the proof (counted as not detected) |
 | CompileError | The mutant could not be built (not in the score) |
 | RuntimeError | A command could not be started, and the like (not in the score) |
 | Ignored | Disabled by a comment, or found to be an equivalent mutant (not in the score) |
@@ -245,7 +245,8 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - When no message can be read, `killedBy` is `["proof"]` as before
 - GNATprove 16 puts the place of a message on the next line (`--> file:line:col`). AdaMutant reads this format as well as the one-line format of older versions
 - The console also lists each mutant that only the proof detects under `Detected only by the proof (candidates for a missing test):`. The parentheses hold the kinds of the checks that could not be proved. A mutant in a place that no test executes also gets `no test executes this code`
-- A mutant whose proof does not finish in time is Survived (its `statusReason` ends with `the proof did not finish within the timeout`), because a proof that would fail cannot be told apart from one that is only slow. A proof Timeout in a report of an earlier version is read the same way with `--baseline`
+- A mutant whose proof does not finish in time is Survived (its `statusReason` ends with `the proof did not finish within the timeout`), because a proof that would fail cannot be told apart from one that is only slow. With `--baseline`, a proof Timeout in a report of an earlier version runs again, or is reused as Survived on lines unchanged since the revision of `--since`
+- Earlier versions could run the tests alone or the proof alone. With `--baseline`, their results that this version would not give run again in every case: NoCoverage, a survivor of the tests alone or of the proof alone, and a mutant that the proof killed without any test
 
 ## How it works
 

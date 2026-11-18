@@ -519,6 +519,23 @@ procedure Unit_Tests is
                    F16.Length'Image
                    & (if F16.Is_Empty then "" else " " & F16 (1)));
          end;
+         --  A long error keeps all its text in Details.
+         begin
+            Fail ([1 .. 300 => 'x']);
+         exception
+            when E : Run_Error =>
+               Check (Ada.Exceptions.Exception_Message (E)'Length <= 200
+                      and then Details = [1 .. 300 => 'x'],
+                      "run error: a long message",
+                      Ada.Exceptions.Exception_Message (E)'Length'Image);
+         end;
+         begin
+            Fail ("short");
+         exception
+            when E : Run_Error =>
+               Check (Ada.Exceptions.Exception_Message (E) = "short"
+                      and then Details = "", "run error: a short message");
+         end;
          Check (Proof_Failures ("gnatprove: error" & LF).Is_Empty,
                 "proof failures: none");
       end;
@@ -965,12 +982,13 @@ procedure Unit_Tests is
                       & ",""killedBy"":[""a"",""b""],""coveredBy"":[""a"",""b"","
                       & """c""],""testsCompleted"":2") & ","
         & Old_Mutant (3, 13, 14, "NumericLiteral", "0", "Survived",
-                      ",""statusReason"":""tests passed""") & ","
+                      ",""statusReason"":""the tests and the proof passed""")
+        & ","
         & Old_Mutant (4, 11, 12, "ArithmeticOperator", "+", "Killed", "") & ","
         & Old_Mutant (5, 9, 10, "NumericLiteral", "3", "Killed",
                       ",""killedBy"":[""proof: postcondition"",""proof: range"
                       & " check""],""statusReason"":""proof failed: x (from the"
-                      & " baseline report)""") & ","
+                      & " baseline report)"",""testsCompleted"":1") & ","
         & Old_Mutant (5, 4, 11, "StatementDeletion", "null;", "Ignored",
                       ",""statusReason"":""equivalent mutant: same code""")
         & "]}}}";
@@ -1256,9 +1274,40 @@ procedure Unit_Tests is
                 = " Survived* Timeout* Ignored Ignored Ignored Ignored"
                 and then Slow.Mutants (1).Killed_By = None
                 and then Proof_Timed_Out (Slow.Mutants (1))
+                and then Index (Slow.Mutants (1).Status_Reason,
+                                "the tests passed, and ") = 1
                 and then not Proof_Timed_Out (Slow.Mutants (2)),
                 "baseline: with --since a proof that timed out survives",
                 Reused'Image & Statuses (Slow));
+      end;
+      --  The results of an earlier version that ran the tests alone or the
+      --  proof alone run again, even with --since.  A proof that did not
+      --  finish where no test executes the code says so.
+      declare
+         Old_Report : constant String :=
+           "{""files"":{""src/p.adb"":{""source"":"
+           & AdaMutant.Reports.Json_String (New_Source) & ",""mutants"":["
+           & Old_Mutant (4, 11, 12, "ArithmeticOperator", "-", "NoCoverage",
+                         ",""statusReason"":""no test executes this code""")
+           & "," & Old_Mutant (4, 13, 14, "NumericLiteral", "0", "Survived",
+                               ",""statusReason"":""tests passed""")
+           & "," & Old_Mutant (5, 11, 12, "ArithmeticOperator", "+", "Killed",
+                               ",""killedBy"":[""proof""],""statusReason"":"
+                               & """proof failed with exit status 1""")
+           & "," & Old_Mutant (6, 9, 10, "NumericLiteral", "3", "Timeout",
+                               ",""coveredBy"":[],""statusReason"":"
+                               & """proof did not finish within the timeout""")
+           & "]}}}";
+         Old : Report := Report_Of (Unchanged => True);
+      begin
+         Apply (Old, Old_Report, Reused);
+         Check (Reused = 1 and then Statuses (Old)
+                = " Ignored Ignored Ignored Survived* Ignored Ignored"
+                and then Index
+                  (Old.Mutants (4).Status_Reason,
+                   "no test executes this code, and the proof did not") = 1,
+                "baseline: results of the tests alone or the proof alone",
+                Reused'Image & Statuses (Old));
       end;
 
       R := Report_Of (Unchanged => False);

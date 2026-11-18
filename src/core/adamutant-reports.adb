@@ -369,7 +369,7 @@ package body AdaMutant.Reports is
       end if;
 
       --  The lines that no test executes, once each: there the mutation
-      --  does not matter.  With a proof their mutants are not NoCoverage.
+      --  does not matter to the tests, and their mutants go to the proof.
       declare
          Header : Boolean := False;
          K      : Positive := R.Mutants.First_Index;
