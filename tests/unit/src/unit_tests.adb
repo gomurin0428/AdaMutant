@@ -343,6 +343,8 @@ procedure Unit_Tests is
         & "   for M in Small range 1 .. 3 loop null; end loop;" & LF
         & "   FOR Q IN 1 .. 2 LOOP null; END LOOP;" & LF
         & "   for C in V.Iterate loop null; end loop;" & LF
+        & "   for D in reverse V.Iterate loop null; end loop;" & LF
+        & "   for S in Types.Index loop null; end loop;" & LF
         & "   for E of A loop null; end loop;" & LF
         & "   X := (for all I in 1 .. N => A (I) > 0);" & LF
         & "   Y := [for I in 1 .. 3 => I];" & LF
@@ -351,12 +353,15 @@ procedure Unit_Tests is
    begin
       O.Enabled := [others => False];
       O.Enabled (Loop_Direction) := True;
-      --  Over a range or a subtype, both ways; not over an iterator, in a
-      --  quantified expression or an aggregate.
+      --  Over a range or a subtype, both ways; not over an iterator, a
+      --  qualified name (an iterator function or a subtype), in a
+      --  quantified expression or an aggregate.  Removing "reverse"
+      --  always compiles, also for an iterator.
       Expect (Loops,
               "LoopDirection in->in reverse|LoopDirection in reverse->in"
               & "|LoopDirection in->in reverse|LoopDirection in->in reverse"
-              & "|LoopDirection in->in reverse|LoopDirection IN->IN REVERSE",
+              & "|LoopDirection in->in reverse|LoopDirection IN->IN REVERSE"
+              & "|LoopDirection in reverse->in",
               "loop direction", O);
       --  Off by default.
       Check (Ada.Strings.Fixed.Index (Describe (Loops), "LoopDirection") = 0,
