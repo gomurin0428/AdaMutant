@@ -524,26 +524,36 @@ procedure Unit_Tests is
         & "begin" & LF
         & "   if X > 0 then return; end if; Y := 1; Z := 2;" & LF
         & "end P;" & LF;
+      --  Line 3 starts at byte 36.
       W : constant String := "p.adb:3:34: warning: unreachable code";
 
       function At_Col (C : Positive) return Boolean is
-        (AdaMutant.Reports.Never_Reached
-           (W, Source, "p.adb", (3, C), (3, C + 1)));
+        (AdaMutant.Reports.Never_Reached (W, Source, "p.adb", 35 + C, 35 + C));
+
+      --  GNAT counts a tab up to the next multiple of 8.
+      Tabbed : constant String :=
+        "begin" & LF & ASCII.HT & "Y := 1; Z := 2;" & LF & "end;" & LF;
    begin
       Check (At_Col (39), "never reached: in the statement of the warning");
       Check (not At_Col (47), "never reached: not the next statement");
       Check (not At_Col (11), "never reached: not before it on the line");
-      Check (not AdaMutant.Reports.Never_Reached
-                   (W, Source, "q.adb", (3, 39), (3, 40)),
+      Check (not AdaMutant.Reports.Never_Reached (W, Source, "q.adb", 74, 74),
              "never reached: not in another file");
       Check (not AdaMutant.Reports.Never_Reached
                    ("unreachable.adb:3:34: warning: precondition is always"
-                    & " False", Source, "unreachable.adb", (3, 39), (3, 40)),
+                    & " False", Source, "unreachable.adb", 74, 74),
              "never reached: only unreachable code");
       Check (not AdaMutant.Reports.Never_Reached
                    ("p.adb:3:35: warning: unreachable code", Source, "p.adb",
-                    (3, 39), (3, 40)),
+                    74, 74),
              "never reached: the warning must point at a token");
+      Check (AdaMutant.Reports.Never_Reached
+               ("p.adb:2:9: warning: unreachable code", Tabbed, "p.adb",
+                13, 13)
+             and then not AdaMutant.Reports.Never_Reached
+               ("p.adb:2:9: warning: unreachable code", Tabbed, "p.adb",
+                21, 21),
+             "never reached: a tab");
    end Test_Never_Reached;
 
    procedure Test_Assertions_Check is

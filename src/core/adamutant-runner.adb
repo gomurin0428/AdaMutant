@@ -2173,67 +2173,88 @@ package body AdaMutant.Runner is
       end Find_Equivalent;
       procedure Look_For_Vacuous_Proofs is
          --  One more proof of the unmodified project, with
-         --  ADAMUTANT_PROVE_SWITCHES "--proof-warnings=on": GNATprove then
-         --  reports contracts that are always False and code that is never
-         --  reached, where the proof of anything succeeds.  With proof
-         --  warnings on, GNATprove makes other goals for the same checks,
-         --  so this proof has a cache of its own, and it runs in a copy of
-         --  sandbox 1 without GNATprove's files: what it leaves there would
-         --  change the proofs of the mutants in that sandbox.  Its exit
-         --  status does not count (--warnings=error makes the warnings
-         --  fail it).  The warnings that the proof of the unmodified
-         --  project has as well (those of the compiler) are left out.
+         --  ADAMUTANT_PROVE_SWITCHES "--proof-warnings=on
+         --  --warnings=continue": GNATprove then reports contracts that are
+         --  always False and code that is never reached, where the proof of
+         --  anything succeeds, and --warnings=continue undoes a
+         --  --warnings=error (which stops at the first unit with -j1) or
+         --  --warnings=off before it.  With proof warnings on, GNATprove
+         --  makes other goals for the same checks, so this proof has a
+         --  cache of its own, and it runs in a copy of sandbox 1 without
+         --  GNATprove's files: what it leaves there would change the proofs
+         --  of the mutants in that sandbox.  No time limit, as for the
+         --  proof of the unmodified project; its exit status does not
+         --  count.  Its warnings join those of the proof of the unmodified
+         --  project (R.Proof_Warnings), once for each line and message.
          Dir   : constant String := Join (Sandbox, "proof-warnings");
          Cache : constant String := Join (Prove_Caches, "proof-warnings");
          Log   : constant String := Join (Logs, "baseline-proof-warnings.log");
          Skip  : String_Vectors.Vector;
          Done  : Run_Result;
+         Found : Boolean := False;
+
+         function Without_Column (W : String) return String is
+            --  "f.adb:13:10: warning: ..." without ":10".
+            Colons : Natural := 0;
+            Second : Natural := 0;
+         begin
+            for K in W'Range loop
+               if W (K) = ':' then
+                  Colons := Colons + 1;
+                  if Colons = 2 then
+                     Second := K;
+                  elsif Colons = 3 then
+                     return W (W'First .. Second - 1) & W (K .. W'Last);
+                  end if;
+               end if;
+            end loop;
+            return W;
+         end Without_Column;
+
+         function Listed (W : String) return Boolean is
+           (for some V of R.Proof_Warnings =>
+              Without_Column (V) = Without_Column (W));
       begin
          Skip.Append ("gnatprove");
          Skip.Append ("**/gnatprove");
-         Copy_Tree (Slot_Dir (1), Dir, Skip);
-         Ada.Directories.Create_Path (Cache);
-         Done := Run (To_String (S.Prove), Dir, Log, 0, 2 * Prove_TO,
-                      Prove_Cache => Ada.Directories.Full_Name (Cache),
-                      Prove_Switches => "--proof-warnings=on");
-         if not Keep_Sandbox then
-            Delete_Tree (Dir);
-            Delete_Tree (Cache);
-         end if;
-         if Done.Timed_Out then
-            if Warn /= null then
-               Warn ("the proof that looks for contracts that are always"
-                     & " False and code that is never reached"
-                     & " (--proof-warnings=on) did not finish in time; log: "
-                     & Log);
-            end if;
-            return;
-         end if;
-         declare
-            Base : constant String_Vectors.Vector :=
-              Proof_Warnings (Read (Join (Logs, "baseline-prove.log")));
          begin
-            for W of Proof_Warnings (Read (Log)) loop
-               if not Base.Contains (W) then
-                  R.Proof_Warnings.Append (W);
+            Copy_Tree (Slot_Dir (1), Dir, Skip);
+            Ada.Directories.Create_Path (Cache);
+            Done := Run (To_String (S.Prove), Dir, Log, 0, 0.0,
+                         Prove_Cache => Ada.Directories.Full_Name (Cache),
+                         Prove_Switches =>
+                           "--proof-warnings=on --warnings=continue");
+         exception
+            when E : Spawn_Error | AdaMutant.Files.File_Error
+                   | Ada.Directories.Name_Error | Ada.Directories.Use_Error =>
+               if Warn /= null then
+                  Warn ("the proof that looks for contracts that are always"
+                        & " False and code that is never reached could not"
+                        & " run: " & Ada.Exceptions.Exception_Message (E));
                end if;
-            end loop;
+               return;
          end;
-         if Done.Exit_Code /= 0 and then R.Proof_Warnings.Is_Empty
-           and then Warn /= null
-         then
+         for W of Proof_Warnings (Read (Log)) loop
+            Found := True;
+            if not Listed (W) then
+               R.Proof_Warnings.Append (W);
+            end if;
+         end loop;
+         if Done.Exit_Code /= 0 and then not Found and then Warn /= null then
             Warn ("the proof that looks for contracts that are always False"
                   & " and code that is never reached (--proof-warnings=on)"
                   & " failed (exit status" & Done.Exit_Code'Image & "); log: "
                   & Log);
          end if;
-      exception
-         when E : Spawn_Error | AdaMutant.Files.File_Error =>
-            if Warn /= null then
-               Warn ("the proof that looks for contracts that are always"
-                     & " False and code that is never reached could not run: "
-                     & Ada.Exceptions.Exception_Message (E));
-            end if;
+         if not Keep_Sandbox then
+            begin
+               Delete_Tree (Dir);
+               Delete_Tree (Cache);
+            exception
+               when AdaMutant.Files.File_Error =>
+                  null;
+            end;
+         end if;
       end Look_For_Vacuous_Proofs;
 
    begin
@@ -2248,7 +2269,15 @@ package body AdaMutant.Runner is
       Delete_Tree (Sandbox);
       Delete_Tree (Logs);
       Ada.Directories.Create_Path (Logs);
-      Copy_Tree (Root, Slot_Dir (1), S.Sandbox_Exclude);
+      --  Without the directories of GNATprove: what an earlier proof with
+      --  other switches left there would change the proofs here.
+      declare
+         Skip : String_Vectors.Vector := S.Sandbox_Exclude;
+      begin
+         Skip.Append ("gnatprove");
+         Skip.Append ("**/gnatprove");
+         Copy_Tree (Root, Slot_Dir (1), Skip);
+      end;
 
       declare
          Elapsed : Duration;
@@ -2338,14 +2367,19 @@ package body AdaMutant.Runner is
       end loop;
       --  Where the proof proves anything: contracts that are always False
       --  and code that is never reached (--proof-warnings).
+      --  Those of the proof of the unmodified project first: the
+      --  compiler's (code after a return, a condition that is always
+      --  False), or all of them when the command turns proof warnings on
+      --  itself.
+      R.Proof_Warnings :=
+        Proof_Warnings (Read (Join (Logs, "baseline-prove.log")));
       if Ada.Strings.Fixed.Index
            (To_String (S.Prove), "ADAMUTANT_PROVE_SWITCHES") > 0
       then
-         Look_For_Vacuous_Proofs;
+         if Pending_Count > 0 then
+            Look_For_Vacuous_Proofs;
+         end if;
       else
-         --  The command may turn the proof warnings on itself.
-         R.Proof_Warnings :=
-           Proof_Warnings (Read (Join (Logs, "baseline-prove.log")));
          if Warn /= null and then Uses_Gnatprove
            and then Ada.Strings.Fixed.Index
                       (Ada.Characters.Handling.To_Lower (To_String (S.Prove)),

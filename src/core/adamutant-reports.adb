@@ -4,6 +4,7 @@ with Ada.Text_IO;
 with AdaMutant.Config;
 with AdaMutant.Mutators;
 with AdaMutant.Lexer;
+with AdaMutant.Positions;
 
 package body AdaMutant.Reports is
 
@@ -310,18 +311,30 @@ package body AdaMutant.Reports is
    end Has_Steps_Limit;
 
    function Never_Reached
-     (Warning     : String;
-      Source      : String;
-      Name        : String;
-      First, Last : AdaMutant.Positions.Position) return Boolean
+     (Warning : String;
+      Source  : String;
+      Name    : String;
+      First   : Positive;
+      Last    : Natural) return Boolean
    is
-      use AdaMutant.Positions;
-
-      function "<=" (A, B : Position) return Boolean is
-        (A.Line < B.Line or else (A.Line = B.Line and then A.Column <= B.Column));
-
       Line, Column : Natural := 0;
       K            : Positive := Warning'First + Name'Length;
+
+      function Gnat_Column (Offset : Positive) return Positive is
+         --  The column of Source (Offset) as GNAT counts it: bytes, and a
+         --  tab goes on to the next multiple of 8.
+         From : Positive := Offset;
+         C    : Positive := 1;
+      begin
+         while From > Source'First and then Source (From - 1) /= ASCII.LF loop
+            From := From - 1;
+         end loop;
+         for I in From .. Offset - 1 loop
+            C := (if Source (I) = ASCII.HT then ((C - 1) / 8 + 1) * 8 + 1
+                  else C + 1);
+         end loop;
+         return C;
+      end Gnat_Column;
    begin
       if Warning'Length <= Name'Length
         or else Warning (Warning'First .. K - 1) /= Name
@@ -359,29 +372,29 @@ package body AdaMutant.Reports is
       declare
          use AdaMutant.Lexer;
          T     : constant Token_Vectors.Vector := Tokenize (Source);
-         Start : constant Position := (Line, Column);
          Depth : Natural := 0;
-         Found : Boolean := False;
+         Start : Natural := 0;
+         --  The first byte of the token that the warning points at.
       begin
          for Tok of T loop
             if Tok.Kind /= Comment then
-               declare
-                  P : constant Position := Of_Offset (Source, Tok.First);
-               begin
-                  if not Found then
-                     Found := P = Start;
+               if Start = 0 then
+                  if Tok.Line > Line then
+                     return False;
+                  elsif Tok.Line = Line and then Gnat_Column (Tok.First) = Column
+                  then
+                     Start := Tok.First;
                   end if;
-                  if Found then
-                     if Image (Source, Tok) in "(" | "[" then
-                        Depth := Depth + 1;
-                     elsif Image (Source, Tok) in ")" | "]" then
-                        Depth := (if Depth > 0 then Depth - 1 else 0);
-                     elsif Depth = 0 and then Image (Source, Tok) = ";" then
-                        return Start <= First
-                          and then Last <= Of_Offset (Source, Tok.Last + 1);
-                     end if;
+               end if;
+               if Start /= 0 then
+                  if Image (Source, Tok) in "(" | "[" then
+                     Depth := Depth + 1;
+                  elsif Image (Source, Tok) in ")" | "]" then
+                     Depth := (if Depth > 0 then Depth - 1 else 0);
+                  elsif Depth = 0 and then Image (Source, Tok) = ";" then
+                     return Start <= First and then Last <= Tok.Last;
                   end if;
-               end;
+               end if;
             end if;
          end loop;
          return False;
@@ -455,7 +468,7 @@ package body AdaMutant.Reports is
          end loop;
          for W of R.Proof_Warnings loop
             if Never_Reached (W, To_String (R.Files (M.File).Source), Name,
-                              M.Start_Pos, M.End_Pos)
+                              M.Mutation.First, M.Mutation.Last)
             then
                return True;
             end if;

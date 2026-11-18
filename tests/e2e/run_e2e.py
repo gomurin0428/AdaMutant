@@ -886,7 +886,7 @@ def check_proof_log():
             "    print('counters.adb:4:1: warning: condition is always False')\n"
             "# Code that the proof never reaches: only with proof warnings on,\n"
             "# which fail the proof as --warnings=error does.\n"
-            "if switches == '--proof-warnings=on':\n"
+            "if switches.startswith('--proof-warnings=on'):\n"
             "    print(' warning: unreachable code')\n"
             "    print('--> counters.adb:13:10')\n"
             "    sys.exit(1)\n"
@@ -998,16 +998,17 @@ def check_proof_log():
             errors.append("a message of the unmodified project is counted")
         # What the proof of the unmodified project never reaches.  The fake
         # prover is no GNATprove: no warning about ADAMUTANT_PROVE_SWITCHES.
+        # The warnings of both proofs, once each: the compiler's first.
         want = ("The proof of the unmodified project proves anything here"
                 " (--proof-warnings); mutants there survive the proof:\n"
+                "  counters.adb:4:1: warning: condition is always False\n"
                 "  counters.adb:13:10: warning: unreachable code\n")
         if want not in proc.stdout:
             errors.append(f"output lacks {want!r}\n{proc.stdout}")
         if "ADAMUTANT_PROVE_SWITCHES" in proc.stdout:
             errors.append(f"a warning about ADAMUTANT_PROVE_SWITCHES\n{proc.stdout}")
-        # Not what the proof of the unmodified project has too.
-        if "condition is always False" in proc.stdout:
-            errors.append(f"a warning of the compiler is listed\n{proc.stdout}")
+        if proc.stdout.count("condition is always False") != 1:
+            errors.append(f"a warning of both proofs is not listed once\n{proc.stdout}")
         # Survivors in the statement that is never reached are marked.
         marked = [line for line in proc.stdout.splitlines()
                   if "counters.adb:13:" in line and line.startswith("  #")]
@@ -1015,8 +1016,6 @@ def check_proof_log():
                              for line in marked
                              if int(line.split(":")[2].split()[0]) >= 10):
             errors.append(f"survivors on line 13: {marked}\n{proc.stdout}")
-        if (work / ".adamutant" / "sandbox" / "proof-warnings").exists():
-            errors.append("the sandbox of the proof warnings is left")
         # The line of the mutant, and a cache of proof results for each
         # sandbox, which its proof of the unmodified project fills.
         logs = work / ".adamutant" / "logs"
@@ -1025,8 +1024,10 @@ def check_proof_log():
                           ("baseline-prove-2.log", "place: [] [cache]"),
                           ("mutant-1-prove.log", "place: [5] [cache]"),
                           ("baseline-prove.log", "switches: [--proof-warnings=off]"),
-                          ("baseline-proof-warnings.log", "switches: [--proof-warnings=on]"),
-                          ("baseline-proof-warnings.log", "args: ['--proof-warnings=on']"),
+                          ("baseline-proof-warnings.log",
+                           "switches: [--proof-warnings=on --warnings=continue]"),
+                          ("baseline-proof-warnings.log",
+                           "args: ['--proof-warnings=on', '--warnings=continue']"),
                           ("baseline-proof-warnings.log", "place: [] [cache]"),
                           ("mutant-1-prove.log", "switches: [--proof-warnings=off]")):
             texts[log] = (logs / log).read_text() if (logs / log).exists() else ""
