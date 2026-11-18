@@ -282,6 +282,49 @@ package body AdaMutant.Baselines is
             end if;
          end loop;
       end if;
+      --  What GNATprove gave with a failure: from the start of the reason,
+      --  and the counterexample from its end, "... (e.g. when X = 1)" or
+      --  "... (e.g. when X = 1) (and 2 more)".
+      M.Evidence := None;
+      M.Example := Null_Unbounded_String;
+      if M.Status = Killed and then M.Killed_By = Proof then
+         declare
+            Plain : constant String :=
+              (if Reason'Length >= From_Baseline'Length
+                 and then Reason (Reason'Last - From_Baseline'Length + 1
+                                  .. Reason'Last) = From_Baseline
+               then Reason (Reason'First .. Reason'Last - From_Baseline'Length)
+               else Reason);
+            More  : constant Natural := Ada.Strings.Fixed.Index
+              (Plain, " (and ", Ada.Strings.Backward);
+            Rest  : constant String :=
+              (if More > 0 and then Plain'Length > 6
+                 and then Plain (Plain'Last - 5 .. Plain'Last) = " more)"
+               then Plain (Plain'First .. More - 1) else Plain);
+            --  The last one: with "--output=oneline" the message holds
+            --  one too.
+            Start : constant Natural := Ada.Strings.Fixed.Index
+              (Rest, " (e.g. when ", Ada.Strings.Backward);
+         begin
+            --  A reason of an earlier version has no prefix; the severity
+            --  of its message tells a confirmed failure.
+            M.Evidence :=
+              (if Starts_With (Plain, Confirmed_Failure) then Confirmed
+               elsif Starts_With (Plain, Weak_Contract_Failure)
+               then Weak_Contract
+               elsif Starts_With (Plain, "proof failed: ")
+                 and then (Ada.Strings.Fixed.Index (Plain, ": high: ") > 0
+                           or else Ada.Strings.Fixed.Index (Plain, ": error: ")
+                                   > 0)
+               then Confirmed
+               else Undecided);
+            if Start > 0 and then Rest (Rest'Last) = ')' then
+               M.Example := To_Unbounded_String
+                 (Rest (Start + 2 .. Rest'Last - 1));
+            end if;
+         end;
+      end if;
+
       --  An earlier version counted a proof that did not finish as a
       --  detection.
       if M.Status = Timeout and then Starts_With (Reason, Old_Proof_Timeout)

@@ -20,29 +20,50 @@ A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.
 AdaMutant is made for projects that use both tests and the GNATprove proof. This is how it is meant to be used:
 
 1. Run AdaMutant with both the tests and the proof set up. Each mutant goes to the tests first, and only the mutants that the tests do not detect go to the proof (tests first). There is no setting to run the tests alone or the proof alone.
-2. Look at the mutants that only the proof detects as candidates for a missing test. The console lists them under `Detected only by the proof (candidates for a missing test):`.
-   - If the tests can observe the behaviour, add a test.
+2. Look at the mutants that only the proof detects as candidates for a missing test. The console lists them under `Detected only by the proof (candidates for a missing test):`, in three groups by what GNATprove gives with the failure. The groups need the counterexamples of GNATprove, so the prove command has `--counterexamples=on`.
+
+   | Group | What it is based on | What to do |
+   |---|---|---|
+   | `Confirmed` | Severity high, or an error. High means that GNATprove ran a counterexample with the real code and the check failed | Add a test, if the tests can observe the behaviour |
+   | `A contract says too little` | GNATprove adds `possible fix: add or complete related loop invariants or postconditions`: the counterexample makes the check fail only with the contracts of the calls (or the loop invariants) in place of the code | Find the contract (a postcondition of something it calls, a loop invariant) that says too little, and make it stronger |
+   | `Undecided` | Anything else: no counterexample, or one that GNATprove could not run with the real code (a call to code outside SPARK, a loop that runs too long, and so on) | Decide by hand; a counterexample, if any, is in the list |
+
    - If the tests cannot observe it, as with a branch that cannot be reached, leave it to the proof. Nothing needs to be excluded.
+   - The second group holds mutants that do not change what the program does (equivalent ones) as well as real bugs, because GNATprove only checks the one counterexample that it picked. Once the contract is stronger, an equivalent mutant proves, and a real bug moves to `Confirmed`.
 3. Handle the mutants that neither the tests nor the proof detect (Survived) as before: add a test or make a contract stronger. Equivalent mutants (those whose object code is the same as before the change) are recognized and excluded automatically when `equivalence_build` is set (Ignored). The others stay Survived.
 4. A mutant whose proof runs out of time is not counted as detected. It counts as Survived and is marked `(the proof timed out)` in the list. Treat it as in 2 or 3.
 
-This is the output for [examples/spark_counter](examples/spark_counter). The test only calls `Increment`, so only the proof detects the mutants of `Saturating_Add` (candidates, as in 2). The survivor #6 is an equivalent mutant: when `A + B = Max`, both branches return `Max`. Even with `equivalence_build` (which this example does not set) it is not excluded automatically, because the optimized object code still differs, so it stays Survived (as in 3).
+This is part of the output for [examples/spark_counter](examples/spark_counter). The test only calls `Counters.Increment`, so only the proof detects the other mutants.
 
 ```
 Detected only by the proof (candidates for a missing test):
-  #3 src/counters.adb:10:10 ConditionalExpression (postcondition; no test executes this code)
-    - A + B > Max
-    + True
-  #5 src/counters.adb:10:12 ArithmeticOperator (range check; no test executes this code)
+  Confirmed: the failure happens with the real code (or GNATprove reports an error)
+  #8 src/counters.adb:13:19 ArithmeticOperator (range check, postcondition; no test executes this code)
     - +
     + -
-  ...
+    e.g. when A = 0 and B = 1
+  A contract says too little: the failure happens only with the contracts of the calls (or the loop invariants) in place of the code
+  #12 src/halves.adb:13:10 ConditionalExpression (range check; no test executes this code)
+    - H > 50
+    + False
+    e.g. when H = 51
+  #18 src/halves.adb:16:18 NumericLiteral (range check; no test executes this code)
+    - 2
+    + 3
+    e.g. when H = 34
 
 Survived mutants:
   #6 src/counters.adb:10:16 EqualityOperator
     - >
     + >=
+  #10 src/halves.adb:5:18 NumericLiteral
+    - 2
+    + 3
 ```
+
+- #8 turns `A + B` into `A - B` in `Saturating_Add`. For A = 0 and B = 1, `A - B` is out of the range of `Count`, and the range check fails with the real code. It is a candidate for a test (as in 2).
+- The body of `Halves.Half` returns `X / 2`, but its contract only says that the result is not greater than X. #12 removes the test `H > 50`; H is never greater than 50, so nothing changes (an equivalent mutant). #18 turns `H * 2` into `H * 3`, a real bug: for X of 68 or more the result is out of range and Constraint_Error is raised. For both, GNATprove found the failure only with the contract of `Half` in place of its body, and could not confirm it with the real code. With the postcondition `Half'Result = X / 2`, #12 proves and #18 moves to `Confirmed`.
+- The survivor #6 is an equivalent mutant: when `A + B = Max`, both branches return `Max`. Even with `equivalence_build` (which this example does not set) it is not excluded automatically, because the optimized object code still differs, so it stays Survived (as in 3). #10 turns `X / 2` into `X / 3`; the contract of `Half` says too little for the proof to detect it, which also shows where a contract should be stronger (as in 3).
 
 ## Requirements
 
@@ -92,7 +113,7 @@ mutate = ["src/**/*.adb", "src/**/*.ads"]   # files to mutate
 exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr"       # required. A mutant that fails to build is CompileError
 test = "bin/run_tests"                      # required (or [tests]); Killed when the exit status is not 0
-prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on"  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
+prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on"  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # optional. The build used to recognize equivalent mutants
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
@@ -244,7 +265,10 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - A message that the proof of the unchanged project has as well does not count (a message with the same text in the same file is taken to be the same one, whatever its line and column)
 - When no message can be read, `killedBy` is `["proof"]` as before
 - GNATprove 16 puts the place of a message on the next line (`--> file:line:col`). AdaMutant reads this format as well as the one-line format of older versions
-- The console also lists each mutant that only the proof detects under `Detected only by the proof (candidates for a missing test):`. The parentheses hold the kinds of the checks that could not be proved. A mutant in a place that no test executes also gets `no test executes this code`
+- The console also lists each mutant that only the proof detects under `Detected only by the proof (candidates for a missing test):`. The parentheses hold the kinds of the checks that could not be proved. A mutant in a place that no test executes also gets `no test executes this code`. A counterexample of GNATprove is on the line below
+- The three groups (see [Intended workflow](#intended-workflow)) also show in how the `statusReason` starts: `proof failed, confirmed: ` for `Confirmed`, `proof failed, a contract says too little: ` for the second group, and any other `proof failed` for `Undecided`. The counterexample is in parentheses after the message (`... (e.g. when H = 51)`). `--baseline` reads the group from there when it reuses a result (a reason of an earlier version, without such a start, is `Confirmed` when its message is high or an error)
+- Of the messages that the proof of the unchanged project does not have, a high one or an error decides `Confirmed` first, then one with `possible fix: add or complete related loop invariants or postconditions`. GNATprove gives counterexamples with `--counterexamples=on`, and runs them with the real code unless `--check-counterexamples=off`. Without counterexamples most mutants are `Undecided`; when the proof gave no counterexample at all, the console says so. A mutant with several failures goes to the highest group that one of them reaches: with a failure that has the `possible fix` and one that does not, it is in `A contract says too little`; a failure that remains after the contract is stronger then shows as `Confirmed` or `Undecided`
+- AdaMutant reads the default output of GNATprove (`--output=pretty`). With `--output=oneline` it reads the counterexample and the `possible fix` in the message; `--output=brief` has no counterexamples
 - A mutant whose proof does not finish in time is Survived (its `statusReason` ends with `the proof did not finish within the timeout`), because a proof that would fail cannot be told apart from one that is only slow. With `--baseline`, a proof Timeout in a report of an earlier version runs again, or is reused as Survived on lines unchanged since the revision of `--since`
 - Earlier versions could run the tests alone or the proof alone. With `--baseline`, their results that this version would not give are never reused: NoCoverage, a survivor of the tests alone or of the proof alone, and a mutant that the proof killed without any test. Such a mutant runs again, or, on a line unchanged since the revision of `--since`, stays Ignored (`unchanged since REF`) as with `--since` alone
 
@@ -345,7 +369,7 @@ To avoid a wrong verdict, AdaMutant does the following.
 ## Examples
 
 - [examples/calculator](examples/calculator): tests that do not check the boundary values on purpose. You can see surviving mutants, a timeout, a line that no test executes, and equivalent mutants being recognized
-- [examples/spark_counter](examples/spark_counter): the test checks only part of the behaviour, and the GNATprove proof detects the rest. It shows the list of mutants that only the proof detects
+- [examples/spark_counter](examples/spark_counter): the test checks only part of the behaviour, and the GNATprove proof detects the rest. The list of mutants that only the proof detects shows confirmed ones and ones where a contract says too little (the weak postcondition of `Halves.Half`)
 
 ```sh
 cd examples/calculator && ../../bin/adamutant run

@@ -23,5 +23,17 @@
  "src/counters.ads:6:19 EqualityOperator >=": "Killed",
  "src/counters.ads:7:34 EqualityOperator /=": "Killed",
  "src/counters.ads:7:38 ArithmeticOperator -": "Killed",
- "src/counters.ads:7:40 NumericLiteral 0": "Killed"
+ "src/counters.ads:7:40 NumericLiteral 0": "Killed",
+ "src/halves.adb:13:10 ConditionalExpression False": "Killed",
+ "src/halves.adb:13:10 ConditionalExpression True": "Survived",
+ "src/halves.adb:13:12 EqualityOperator <=": "Killed",
+ "src/halves.adb:13:12 EqualityOperator >=": "Survived",
+ "src/halves.adb:13:14 NumericLiteral 51": "Killed",
+ "src/halves.adb:14:17 NumericLiteral 101": "Killed",
+ "src/halves.adb:16:16 ArithmeticOperator /": "Survived",
+ "src/halves.adb:16:18 NumericLiteral 3": "Killed",
+ "src/halves.adb:5:16 ArithmeticOperator *": "Killed",
+ "src/halves.adb:5:18 NumericLiteral 3": "Survived",
+ "src/halves.ads:8:29 EqualityOperator <": "Killed",
+ "src/halves.ads:8:29 EqualityOperator >": "Killed"
 }
