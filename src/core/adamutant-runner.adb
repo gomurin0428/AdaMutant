@@ -635,29 +635,71 @@ package body AdaMutant.Runner is
       for Path of Files loop
          if Has_Extension (Path, ".adc") or else Sources.Contains (Path) then
             --  "pragma Assertion_Policy (Check)" or "(Pre => Check, ...)":
-            --  a Check before the end of the pragma.
+            --  the word Check in the arguments of the pragma, not in a
+            --  comment.
             declare
-               Text : constant String := Lower (Read (Join (Dir, Path)));
-               At_K : Natural := Ada.Strings.Fixed.Index
-                                   (Text, "assertion_policy");
+               use AdaMutant.Lexer;
+               Text : constant String := Read (Join (Dir, Path));
             begin
-               while At_K > 0 loop
+               declare
+                  T : constant Token_Vectors.Vector := Tokenize (Text);
+                  In_Policy    : Boolean := False;
+                  After_Pragma : Boolean := False;
+                  --  The token before, comments left out, is "pragma".
+               begin
+                  for Tok of T loop
+                     if Tok.Kind /= Comment then
+                        declare
+                           W : constant String := Lower (Image (Text, Tok));
+                        begin
+                           if W = ";" then
+                              In_Policy := False;
+                           elsif W = "assertion_policy" and then After_Pragma
+                           then
+                              In_Policy := True;
+                           elsif In_Policy and then W = "check" then
+                              return "";
+                           end if;
+                           After_Pragma := W = "pragma";
+                        end;
+                     end if;
+                  end loop;
+               end;
+            exception
+               when Lexical_Error =>
+                  --  Not Ada (a file for gnatprep, say): the text after
+                  --  "assertion_policy", up to the next semicolon, has the
+                  --  word "check".
                   declare
-                     Stop  : Natural := Ada.Strings.Fixed.Index
-                                          (Text (At_K .. Text'Last), ";");
+                     L : constant String := Lower (Text);
+                     A : Natural := Ada.Strings.Fixed.Index (L, "assertion_policy");
                   begin
-                     if Stop = 0 then
-                        Stop := Text'Last;
-                     end if;
-                     if Ada.Strings.Fixed.Index
-                          (Text (At_K .. Stop), "check") > 0
-                     then
-                        return "";
-                     end if;
-                     At_K := Ada.Strings.Fixed.Index
-                               (Text (Stop .. Text'Last), "assertion_policy");
+                     while A > 0 loop
+                        declare
+                           Stop : Natural :=
+                             Ada.Strings.Fixed.Index (L (A .. L'Last), ";");
+                           C    : Natural;
+                        begin
+                           if Stop = 0 then
+                              Stop := L'Last;
+                           end if;
+                           C := Ada.Strings.Fixed.Index (L (A .. Stop), "check");
+                           while C > 0 loop
+                              if (C = L'First or else not (L (C - 1) in 'a' .. 'z' | '0' .. '9' | '_'))
+                                and then (C + 5 > L'Last
+                                          or else not (L (C + 5) in 'a' .. 'z' | '0' .. '9' | '_'))
+                              then
+                                 return "";
+                              end if;
+                              C := Ada.Strings.Fixed.Index (L (C + 1 .. Stop), "check");
+                           end loop;
+                           A := (if Stop < L'Last
+                                 then Ada.Strings.Fixed.Index
+                                        (L (Stop + 1 .. L'Last), "assertion_policy")
+                                 else 0);
+                        end;
+                     end loop;
                   end;
-               end loop;
             end;
          end if;
       end loop;

@@ -219,6 +219,27 @@ package body AdaMutant.Mutators is
          function At_Top (K : Integer; W : String) return Boolean is
            (K in 1 .. N and then Depth (K) = 0
             and then (Is_Kw (K, W) or else Is_Del (K, W)));
+
+         function Type_Is (J : Positive) return Boolean;
+         --  The "is" at J belongs to the declaration of a type or subtype
+         --  (not of a task or protected type, whose "is" opens
+         --  declarations).
+
+         function Type_Is (J : Positive) return Boolean is
+            I : Natural := J - 1;
+         begin
+            while I >= 1 and then not At_Top (I, ";")
+              and then not At_Top (I, "is") and then not At_Top (I, "begin")
+              and then not At_Top (I, "private")
+            loop
+               if At_Top (I, "type") or else At_Top (I, "subtype") then
+                  return not (Is_Kw (I - 1, "task")
+                              or else Is_Kw (I - 1, "protected"));
+               end if;
+               I := I - 1;
+            end loop;
+            return False;
+         end Type_Is;
       begin
          for K in 1 .. N loop
             Depth (K) := D;
@@ -249,19 +270,35 @@ package body AdaMutant.Mutators is
                   if W >= 1 and then Is_Kw (W, "with") then
                      J := W - 1;
                      while J >= 1 loop
+                        --  A record type: from "end record" to the
+                        --  "record" that opens it (records do not nest).
+                        if At_Top (J, "record") and then Is_Kw (J - 1, "end")
+                        then
+                           J := J - 2;
+                           while J > 1 and then not (At_Top (J, "record")
+                                                     and then not Is_Kw (J - 1, "end"))
+                           loop
+                              J := J - 1;
+                           end loop;
+                           exit when J < 1;
+                        end if;
                         exit when At_Top (J, ";") or else At_Top (J, "begin")
                           or else At_Top (J, "declare")
-                          or else At_Top (J, "private")
+                          --  Not the "private" of a private type ("is
+                          --  private with Ghost").
+                          or else (At_Top (J, "private") and then J + 1 /= W)
                           or else At_Top (J, "generic")
                           or else At_Top (J, "package")
                           or else
                             --  Not the "is" of an expression function, of
                             --  a null procedure or of an abstract
-                            --  subprogram, whose aspects come after it.
+                            --  subprogram, whose aspects come after it,
+                            --  nor that of a type or subtype.
                             (At_Top (J, "is")
                              and then not Is_Del (J + 1, "(")
                              and then not Is_Kw (J + 1, "null")
-                             and then not Is_Kw (J + 1, "abstract"));
+                             and then not Is_Kw (J + 1, "abstract")
+                             and then not Type_Is (J));
                         if At_Top (J, "procedure") or else At_Top (J, "function")
                           or else At_Top (J, "type")
                           or else At_Top (J, "subtype")
@@ -289,7 +326,15 @@ package body AdaMutant.Mutators is
                           and then S (Name_At).Kind in Identifier
                                                      | String_Literal
                         then
-                           Names.Include (Lower (Txt (Name_At)));
+                           --  Not the name of a type: no statement calls or
+                           --  assigns it, and a component or subprogram of
+                           --  the same name elsewhere would be taken for
+                           --  ghost code.  The declaration itself is ghost.
+                           if not (Is_Kw (First, "type")
+                                   or else Is_Kw (First, "subtype"))
+                           then
+                              Names.Include (Lower (Txt (Name_At)));
+                           end if;
                            if Name_At = First then
                               --  "A, B : T with Ghost" declares every name.
                               declare
@@ -616,7 +661,21 @@ package body AdaMutant.Mutators is
                         Aspect := False;
                         Start := K + 1;
                      end if;
-                  elsif Is_Kw (K, "with") and then K /= Start
+                  elsif Is_Kw (K, "with")
+                    and then (K /= Start
+                              --  "end record with", "null record with",
+                              --  and a private type ("is private with",
+                              --  "limited private with", "with private
+                              --  with"), where "record" and "private" end
+                              --  the segment.
+                              or else (Is_Kw (K - 1, "record")
+                                       and then (Is_Kw (K - 2, "end")
+                                                 or else Is_Kw (K - 2, "null")))
+                              or else (Is_Kw (K - 1, "private")
+                                       and then (Is_Kw (K - 2, "is")
+                                                 or else Is_Kw (K - 2, "limited")
+                                                 or else Is_Kw (K - 2, "tagged")
+                                                 or else Is_Kw (K - 2, "with"))))
                     and then not (Is_Kw (K + 1, "record")
                                   or else Is_Kw (K + 1, "null")
                                   or else Is_Kw (K + 1, "private"))
@@ -657,7 +716,7 @@ package body AdaMutant.Mutators is
                      J := J + 1;
                   end loop;
                   Seg_Skip (K) :=
-                    (Is_Kw (K, "with")
+                    (Is_Kw (K, "with") and then not In_Aspect (K)
                      and then not (Is_Kw (K + 1, "procedure")
                                    or else Is_Kw (K + 1, "function")
                                    or else Is_Kw (K + 1, "package")))
