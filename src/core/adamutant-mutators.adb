@@ -1493,6 +1493,8 @@ package body AdaMutant.Mutators is
          return R;
       end Inner;
 
+      --  The mutations of N and of the nodes below it, N being in the
+      --  context Outer.
       procedure Visit (N : LAL.Ada_Node; Outer : Context) is
          C : Context := Outer;
       begin
@@ -1504,6 +1506,8 @@ package body AdaMutant.Mutators is
                | Ada_Enum_Rep_Clause | Ada_Record_Rep_Clause | Ada_At_Clause
             =>
                C.Skip := True;
+            --  Neither are pragmas, but ConjunctDeletion and
+            --  AssertionDeletion change assertion pragmas.
             when Ada_Pragma_Node =>
                C.Skip := True;
                C.Assertion :=
