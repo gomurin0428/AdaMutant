@@ -874,6 +874,10 @@ def check_proof_log():
         (work / "fake_prove.py").write_text(
             "import os, sys, time\n"
             "n = os.environ.get('ADAMUTANT_MUTANT_ID', '0')\n"
+            "cache = os.environ.get('ADAMUTANT_PROVE_CACHE', '')\n"
+            "print('place: [%s] [%s]' % (os.environ.get('ADAMUTANT_MUTANT_LINE', 'unset'),\n"
+            "      'cache' if cache and os.path.isdir(cache) else 'no cache'))\n"
+            "print('cache:', cache)\n"
             "# The unmodified project has this message too; a mutant moves it.\n"
             "# Both formats: the one line of GNATprove 14, and the place on the\n"
             "# next line (GNATprove 16), for the unmodified project and mutant 3.\n"
@@ -973,6 +977,21 @@ def check_proof_log():
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
             errors.append("a message of the unmodified project is counted")
+        # The line of the mutant, and a cache of proof results for each
+        # sandbox, which its proof of the unmodified project fills.
+        logs = work / ".adamutant" / "logs"
+        texts = {}
+        for log, want in (("baseline-prove.log", "place: [] [cache]"),
+                          ("baseline-prove-2.log", "place: [] [cache]"),
+                          ("mutant-1-prove.log", "place: [5] [cache]")):
+            texts[log] = (logs / log).read_text() if (logs / log).exists() else ""
+            if want not in texts[log]:
+                errors.append(f"{log} lacks {want!r}\n{texts[log]}")
+
+        def cache_of(text):
+            return [line for line in text.splitlines() if line.startswith("cache:")]
+        if cache_of(texts["baseline-prove.log"]) == cache_of(texts["baseline-prove-2.log"]):
+            errors.append("two sandboxes share a proof cache")
         # Some failures have a counterexample: no note about them.
         if "The proof gave no counterexample" in proc.stdout:
             errors.append(f"a note about counterexamples\n{proc.stdout}")
@@ -997,6 +1016,31 @@ def check_proof_log():
                 errors.append(f"no SPARK code: exit status {proc.returncode},"
                               f" output lacks {line!r}\n{proc.stdout}")
                 break
+        return errors
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_prove_cache():
+    """The proofs fill a cache of proof results in each sandbox."""
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-cache-"))
+    work = root / "p"
+    try:
+        shutil.copytree(ROOT / "examples" / "spark_counter", work,
+                        ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
+        if "ADAMUTANT_PROVE_CACHE" not in (work / "adamutant.toml").read_text():
+            return ["examples/spark_counter does not use ADAMUTANT_PROVE_CACHE"]
+        proc = subprocess.run([str(EXE), "run", "--keep-sandbox"], cwd=work,
+                              text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT)
+        if proc.returncode != 0:
+            return [f"exit status {proc.returncode}\n{proc.stdout}"]
+        errors = []
+        caches = work / ".adamutant" / "sandbox" / "prove-cache"
+        for slot in ("1", "2"):
+            if not (caches / slot).is_dir() or not any((caches / slot).iterdir()):
+                errors.append(f"the proof cache of sandbox {slot} is empty")
         return errors
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -1245,7 +1289,8 @@ def main():
     failed = False
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
     checks = (("since", check_since), ("proof_log", check_proof_log),
-              ("baseline", check_baseline), ("library", check_library))
+              ("baseline", check_baseline), ("library", check_library),
+              ("prove_cache", check_prove_cache))
     unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:
         sys.exit("no such case: " + " ".join(unknown))

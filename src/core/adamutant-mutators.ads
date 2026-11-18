@@ -58,8 +58,10 @@ package AdaMutant.Mutators is
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector;
    --  Propagates AdaMutant.Lexer.Lexical_Error.
 
-   function Apply (Source : String; M : Mutation) return String is
-     (Source (Source'First .. M.First - 1) & To_String (M.Replacement)
-      & Source (M.Last + 1 .. Source'Last));
+   function Apply (Source : String; M : Mutation) return String;
+   --  Source with the mutation made.  The line breaks of the text that it
+   --  replaces follow the replacement, so the lines after it stay where
+   --  they were: GNATprove's goals carry their lines, and a goal that only
+   --  moves would miss the cache of proof results.
 
 end AdaMutant.Mutators;

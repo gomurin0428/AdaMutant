@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Characters.Handling; use Ada.Characters.Handling;
 with AdaMutant.Lexer; use AdaMutant.Lexer;
 
@@ -1021,5 +1022,20 @@ package body AdaMutant.Mutators is
       end;
       return Result;
    end Find;
+
+   function Apply (Source : String; M : Mutation) return String is
+      Replacement : constant String := To_String (M.Replacement);
+      Breaks      : Unbounded_String;
+   begin
+      if Ada.Strings.Fixed.Index (Replacement, [ASCII.LF]) = 0 then
+         for C of Source (M.First .. M.Last) loop
+            if C in ASCII.CR | ASCII.LF then
+               Append (Breaks, C);
+            end if;
+         end loop;
+      end if;
+      return Source (Source'First .. M.First - 1) & Replacement
+        & To_String (Breaks) & Source (M.Last + 1 .. Source'Last);
+   end Apply;
 
 end AdaMutant.Mutators;

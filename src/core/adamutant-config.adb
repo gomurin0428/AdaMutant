@@ -235,7 +235,8 @@ package body AdaMutant.Config is
             --  A setting written after [tests] would be a test.
             if Key in "mutate" | "exclude" | "build" | "test" | "prove"
                  | "equivalence_build" | "concurrency" | "timeout_factor"
-                 | "timeout_ms" | "build_timeout_ms" | "test_memory_limit_mb"
+                 | "timeout_ms" | "build_timeout_ms" | "prove_timeout_ms"
+                 | "test_memory_limit_mb"
                  | "bail" | "coverage_analysis" | "mutators"
                  | "exclude_mutators" | "mutate_contracts" | "sandbox_exclude"
                  | "report_dir" | "reporters"
@@ -288,6 +289,8 @@ package body AdaMutant.Config is
             C.Timeout_Ms := Integer_Value;
          elsif Full = "build_timeout_ms" then
             C.Build_Timeout_Ms := Integer_Value;
+         elsif Full = "prove_timeout_ms" then
+            C.Prove_Timeout_Ms := Integer_Value;
          elsif Full = "test_memory_limit_mb" then
             C.Test_Memory_Limit_Mb :=
               Integer_Value
@@ -471,6 +474,15 @@ package body AdaMutant.Config is
       & "# non-zero exit status of 'prove' kills it there." & LF
       & "prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on"
       & " --counterexamples=on""" & LF
+      & "# Faster: ADAMUTANT_PROVE_CACHE is a cache of proof results that" & LF
+      & "# the proof of the unmodified project fills, so that the proof of" & LF
+      & "# a mutant proves again only what the mutant changes.  Give the" & LF
+      & "# provers a steps limit with it (--steps, enough for the" & LF
+      & "# unmodified project); see the README.  On Windows, write" & LF
+      & "# %ADAMUTANT_PROVE_CACHE%." & LF
+      & "# prove = 'gnatprove -P project.gpr --level=1 --steps=2000" & LF
+      & "#   --checks-as-errors=on --counterexamples=on" & LF
+      & "#   ""--memcached-server=file:$ADAMUTANT_PROVE_CACHE""'" & LF
       & "# A build with optimization and without debug information.  A" & LF
       & "# surviving mutant whose object files are the same as those of the" & LF
       & "# unmodified project is an equivalent mutant and becomes Ignored." & LF
@@ -480,6 +492,9 @@ package body AdaMutant.Config is
       & "# concurrency = 4" & LF
       & "timeout_factor = 1.5" & LF
       & "timeout_ms = 5000" & LF
+      & "# The time limit, in ms, of the proof of a mutant.  By default it" & LF
+      & "# comes from the proof of the unmodified project, like the tests." & LF
+      & "# prove_timeout_ms = 300000" & LF
       & "# test_memory_limit_mb = 2048" & LF
       & "# Mutants in code that no test executes skip the tests and go to" & LF
       & "# the proof at once." & LF

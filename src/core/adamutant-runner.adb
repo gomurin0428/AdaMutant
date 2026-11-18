@@ -637,6 +637,38 @@ package body AdaMutant.Runner is
       function Slot_Dir (Slot : Positive) return String is
         (Join (Sandbox, Image (Slot)));
 
+      --  GNATprove's cache of proof results for the proofs in each sandbox
+      --  (ADAMUTANT_PROVE_CACHE), which the proof of the unmodified project
+      --  fills: the proof of a mutant then proves again only the goals
+      --  that the mutant changes.  One for each sandbox, so that no two
+      --  proofs write to the same cache at once; they go with the
+      --  sandboxes.
+      Prove_Caches : constant String :=
+        Ada.Directories.Full_Name (Join (Sandbox, "prove-cache"));
+
+      function Cache_Dir (Slot : Positive) return String is
+        (Join (Prove_Caches, Image (Slot)));
+
+      procedure Forget_Since (Slot : Positive; Since : Time) is
+         --  A proof stopped at its time limit may have left an entry of the
+         --  cache cut short, which stops GNATprove ("GNAT BUG DETECTED")
+         --  when a later proof reads it: remove what the proof wrote.  Time
+         --  stamps have whole-second (two-second on FAT) resolution; an
+         --  entry removed in excess is only proved again.
+         Dir : constant String := Cache_Dir (Slot);
+      begin
+         if not Ada.Directories.Exists (Dir) then
+            return;
+         end if;
+         for Path of Find_Files (Dir, String_Vectors.Empty_Vector) loop
+            if Ada.Directories.Modification_Time (Join (Dir, Path))
+              >= Since - 2.0
+            then
+               Ada.Directories.Delete_File (Join (Dir, Path));
+            end if;
+         end loop;
+      end Forget_Since;
+
       Coverage_Dir : constant String := Join (Logs, "coverage");
       --  Where the programs of the combined build record the places that
       --  they execute while no mutant is active, a file per process.
@@ -671,7 +703,9 @@ package body AdaMutant.Runner is
                end Start;
                Results (Mine) :=
                  Run (Command, Slot_Dir (Mine), Log (Mine), 0, Timeout,
-                      Memory_Limit_Mb);
+                      Memory_Limit_Mb,
+                      Prove_Cache =>
+                        (if Name = "prove" then Cache_Dir (Mine) else ""));
             exception
                when E : others =>
                   Errors (Mine) := To_Unbounded_String
@@ -879,7 +913,7 @@ package body AdaMutant.Runner is
                          M.Id,
                          (if In_Combined then Combined_Test_TO (T)
                           else Test_TO (T)),
-                         S.Test_Memory_Limit_Mb, Rel);
+                         S.Test_Memory_Limit_Mb, Rel, M.Start_Pos.Line);
                   Who    : constant String :=
                     (if S.Named_Tests then "test " & Test_Name (T)
                      else "tests");
@@ -932,7 +966,9 @@ package body AdaMutant.Runner is
          function Step (Name, Command : String; Timeout : Duration)
            return Run_Result is
            (Run (Command, Dir, Log_Base & "-" & Name & ".log", M.Id, Timeout,
-                 Mutant_File => Rel));
+                 Mutant_File => Rel, Mutant_Line => M.Start_Pos.Line,
+                 Prove_Cache =>
+                   (if Name = "prove" then Cache_Dir (Slot) else "")));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          if not Built then
@@ -966,11 +1002,15 @@ package body AdaMutant.Runner is
                Wait_For_New_Stamp (Prove_Ended (Slot));
             end if;
             declare
-               P : constant Run_Result :=
-                 Step ("prove", To_String (S.Prove), Prove_TO);
+               Since : constant Time := Clock;
+               P     : constant Run_Result :=
+                 Step ("prove", To_String (S.Prove),
+                       (if S.Prove_Timeout_Ms > 0 then Ms (S.Prove_Timeout_Ms)
+                        else Prove_TO));
             begin
                Prove_Ended (Slot) := Clock;
                if P.Timed_Out then
+                  Forget_Since (Slot, Since);
                   M.Status := Survived;
                   M.Status_Reason := To_Unbounded_String
                     ((if M.Reached = Not_Covered
@@ -1759,7 +1799,7 @@ package body AdaMutant.Runner is
          begin
             Write_Changed (Path, Apply (Original, M.Mutation));
             B := Run (Command, Dir, Join (Logs, Log_Name), M.Id, Build_TO,
-                      Mutant_File => Rel);
+                      Mutant_File => Rel, Mutant_Line => M.Start_Pos.Line);
             Now := Objects (Dir);
             After := Dependents (Dir, Base_Name (Rel));
             --  The mutant can show in the object of any unit that depends
@@ -2032,6 +2072,9 @@ package body AdaMutant.Runner is
                            S.Test_Memory_Limit_Mb, Slots);
             Test_TO (T) :=
               Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+         end loop;
+         for Slot in 1 .. Slots loop
+            Ada.Directories.Create_Path (Cache_Dir (Slot));
          end loop;
          Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed,
                         Slots => Slots);
