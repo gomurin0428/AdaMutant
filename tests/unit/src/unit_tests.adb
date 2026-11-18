@@ -962,6 +962,15 @@ procedure Unit_Tests is
       Check (One_Line ("A  " & ASCII.CR & LF & "     or else B" & LF
                        & "  and C  D") = "A or else B and C  D",
              "one line joins lines, keeps other blanks");
+      Check (Has_Steps_Limit ("gnatprove -P p.gpr --level=1 --steps=2000 -j1")
+             and then Has_Steps_Limit ("gnatprove --steps 5")
+             and then Has_Steps_Limit ("gnatprove --steps=0 --steps=10")
+             and then not Has_Steps_Limit ("gnatprove --level=2")
+             and then not Has_Steps_Limit ("gnatprove --steps=0")
+             and then not Has_Steps_Limit ("gnatprove --steps=10 --steps=0")
+             and then not Has_Steps_Limit ("x --steps")
+             and then not Has_Steps_Limit (""),
+             "a steps limit in the prove command");
    end Test_Json;
 
    procedure Test_Json_Reader is

@@ -274,6 +274,41 @@ package body AdaMutant.Reports is
    function Html (R : Report) return String is
      (Page_Head & Json (R) & Page_Tail);
 
+   function Has_Steps_Limit (Command : String) return Boolean is
+      Result : Boolean := False;
+      From   : Natural := Command'First;
+      At_K   : Natural;
+   begin
+      loop
+         At_K := Ada.Strings.Fixed.Index (Command (From .. Command'Last),
+                                          "--steps");
+         exit when At_K = 0;
+         declare
+            K     : Natural := At_K + 7;
+            Value : Natural := 0;
+            Seen  : Boolean := False;
+         begin
+            if K <= Command'Last and then Command (K) in '=' | ' ' then
+               K := K + 1;
+               while K <= Command'Last and then Command (K) in '0' .. '9'
+               loop
+                  Seen := True;
+                  Value := (if Value > 1_000_000 then Value
+                            else Value * 10 + (Character'Pos (Command (K))
+                                                - Character'Pos ('0')));
+                  K := K + 1;
+               end loop;
+               if Seen then
+                  Result := Value /= 0;
+               end if;
+            end if;
+            From := K;
+         end;
+         exit when From > Command'Last;
+      end loop;
+      return Result;
+   end Has_Steps_Limit;
+
    procedure Print_Console (R : Report) is
       All_Counts : constant Status_Counts := AdaMutant.Results.Count (R);
 
@@ -393,6 +428,47 @@ package body AdaMutant.Reports is
                       else ""));
             end if;
          end loop;
+         --  On a goal that a mutant makes fail, the provers run up to
+         --  their limit, and the time limit of the mutant comes from the
+         --  proof of the unmodified project, where nothing fails.  Whether
+         --  the prove command has a steps limit says something only about
+         --  the proofs of this run, not about those of a baseline report.
+         declare
+            Timed_Out, Reused : Natural := 0;
+         begin
+            for M of R.Mutants loop
+               if Proof_Timed_Out (M) then
+                  Timed_Out := Timed_Out + 1;
+                  if M.Reused then
+                     Reused := Reused + 1;
+                  end if;
+               end if;
+            end loop;
+            if Timed_Out > 0 then
+               Ada.Text_IO.Put_Line
+                 ("  (The proof of" & Timed_Out'Image
+                  & (if Timed_Out = 1 then " mutant" else " mutants")
+                  & " did not finish in time"
+                  & (if Reused = 0 then ""
+                     elsif Reused = Timed_Out
+                     then ", in the run of the baseline report"
+                     else "," & Reused'Image & " of them in the run of the"
+                          & " baseline report")
+                  & "."
+                  & (if Reused < Timed_Out
+                       and then Has_Steps_Limit (To_String (R.Settings.Prove))
+                     then "  On a goal that a mutant makes fail, a lower"
+                          & " steps limit (--steps, still enough for the"
+                          & " unmodified project) stops the provers sooner,"
+                          & " and a longer prove_timeout_ms gives the proofs"
+                          & " more time.)"
+                     else "  On a goal that a mutant makes fail, the"
+                          & " provers run up to their time limit; a steps"
+                          & " limit (gnatprove --steps) usually stops them"
+                          & " much sooner.  See ""Speeding up the proof of"
+                          & " the mutants"" in the README.)"));
+            end if;
+         end;
       end if;
 
       if (for some M of R.Mutants => M.Equivalent) then
