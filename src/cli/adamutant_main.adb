@@ -8,6 +8,7 @@ with AdaMutant.Baselines;
 with AdaMutant.Config;
 with AdaMutant.Files;
 with AdaMutant.Mutators;
+with AdaMutant.Processes;
 with AdaMutant.Reports;
 with AdaMutant.Results; use AdaMutant.Results;
 with AdaMutant.Runner;
@@ -175,8 +176,8 @@ procedure AdaMutant_Main is
          elsif Ada.Directories.Kind (To_String (Baseline))
                not in Ada.Directories.Ordinary_File
          then
-            raise AdaMutant.Runner.Run_Error with
-              "--baseline " & To_String (Baseline) & ": not a file";
+            AdaMutant.Runner.Fail
+              ("--baseline " & To_String (Baseline) & ": not a file");
          else
             declare
                Reused : Natural;
@@ -187,9 +188,9 @@ procedure AdaMutant_Main is
                          & To_String (Baseline));
             exception
                when E : AdaMutant.Baselines.Baseline_Error =>
-                  raise AdaMutant.Runner.Run_Error with
-                    "--baseline " & To_String (Baseline) & ": "
-                    & Ada.Exceptions.Exception_Message (E);
+                  AdaMutant.Runner.Fail
+                    ("--baseline " & To_String (Baseline) & ": "
+                     & Ada.Exceptions.Exception_Message (E));
             end;
          end if;
       end if;
@@ -278,9 +279,15 @@ exception
       Put_Line (Standard_Error, "error: " & Ada.Exceptions.Exception_Message (E));
       Put_Line (Standard_Error, "Run 'adamutant --help' for usage.");
       Set_Exit_Status (Exit_Error);
+   when E : AdaMutant.Runner.Run_Error =>
+      Put_Line (Standard_Error, "error: " & Ada.Exceptions.Exception_Message (E));
+      if AdaMutant.Runner.Details /= "" then
+         Put_Line (Standard_Error, AdaMutant.Runner.Details);
+      end if;
+      Set_Exit_Status (Exit_Error);
    when E : AdaMutant.Config.Config_Error
-      | AdaMutant.Runner.Run_Error
-      | AdaMutant.Files.File_Error =>
+      | AdaMutant.Files.File_Error
+      | AdaMutant.Processes.Spawn_Error =>
       Put_Line (Standard_Error, "error: " & Ada.Exceptions.Exception_Message (E));
       Set_Exit_Status (Exit_Error);
 end AdaMutant_Main;

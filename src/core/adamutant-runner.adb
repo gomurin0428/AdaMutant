@@ -15,6 +15,31 @@ with AdaMutant.Schemata;
 
 package body AdaMutant.Runner is
 
+   Last_Details : Unbounded_String;
+
+   function Details return String is (To_String (Last_Details));
+
+   procedure Fail (Text : String) is
+   begin
+      if Text'Length <= 200 then
+         Last_Details := Null_Unbounded_String;
+         raise Run_Error with Text;
+      end if;
+      --  The whole text after the message, which GNAT cuts at 200.  The
+      --  message ends before a character of UTF-8, not inside one.
+      Last_Details := To_Unbounded_String (Text);
+      declare
+         Last : Natural := Text'First + 179;
+      begin
+         while Last > Text'First
+           and then Character'Pos (Text (Last + 1)) in 16#80# .. 16#BF#
+         loop
+            Last := Last - 1;
+         end loop;
+         raise Run_Error with Text (Text'First .. Last) & " ... (below)";
+      end;
+   end Fail;
+
    use AdaMutant.Config;
    use AdaMutant.Files;
    use AdaMutant.Results;
@@ -40,14 +65,14 @@ package body AdaMutant.Runner is
          return False;
       end Matches_Any;
    begin
+      Last_Details := Null_Unbounded_String;
       R.Settings := Settings;
       if Since /= "" then
          begin
             Changes := AdaMutant.Changes.Changed_Since (Root, Since);
          exception
             when E : AdaMutant.Changes.Change_Error =>
-               raise Run_Error with
-                 "--since: " & Ada.Exceptions.Exception_Message (E);
+               Fail ("--since: " & Ada.Exceptions.Exception_Message (E));
          end;
       end if;
       for Path of Find_Files (Root, Settings.Sandbox_Exclude) loop
@@ -80,8 +105,7 @@ package body AdaMutant.Runner is
                exception
                   when E : AdaMutant.Lexer.Lexical_Error
                     | AdaMutant.Mutators.Directive_Error =>
-                     raise Run_Error with
-                       Path & ": " & Ada.Exceptions.Exception_Message (E);
+                     Fail (Path & ": " & Ada.Exceptions.Exception_Message (E));
                end;
                R.Files.Append
                  (Source_File'(Path   => To_Unbounded_String (Path),
@@ -373,54 +397,6 @@ package body AdaMutant.Runner is
       return Ada.Characters.Handling.To_Lower (Path);
    end Base_Name;
 
-   function Compiled_Sources (Dir : String) return String_Vectors.Vector is
-      Result : String_Vectors.Vector;
-   begin
-      for Path of Find_Files (Dir, String_Vectors.Empty_Vector) loop
-         if Path'Length > 4
-           and then Ada.Characters.Handling.To_Lower
-             (Path (Path'Last - 3 .. Path'Last)) = ".ali"
-         then
-            declare
-               Text  : constant String := Read (Join (Dir, Path));
-               First : Positive := Text'First;
-               Last  : Natural;
-            begin
-               while First <= Text'Last loop
-                  Last := First;
-                  while Last <= Text'Last and then Text (Last) /= ASCII.LF loop
-                     Last := Last + 1;
-                  end loop;
-                  if Last - First > 2 and then Text (First) = 'D'
-                    and then Text (First + 1) = ' '
-                  then
-                     declare
-                        E : Positive := First + 2;
-                     begin
-                        while E < Last and then Text (E) /= ' '
-                          and then Text (E) /= ASCII.HT
-                          and then Text (E) /= ASCII.CR
-                        loop
-                           E := E + 1;
-                        end loop;
-                        declare
-                           Name : constant String :=
-                             Base_Name (Text (First + 2 .. E - 1));
-                        begin
-                           if not Result.Contains (Name) then
-                              Result.Append (Name);
-                           end if;
-                        end;
-                     end;
-                  end if;
-                  First := Last + 1;
-               end loop;
-            end;
-         end if;
-      end loop;
-      return Result;
-   end Compiled_Sources;
-
    function Main_Sources (Dir : String) return String_Vectors.Vector is
       --  Paths, relative to Dir, of the sources of the main subprograms
       --  that the GNAT ALI files under Dir describe.
@@ -481,7 +457,6 @@ package body AdaMutant.Runner is
       Build_TO : constant Duration := Ms (S.Build_Timeout_Ms);
       Prove_TO : Duration := 0.0;
       N_Tests  : constant Natural := Natural (S.Tests.Length);
-      Has_Test : constant Boolean := N_Tests > 0;
       Test_TO  : array (1 .. N_Tests) of Duration := [others => 0.0];
 
       function Test_Name (T : Positive) return String is
@@ -493,7 +468,6 @@ package body AdaMutant.Runner is
       function Test_Step (T : Positive) return String is
         (if S.Named_Tests then "test-" & Test_Name (T) else "test");
       --  The name of the step in the names of the logs.
-      Has_Prove : constant Boolean := Length (S.Prove) > 0;
 
       --  The messages of the proof of the unmodified project that would
       --  count as failures, without their lines and columns.  The proof
@@ -589,18 +563,38 @@ package body AdaMutant.Runner is
             if Length (Errors (K)) > 0 then
                raise Spawn_Error with To_String (Errors (K));
             elsif Results (K).Timed_Out then
+               Last_Details := To_Unbounded_String
+                 ("command: " & Command & ASCII.LF & "log: " & Log (K));
                raise Run_Error with
-                 "the " & Name & " command of the unmodified project timed out"
-                 & " ('" & Command & "', log " & Log (K) & ")";
+                 "the " & Name & " command of the unmodified project timed"
+                 & " out";
             elsif Results (K).Exit_Code /= 0 then
-               raise Run_Error with
-                 "the " & Name & " command fails on the unmodified project"
-                 & " (exit status" & Results (K).Exit_Code'Image & ", '"
-                 & Command & "', log " & Log (K)
-                 & (if Memory_Limit_Mb > 0
-                    then ", test_memory_limit_mb =" & Memory_Limit_Mb'Image
-                    else "")
-                 & ")" & ASCII.LF & Tail (Log (K), 20);
+               declare
+                  Text : constant String := Tail (Log (K), 20);
+                  --  GNATprove 16 fails when there is no SPARK code.
+                  No_Spark : constant Boolean :=
+                    Name = "prove"
+                    and then Ada.Strings.Fixed.Index
+                               (Text, "no checks generated by GNATprove") > 0;
+               begin
+                  Last_Details := To_Unbounded_String
+                    ("command: " & Command & ASCII.LF & "log: " & Log (K)
+                     & (if Memory_Limit_Mb > 0
+                        then ASCII.LF & "test_memory_limit_mb ="
+                          & Memory_Limit_Mb'Image
+                        else "")
+                     & ASCII.LF & Text
+                     & (if No_Spark
+                        then ASCII.LF & "GNATprove found no SPARK code"
+                          & " (SPARK_Mode) to analyse.  The proof cannot"
+                          & " detect a mutant in code without SPARK_Mode;"
+                          & " for a project without SPARK code, write"
+                          & " prove = ""exit 0""."
+                        else ""));
+                  raise Run_Error with
+                    "the " & Name & " command fails on the unmodified project"
+                    & " (exit status" & Results (K).Exit_Code'Image & ")";
+               end;
             end if;
             Elapsed := Duration'Max (Elapsed, Results (K).Elapsed);
          end loop;
@@ -682,6 +676,10 @@ package body AdaMutant.Runner is
       --  (see Wait_For_Libraries).  A library that no build writes again
       --  costs no wait.
       Libraries : String_Vectors.Vector;
+
+      --  Whether the proof is GNATprove's (see Wait_For_New_Stamp).  A
+      --  command such as "exit 0" needs no wait.
+      Uses_Gnatprove : Boolean := False;
 
       --  GNATprove skips its proof phase when the files it regenerates get
       --  the same time stamp as the previous run's results.  Time stamps
@@ -833,22 +831,25 @@ package body AdaMutant.Runner is
                end if;
             end;
          end if;
-         if M.Status = Pending and then Has_Test and then not Skip_Tests
-         then
+         if M.Status = Pending and then not Skip_Tests then
             Run_Tests (Slot, M, In_Combined => False);
          end if;
-         if M.Status = Pending and then Has_Prove then
-            Wait_For_New_Stamp (Prove_Ended (Slot));
+         if M.Status = Pending then
+            if Uses_Gnatprove then
+               Wait_For_New_Stamp (Prove_Ended (Slot));
+            end if;
             declare
                P : constant Run_Result :=
                  Step ("prove", To_String (S.Prove), Prove_TO);
             begin
                Prove_Ended (Slot) := Clock;
                if P.Timed_Out then
-                  M.Status := Timeout;
-                  M.Killed_By := Proof;
+                  M.Status := Survived;
                   M.Status_Reason := To_Unbounded_String
-                    ("proof did not finish within the timeout");
+                    ((if M.Reached = Not_Covered
+                      then "no test executes this code, and "
+                      else "the tests passed, and ")
+                     & Proof_Unfinished);
                elsif P.Exit_Code /= 0 then
                   M.Status := Killed;
                   M.Killed_By := Proof;
@@ -920,8 +921,7 @@ package body AdaMutant.Runner is
             M.Status_Reason := To_Unbounded_String
               (if M.Reached = Not_Covered then
                   "no test executes this code, and the proof passed"
-               elsif Has_Test and then Has_Prove then "tests and proof passed"
-               elsif Has_Test then "tests passed" else "proof passed");
+               else "the tests and the proof passed");
          end if;
          Write_Changed (Path, Original);
          M.Elapsed := M.Elapsed + (Clock - T0);
@@ -935,13 +935,9 @@ package body AdaMutant.Runner is
          T0 : constant Time := Clock;
       begin
          Run_Tests (Slot, M, In_Combined => True);
-         if M.Status /= Pending then
-            null;
-         elsif Has_Prove then
+         if M.Status = Pending then
+            --  On to the proof, without another build.
             Tested (Index) := True;
-         else
-            M.Status := Survived;
-            M.Status_Reason := To_Unbounded_String ("tests passed");
          end if;
          M.Elapsed := Clock - T0;
       end Test_Combined;
@@ -1009,7 +1005,7 @@ package body AdaMutant.Runner is
             end loop;
          end loop;
          if Queue.Failure /= "" then
-            raise Run_Error with Queue.Failure;
+            Fail (Queue.Failure);
          end if;
       end Run_Workers;
 
@@ -1289,8 +1285,7 @@ package body AdaMutant.Runner is
               [1 .. N_Tests => [1 .. Work_Items'Last => False]];
             for K in Work_Items'Range loop
                declare
-                  M    : Mutant renames Work_Items (K);
-                  Done : Natural;
+                  M : Mutant renames Work_Items (K);
                begin
                   if M.Status = Pending and then Place (K) /= 0 then
                      for T in 1 .. N_Tests loop
@@ -1302,18 +1297,9 @@ package body AdaMutant.Runner is
                      if not M.Covered_By.Is_Empty then
                         M.Reached := Covered;
                      else
+                        --  No test can detect it: on to the proof.
                         M.Reached := Not_Covered;
-                        if Has_Prove then
-                           Tested (K) := True;
-                        else
-                           M.Status := No_Coverage;
-                           M.Status_Reason := To_Unbounded_String
-                             ("no test executes this code");
-                           Queue.Finished (Done);
-                           if Progress /= null then
-                              Progress (Done, Pending_Count, M, Rel (M.File));
-                           end if;
-                        end if;
+                        Tested (K) := True;
                      end if;
                   end if;
                end;
@@ -1350,15 +1336,16 @@ package body AdaMutant.Runner is
             begin
                exit when not B.Timed_Out and then B.Exit_Code = 0;
                if B.Timed_Out then
+                  Last_Details := To_Unbounded_String ("log: " & Log);
                   raise Run_Error with
-                    "the build that contains the mutants timed out (log "
-                    & Log & ")";
+                    "the build that contains the mutants timed out";
                elsif Drop_Compile_Errors = 0 then
+                  Last_Details := To_Unbounded_String
+                    ("log: " & Log & ASCII.LF & Tail (Log, 20));
                   raise Run_Error with
                     "the build that contains the mutants fails, and no"
                     & " compiler message is on the lines of one mutant"
-                    & " (exit status" & B.Exit_Code'Image & ", log " & Log
-                    & ")" & ASCII.LF & Tail (Log, 20);
+                    & " (exit status" & B.Exit_Code'Image & ")";
                end if;
             end;
          end loop;
@@ -1834,10 +1821,11 @@ package body AdaMutant.Runner is
             end loop;
          end;
          if Survivor_Queue.Failure /= "" then
-            raise Run_Error with Survivor_Queue.Failure;
+            Fail (Survivor_Queue.Failure);
          end if;
       end Find_Equivalent;
    begin
+      Last_Details := Null_Unbounded_String;
       for K in Work_Items'Range loop
          Work_Items (K) := R.Mutants (K);
          if Work_Items (K).Status = Pending then
@@ -1855,8 +1843,8 @@ package body AdaMutant.Runner is
       begin
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
       end;
-      --  Counted before the NoCoverage check, which needs the files the
-      --  baseline test compiles too, so a few sandboxes may stay idle.
+      --  Counted before the coverage analysis, which may take mutants off
+      --  the queue, so a few sandboxes may stay idle.
       Slots := Positive'Max (1, Natural'Min (S.Concurrency, Pending_Count));
       for Slot in 2 .. Slots loop
          Copy_Tree (Slot_Dir (1), Slot_Dir (Slot), String_Vectors.Empty_Vector);
@@ -1871,20 +1859,20 @@ package body AdaMutant.Runner is
             Test_TO (T) :=
               Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
          end loop;
-         if Has_Prove then
-            Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed,
-                           Slots => Slots);
-            Prove_Ended := [others => Clock];
-            Prove_TO :=
-              Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
-            for F of Proof_Failures (Read (Join (Logs, "baseline-prove.log")))
-            loop
-               Baseline_Failures.Append (Without_Place (F));
-            end loop;
-         end if;
+         Baseline_Step ("prove", To_String (S.Prove), 0.0, Elapsed,
+                        Slots => Slots);
+         Prove_Ended := [others => Clock];
+         Prove_TO :=
+           Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
+         for F of Proof_Failures (Read (Join (Logs, "baseline-prove.log")))
+         loop
+            Baseline_Failures.Append (Without_Place (F));
+         end loop;
       end;
 
       --  The libraries, after the tests too: a test command may build one.
+      --  And whether the proof is GNATprove's, which leaves its files in a
+      --  directory "gnatprove".
       for Path of Find_Files (Slot_Dir (1), String_Vectors.Empty_Vector) loop
          declare
             Name : constant String := Base_Name (Path);
@@ -1902,48 +1890,14 @@ package body AdaMutant.Runner is
             then
                Libraries.Append (Path);
             end if;
+            if Ada.Strings.Fixed.Index (Path, "gnatprove/") > 0 then
+               Uses_Gnatprove := True;
+            end if;
          end;
       end loop;
 
-      --  A mutated file that no compilation of the build depends on can
-      --  never be detected; skip its mutants instead of reporting them as
-      --  survivors.  Without any GNAT ALI file there is nothing to go by,
-      --  and a prove command may analyse sources outside the build.
-      declare
-         Compiled : constant String_Vectors.Vector :=
-           (if Has_Prove then String_Vectors.Empty_Vector
-            else Compiled_Sources (Slot_Dir (1)));
-      begin
-         if not Compiled.Is_Empty then
-            for F in R.Files.First_Index .. R.Files.Last_Index loop
-               declare
-                  Path    : constant String := To_String (R.Files (F).Path);
-                  Skipped : Natural := 0;
-               begin
-                  if not Compiled.Contains (Base_Name (Path)) then
-                     for M of Work_Items.all loop
-                        if M.File = F and then M.Status = Pending then
-                           M.Status := No_Coverage;
-                           M.Status_Reason := To_Unbounded_String
-                             ("the build command does not compile " & Path);
-                           Skipped := Skipped + 1;
-                        end if;
-                     end loop;
-                     Pending_Count := Pending_Count - Skipped;
-                     if Skipped > 0 and then Warn /= null then
-                        Warn (Path & " is not compiled by the build command;"
-                              & Skipped'Image & " mutants marked NoCoverage");
-                     end if;
-                  end if;
-               end;
-            end loop;
-         end if;
-      end;
-
       if Pending_Count > 0 then
-         if Has_Test then
-            Run_Combined;
-         end if;
+         Run_Combined;
          --  What is left: mutants that no schema can hold, and the proof
          --  of those that passed the tests of the combined build.
          Run_Workers (Combined_Build => False);
@@ -1957,7 +1911,9 @@ package body AdaMutant.Runner is
                   if Warn /= null then
                      Warn ("the search for equivalent mutants has stopped: "
                            & Ada.Exceptions.Exception_Name (E) & ": "
-                           & Ada.Exceptions.Exception_Message (E));
+                           & Ada.Exceptions.Exception_Message (E)
+                           & (if Details = "" then ""
+                              else ASCII.LF & Details));
                   end if;
             end;
          end if;

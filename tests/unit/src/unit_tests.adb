@@ -519,6 +519,34 @@ procedure Unit_Tests is
                    F16.Length'Image
                    & (if F16.Is_Empty then "" else " " & F16 (1)));
          end;
+         --  A long error keeps all its text in Details.
+         begin
+            Fail ([1 .. 300 => 'x']);
+         exception
+            when E : Run_Error =>
+               Check (Ada.Exceptions.Exception_Message (E)'Length <= 200
+                      and then Details = [1 .. 300 => 'x'],
+                      "run error: a long message",
+                      Ada.Exceptions.Exception_Message (E)'Length'Image);
+         end;
+         --  Not inside a character of UTF-8 ("é" is 2 bytes, at 180).
+         begin
+            Fail ([1 .. 179 => 'x'] & Character'Val (16#C3#)
+                  & Character'Val (16#A9#) & [1 .. 100 => 'y']);
+         exception
+            when E : Run_Error =>
+               Check (Ada.Exceptions.Exception_Message (E)
+                      = [1 .. 179 => 'x'] & " ... (below)",
+                      "run error: cut before a character",
+                      Ada.Exceptions.Exception_Message (E));
+         end;
+         begin
+            Fail ("short");
+         exception
+            when E : Run_Error =>
+               Check (Ada.Exceptions.Exception_Message (E) = "short"
+                      and then Details = "", "run error: a short message");
+         end;
          Check (Proof_Failures ("gnatprove: error" & LF).Is_Empty,
                 "proof failures: none");
       end;
@@ -723,6 +751,7 @@ procedure Unit_Tests is
          & "mutate = [""src/**/*.adb"", 'x.ads']" & LF
          & "build = ""gprbuild -P \""p.gpr\""""" & LF
          & "test = ""bin/t""  # trailing" & LF
+         & "prove = ""gnatprove -P p.gpr""" & LF
          & "concurrency = 3" & LF
          & "timeout_factor = 2.5" & LF
          & "mutators = [""ArithmeticOperator""]" & LF
@@ -744,7 +773,7 @@ procedure Unit_Tests is
              "config: the test command is the test ""tests""");
       declare
          N : constant Configuration := Parse
-           ("build = ""b""" & LF & "bail = false" & LF
+           ("build = ""b""" & LF & "prove = ""p""" & LF & "bail = false" & LF
             & "[thresholds]" & LF & "high = 90" & LF
             & "[tests]" & LF & "parser = ""bin/p --all""  # first" & LF
             & "lexer-2.x = 'bin/l'" & LF, "/r");
@@ -757,26 +786,26 @@ procedure Unit_Tests is
                 and then N.High = 90,
                 "config: tests table");
       end;
-      Rejects ("build = ""b""" & LF & "test = ""t""" & LF
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF
                & "[tests]" & LF & "a = ""x""",
                "config: test and tests table");
-      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF & "a = ""x""" & LF
                & "a = ""y""", "config: duplicate test name");
-      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = """"",
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF & "a = """"",
                "config: empty test command");
-      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF & "a = ""x""" & LF
                & "prove = ""gnatprove""", "config: a setting after [tests]");
-      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""" & LF
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF & "a = ""x""" & LF
                & "bail = false", "config: bail after [tests]");
-      Rejects ("build = ""b""" & LF & "[tests]" & LF & "Unit = ""x""" & LF
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF & "Unit = ""x""" & LF
                & "unit = ""y""", "config: test names that differ in case");
-      Rejects ("build = ""b""" & LF & "[tests]" & LF
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF
                & "t" & Character'Val (233) & " = ""x""",
                "config: a test name with other characters");
       begin
          declare
             C2 : constant Configuration := Parse
-              ("build = ""b""" & LF & "[tests]" & LF
+              ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF
                & "t" & Character'Val (16#C3#) & Character'Val (16#AA#)
                & " = ""x""", "/r");
          begin
@@ -791,29 +820,33 @@ procedure Unit_Tests is
                    "config: a test name in UTF-8",
                    Ada.Exceptions.Exception_Message (E));
       end;
-      Rejects ("build = ""b""" & LF & "[tests]" & LF,
-               "config: empty tests table and no prove");
-      Rejects ("build = ""b""" & LF & "[tests]" & LF & "Proof = ""x""" & LF,
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF,
+               "config: empty tests table");
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "[tests]" & LF
+               & "Proof = ""x""" & LF,
                "config: a test with the name of the proof");
       Check (Length (C.Equivalence_Build) = 0
              and then To_String
                (Parse
-                  ("build = ""b""" & LF & "test = ""t""" & LF
+                  ("build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF
                    & "equivalence_build = ""b -cargs -O2""", "/r")
                   .Equivalence_Build) = "b -cargs -O2",
              "config equivalence build");
       Check (C.Coverage_Analysis
              and then not Parse
-               ("build = ""b""" & LF & "test = ""t""" & LF
+               ("build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF
                 & "coverage_analysis = false", "/r").Coverage_Analysis,
              "config coverage analysis");
-      Rejects ("build = ""b""" & LF & "test = ""t""" & LF & "colour = 1",
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF & "colour = 1",
                "config unknown key");
-      Rejects ("test = ""t""", "config missing build");
-      Rejects ("build = ""b""", "config missing test and prove");
-      Rejects ("build = ""b""" & LF & "build = ""c""" & LF & "test = ""t""",
+      Rejects ("test = ""t""" & LF & "prove = ""p""", "config missing build");
+      Rejects ("build = ""b""" & LF & "prove = ""p""", "config missing test");
+      Rejects ("build = ""b""" & LF & "test = ""t""", "config missing prove");
+      Rejects ("build = ""b""" & LF & "[tests]" & LF & "a = ""x""",
+               "config missing prove, with a tests table");
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "build = ""c""" & LF & "test = ""t""",
                "config duplicate key");
-      Rejects ("build = ""b""" & LF & "test = ""t""" & LF
+      Rejects ("build = ""b""" & LF & "prove = ""p""" & LF & "test = ""t""" & LF
                & "[thresholds]" & LF & "high = 50" & LF & "low = 70",
                "config low above high");
       declare
@@ -960,12 +993,13 @@ procedure Unit_Tests is
                       & ",""killedBy"":[""a"",""b""],""coveredBy"":[""a"",""b"","
                       & """c""],""testsCompleted"":2") & ","
         & Old_Mutant (3, 13, 14, "NumericLiteral", "0", "Survived",
-                      ",""statusReason"":""tests passed""") & ","
+                      ",""statusReason"":""the tests and the proof passed""")
+        & ","
         & Old_Mutant (4, 11, 12, "ArithmeticOperator", "+", "Killed", "") & ","
         & Old_Mutant (5, 9, 10, "NumericLiteral", "3", "Killed",
                       ",""killedBy"":[""proof: postcondition"",""proof: range"
                       & " check""],""statusReason"":""proof failed: x (from the"
-                      & " baseline report)""") & ","
+                      & " baseline report)"",""testsCompleted"":1") & ","
         & Old_Mutant (5, 4, 11, "StatementDeletion", "null;", "Ignored",
                       ",""statusReason"":""equivalent mutant: same code""")
         & "]}}}";
@@ -1224,6 +1258,68 @@ procedure Unit_Tests is
                 = " Pending CompileError* Pending Pending Pending Pending",
                 "baseline: a build that timed out runs again",
                 Reused'Image & Statuses (Slow));
+      end;
+      --  An earlier version counted a proof that did not finish as a
+      --  detection.  It runs again; with --since it becomes a survivor.
+      declare
+         Old_Report : constant String :=
+           "{""files"":{""src/p.adb"":{""source"":"
+           & AdaMutant.Reports.Json_String (New_Source) & ",""mutants"":["
+           & Old_Mutant (4, 11, 12, "ArithmeticOperator", "-", "Timeout",
+                         ",""killedBy"":[""proof""],""statusReason"":"
+                         & """proof did not finish within the timeout""")
+           & "," & Old_Mutant (4, 13, 14, "NumericLiteral", "0", "Timeout",
+                               ",""killedBy"":[""a""],""statusReason"":"
+                               & """test a did not finish""")
+           & "]}}}";
+         Slow : Report := Report_Of (Unchanged => False);
+      begin
+         Apply (Slow, Old_Report, Reused);
+         Check (Reused = 1 and then Statuses (Slow)
+                = " Pending Timeout* Pending Pending Pending Pending",
+                "baseline: a proof that timed out runs again",
+                Reused'Image & Statuses (Slow));
+         Slow := Report_Of (Unchanged => True);
+         Apply (Slow, Old_Report, Reused);
+         Check (Reused = 2 and then Statuses (Slow)
+                = " Survived* Timeout* Ignored Ignored Ignored Ignored"
+                and then Slow.Mutants (1).Killed_By = None
+                and then Proof_Timed_Out (Slow.Mutants (1))
+                --  No test ran in that version: the reason does not say so.
+                and then Index (Slow.Mutants (1).Status_Reason,
+                                "the proof did not finish") = 1
+                and then not Proof_Timed_Out (Slow.Mutants (2)),
+                "baseline: with --since a proof that timed out survives",
+                Reused'Image & Statuses (Slow));
+      end;
+      --  The results of an earlier version that ran the tests alone or the
+      --  proof alone run again, even with --since.  A proof that did not
+      --  finish where no test executes the code says so.
+      declare
+         Old_Report : constant String :=
+           "{""files"":{""src/p.adb"":{""source"":"
+           & AdaMutant.Reports.Json_String (New_Source) & ",""mutants"":["
+           & Old_Mutant (4, 11, 12, "ArithmeticOperator", "-", "NoCoverage",
+                         ",""statusReason"":""no test executes this code""")
+           & "," & Old_Mutant (4, 13, 14, "NumericLiteral", "0", "Survived",
+                               ",""statusReason"":""tests passed""")
+           & "," & Old_Mutant (5, 11, 12, "ArithmeticOperator", "+", "Killed",
+                               ",""killedBy"":[""proof""],""statusReason"":"
+                               & """proof failed with exit status 1""")
+           & "," & Old_Mutant (6, 9, 10, "NumericLiteral", "3", "Timeout",
+                               ",""coveredBy"":[],""statusReason"":"
+                               & """proof did not finish within the timeout""")
+           & "]}}}";
+         Old : Report := Report_Of (Unchanged => True);
+      begin
+         Apply (Old, Old_Report, Reused);
+         Check (Reused = 1 and then Statuses (Old)
+                = " Ignored Ignored Ignored Survived* Ignored Ignored"
+                and then Index
+                  (Old.Mutants (4).Status_Reason,
+                   "no test executes this code, and the proof did not") = 1,
+                "baseline: results of the tests alone or the proof alone",
+                Reused'Image & Statuses (Old));
       end;
 
       R := Report_Of (Unchanged => False);

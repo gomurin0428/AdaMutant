@@ -296,25 +296,62 @@ package body AdaMutant.Reports is
                    & Pad (Image (C (Compile_Error)), 8) & " |"
                    & Pad (Image (C (Ignored)), 8));
       end Row;
+
+      procedure Put_Mutant (M : Mutant; Note : String) is
+         --  Where M is, a note in parentheses if any, and the change.
+      begin
+         Ada.Text_IO.Put_Line ("  #" & Image (M.Id) & " "
+                   & To_String (R.Files (M.File).Path) & ":"
+                   & Image (M.Start_Pos.Line) & ":"
+                   & Image (M.Start_Pos.Column) & " "
+                   & AdaMutant.Mutators.Name (M.Mutation.Kind)
+                   & (if Note = "" then "" else " (" & Note & ")"));
+         Ada.Text_IO.Put_Line
+           ("    - " & One_Line (To_String (M.Original)));
+         Ada.Text_IO.Put_Line
+           ("    + " & One_Line (To_String (M.Mutation.Replacement)));
+      end Put_Mutant;
+
+      function Checks (M : Mutant) return String is
+         S : Unbounded_String;
+      begin
+         for Kind of M.Failed_Checks loop
+            Append (S, (if Length (S) > 0 then ", " else "") & Kind);
+         end loop;
+         return To_String (S);
+      end Checks;
    begin
       for F of R.Files loop
          Name_Width := Natural'Max (Name_Width, Length (F.Path));
       end loop;
+
+      --  The tests run first, so the proof only sees what they miss.
+      if (for some M of R.Mutants =>
+            M.Status = Killed and then M.Killed_By = Proof)
+      then
+         Ada.Text_IO.New_Line;
+         Ada.Text_IO.Put_Line
+           ("Detected only by the proof (candidates for a missing test):");
+         for M of R.Mutants loop
+            if M.Status = Killed and then M.Killed_By = Proof then
+               Put_Mutant
+                 (M, Checks (M)
+                     & (if M.Reached /= Not_Covered then ""
+                        elsif M.Failed_Checks.Is_Empty
+                        then "no test executes this code"
+                        else "; no test executes this code"));
+            end if;
+         end loop;
+      end if;
 
       if All_Counts (Survived) > 0 then
          Ada.Text_IO.New_Line;
          Ada.Text_IO.Put_Line ("Survived mutants:");
          for M of R.Mutants loop
             if M.Status = Survived then
-               Ada.Text_IO.Put_Line ("  #" & Image (M.Id) & " "
-                         & To_String (R.Files (M.File).Path) & ":"
-                         & Image (M.Start_Pos.Line) & ":"
-                         & Image (M.Start_Pos.Column) & " "
-                         & AdaMutant.Mutators.Name (M.Mutation.Kind));
-               Ada.Text_IO.Put_Line
-                 ("    - " & One_Line (To_String (M.Original)));
-               Ada.Text_IO.Put_Line
-                 ("    + " & One_Line (To_String (M.Mutation.Replacement)));
+               Put_Mutant
+                 (M, (if Proof_Timed_Out (M) then "the proof timed out"
+                      else ""));
             end if;
          end loop;
       end if;
@@ -326,21 +363,13 @@ package body AdaMutant.Reports is
             & " project, ignored):");
          for M of R.Mutants loop
             if M.Equivalent then
-               Ada.Text_IO.Put_Line ("  #" & Image (M.Id) & " "
-                         & To_String (R.Files (M.File).Path) & ":"
-                         & Image (M.Start_Pos.Line) & ":"
-                         & Image (M.Start_Pos.Column) & " "
-                         & AdaMutant.Mutators.Name (M.Mutation.Kind));
-               Ada.Text_IO.Put_Line
-                 ("    - " & One_Line (To_String (M.Original)));
-               Ada.Text_IO.Put_Line
-                 ("    + " & One_Line (To_String (M.Mutation.Replacement)));
+               Put_Mutant (M, "");
             end if;
          end loop;
       end if;
 
       --  The lines that no test executes, once each: there the mutation
-      --  does not matter.  With a proof their mutants are not NoCoverage.
+      --  does not matter to the tests, and their mutants go to the proof.
       declare
          Header : Boolean := False;
          K      : Positive := R.Mutants.First_Index;

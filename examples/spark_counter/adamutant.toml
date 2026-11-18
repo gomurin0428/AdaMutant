@@ -1,7 +1,9 @@
-# No test suite: mutants are killed only when GNATprove can no longer prove
-# the contracts.
+# The tests run first, and the mutants that they do not detect go to the
+# proof.  The test only calls Increment, so the mutants of Saturating_Add
+# are detected only when GNATprove can no longer prove the contracts.
 mutate = ["src/**/*.adb"]
-build = "gprbuild -p -q -c -P counters.gpr"
+build = "gprbuild -p -q -P counters_tests.gpr"
+test = '"bin/test_counters"'
 prove = "gnatprove -P counters.gpr --level=1 --report=fail --checks-as-errors=on -j1"
 concurrency = 2
-sandbox_exclude = [".git", "obj"]
+sandbox_exclude = [".git", "obj", "bin"]

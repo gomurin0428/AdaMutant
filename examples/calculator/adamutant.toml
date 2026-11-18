@@ -1,6 +1,11 @@
 mutate = ["src/**/*.adb", "src/**/*.ads"]
 build = "gprbuild -p -q -P calculator_tests.gpr"
 test = '"bin/test_calculator"'
+# The mutants that the tests do not detect go to the proof.  This project
+# has no SPARK code, so the proof cannot detect anything here, and
+# GNATprove 16 fails when it finds no SPARK code.  A prove command is
+# required, so it is one that always passes.
+prove = "exit 0"
 # Survivors that this build compiles to the object code of the unmodified
 # project are equivalent mutants.
 equivalence_build = "gprbuild -p -q -c -P calculator_tests.gpr -cargs -O2 -g0"

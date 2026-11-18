@@ -193,6 +193,31 @@ package body AdaMutant.Baselines is
       end return;
    end As_In_Report;
 
+   Old_Proof_Timeout : constant String :=
+     "proof did not finish within the timeout";
+
+   function Old_Mode (Old : AdaMutant.Json.Value) return Boolean is
+      --  The result is from an earlier version that ran the tests alone or
+      --  the proof alone: NoCoverage (no test executes the code, and there
+      --  was no proof), a survivor of the tests alone or of the proof
+      --  alone, or a mutant that the proof killed without any test (no
+      --  "coveredBy", no "testsCompleted").  Now a mutant goes to the
+      --  tests first and then to the proof, whatever happened before.  Such
+      --  a result is not reused: the mutant runs again, or, on a line
+      --  unchanged since the revision of --since, stays Ignored.
+      use AdaMutant.Json;
+      Status : constant String := Text_Field (Old, "status");
+      Reason : constant String := Text_Field (Old, "statusReason");
+   begin
+      return Status = "NoCoverage"
+        or else (Status = "Survived"
+                 and then (Starts_With (Reason, "tests passed")
+                           or else Starts_With (Reason, "proof passed")))
+        or else (Status = "Killed" and then Starts_With (Reason, "proof")
+                 and then Field (Old, "coveredBy") = No_Value
+                 and then Integer_Of (Field (Old, "testsCompleted"), 0) = 0);
+   end Old_Mode;
+
    procedure Take (M : in out Mutant; From : AdaMutant.Json.Value) is
       --  The result that the report has in From becomes that of M.
 
@@ -256,6 +281,23 @@ package body AdaMutant.Baselines is
                end;
             end if;
          end loop;
+      end if;
+      --  An earlier version counted a proof that did not finish as a
+      --  detection.
+      if M.Status = Timeout and then Starts_With (Reason, Old_Proof_Timeout)
+      then
+         M.Status := Survived;
+         --  No "coveredBy" and no "testsCompleted": an earlier version
+         --  that ran the proof alone.
+         M.Status_Reason := To_Unbounded_String
+           ((if M.Reached = Not_Covered
+             then "no test executes this code, and "
+             elsif M.Tests_Run = 0 then ""
+             else "the tests passed, and ")
+            & Proof_Unfinished & From_Baseline);
+         M.Killed_By := None;
+         M.Killers.Clear;
+         M.Failed_Checks.Clear;
       end if;
    end Take;
 
@@ -343,8 +385,19 @@ package body AdaMutant.Baselines is
                                 Text_Field (Old, "status");
                            begin
                               --  A build that ran out of time may only
-                              --  have been slow that once.
-                              if Status in "Killed" | "Timeout"
+                              --  have been slow that once.  A result of
+                              --  an earlier version that ran the tests
+                              --  alone or the proof alone runs again.
+                              if Old_Mode (Old) then
+                                 null;
+                              elsif Status = "Killed"
+                                or else
+                                  (Status = "Timeout"
+                                   and then
+                                     (M.Unchanged
+                                      or else not Starts_With
+                                        (Text_Field (Old, "statusReason"),
+                                         Old_Proof_Timeout)))
                                 or else
                                   (Status = "CompileError"
                                    and then not Starts_With
@@ -353,8 +406,7 @@ package body AdaMutant.Baselines is
                                 or else
                                   (M.Unchanged
                                    and then
-                                     (Status in "Survived"
-                                        | "NoCoverage" | "RuntimeError"
+                                     (Status in "Survived" | "RuntimeError"
                                       or else
                                         (Status = "Ignored"
                                          and then Starts_With
