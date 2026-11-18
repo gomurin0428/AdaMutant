@@ -371,9 +371,16 @@ package body AdaMutant.Runner is
                               end if;
                            end loop;
                         end if;
+                        --  The text up to the counterexample, as in the
+                        --  other format: the counterexample is not part of
+                        --  the message that is compared with those of the
+                        --  unmodified project.
                         Result.Append
                           (Proof_Message'
-                             (Text          => To_Unbounded_String (Msg),
+                             (Text          => To_Unbounded_String
+                                (if Start > 0
+                                 then Msg (Msg'First .. Start - 1)
+                                 else Msg),
                               Example       =>
                                 (if Stop > 0
                                  then To_Unbounded_String

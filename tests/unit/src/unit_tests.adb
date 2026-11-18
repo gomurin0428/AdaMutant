@@ -602,6 +602,8 @@ procedure Unit_Tests is
                & " X = 1" & LF);
          begin
             Check (Natural (P.Length) = 2
+                   and then To_String (P (1).Text)
+                            = "w.adb:13:19: medium: range check might fail"
                    and then To_String (P (1).Example)
                             = "e.g. when R = (A => 1, B => (2, 3))"
                    and then P (1).Weak_Contract

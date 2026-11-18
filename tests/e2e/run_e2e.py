@@ -973,6 +973,9 @@ def check_proof_log():
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
             errors.append("a message of the unmodified project is counted")
+        # Some failures have a counterexample: no note about them.
+        if "The proof gave no counterexample" in proc.stdout:
+            errors.append(f"a note about counterexamples\n{proc.stdout}")
         # GNATprove 16 fails when there is no SPARK code.  The error says so,
         # with the command and its log on lines of their own.
         (work / "no_spark.py").write_text(

@@ -375,8 +375,8 @@ package body AdaMutant.Reports is
                                     and then Length (M.Example) > 0)
                   then
                      Ada.Text_IO.Put_Line
-                       ("  (GNATprove gave no counterexample: add"
-                        & " --counterexamples=on to the prove command.)");
+                       ("  (The proof gave no counterexample.  GNATprove"
+                        & " gives them with --counterexamples=on.)");
                   end if;
                end if;
             end;
