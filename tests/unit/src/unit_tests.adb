@@ -272,7 +272,7 @@ procedure Unit_Tests is
               & " end P;",
               "", "interface list and");
       Expect ("procedure P is begin return; end P;", "",
-              "return and null are not deleted");
+              "a return before the end of the body and null are not deleted");
    end Test_Skipped;
 
    procedure Test_Attributes is
@@ -384,6 +384,37 @@ procedure Unit_Tests is
                             .Contains ("x"),
              "type names of a spec");
    end Test_Loop_Direction;
+
+   procedure Test_Deletions is
+      O : Scan_Options;
+   begin
+      O.Enabled := [others => False];
+      O.Enabled (Statement_Deletion) := True;
+      --  Raise and return without a value, besides calls and
+      --  assignments; not a return right before the end of the body or
+      --  its handlers, nor an exit or delay statement.
+      Expect ("procedure P is begin" & LF
+              & "   loop exit when X > 3; X := X + 1; end loop;" & LF
+              & "   if Bad then raise Constraint_Error with ""bad""; end if;" & LF
+              & "   if Done then return; end if;" & LF
+              & "   delay 0.1;" & LF
+              & "   select T.E; or delay 1.0; end select;" & LF
+              & "   <<L>> exit Outer;" & LF
+              & "   Y := (if B then 1 else raise E);" & LF
+              & "   return;" & LF
+              & "exception when others => raise;" & LF
+              & "end P;",
+              "StatementDeletion X := X + 1;->null;"
+              & "|StatementDeletion raise Constraint_Error with ""bad"";->null;"
+              & "|StatementDeletion return;->null;"
+              & "|StatementDeletion T.E;->null;"
+              & "|StatementDeletion Y := (if B then 1 else raise E);->null;"
+              & "|StatementDeletion raise;->null;",
+              "statement deletion of raise and return", O);
+      --  A return with a value stays.
+      Expect ("function F return Integer is begin return 1; end F;", "",
+              "statement deletion keeps a return with a value", O);
+   end Test_Deletions;
 
    procedure Test_Comments is
    begin
@@ -2070,6 +2101,7 @@ begin
    Test_Comments;
    Test_Attributes;
    Test_Loop_Direction;
+   Test_Deletions;
    Test_Ghost_Names;
    Test_Contract_Flag;
    Test_Apply;

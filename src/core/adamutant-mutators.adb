@@ -980,7 +980,46 @@ package body AdaMutant.Mutators is
                         Add (Membership_Operator, K, K,
                              Same_Case (Txt (K), "not in"));
 
-                     elsif (Lw = "if" and then not Is_Kw (K - 1, "end"))
+                     end if;
+
+                     --  Statement deletion: a raise statement, or a return
+                     --  statement without a value, except right before the
+                     --  end of a body or its exception handlers, where it
+                     --  changes nothing.  Not an exit statement, which could
+                     --  make the loop run for ever (see exit when), nor a
+                     --  delay statement, whose time the tests and the proof
+                     --  hardly ever see.
+                     if Lw in "raise" | "return"
+                       and then Seg_Start (K) = K and then Depth (K) = 0
+                       and then not In_Aspect (K)
+                     then
+                        declare
+                           J : Positive := K + 1;
+                        begin
+                           while J < N and then Seg_Start (J) = K
+                             and then not (Depth (J) = 0 and then Is_Del (J, ";"))
+                           loop
+                              J := J + 1;
+                           end loop;
+                           if Seg_Start (J) = K and then Is_Del (J, ";")
+                             and then (Lw /= "return"
+                                       or else (J = K + 1
+                                                and then not
+                                                  (Is_Kw (J + 1, "exception")
+                                                   or else
+                                                     (Is_Kw (J + 1, "end")
+                                                      and then not
+                                                        (Is_Kw (J + 2, "if")
+                                                         or else Is_Kw (J + 2, "loop")
+                                                         or else Is_Kw (J + 2, "case")
+                                                         or else Is_Kw (J + 2, "select"))))))
+                           then
+                              Add (Statement_Deletion, K, J, "null;");
+                           end if;
+                        end;
+                     end if;
+
+                     if (Lw = "if" and then not Is_Kw (K - 1, "end"))
                        or else Lw = "elsif" or else Lw = "while"
                        or else (Lw = "when"
                                 and then (Is_Kw (K - 1, "exit")
