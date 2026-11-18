@@ -17,8 +17,8 @@ A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.
 
 ## Requirements
 
-- GNAT with Ada 2022 support (tested with GNAT 14) and GPRbuild
-- GNATprove, if you want to kill mutants by proof
+- GNAT with Ada 2022 support and GPRbuild (tested with GNAT 16.1 and GPRbuild 26; GNAT 14 builds it too)
+- GNATprove, if you want to kill mutants by proof (tested with GNATprove 16.1)
 - Python 3, to run the end-to-end tests
 
 ## Building
@@ -214,6 +214,7 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - The names of the kinds come from the messages of GNATprove (the part before `... might fail`). The names that a message quotes (of variables and subprograms) are not part of the kind. The messages of the flow analysis about objects that are not initialized are one kind, `initialization`
 - A message that the proof of the unchanged project has as well does not count (a message with the same text in the same file is taken to be the same one, whatever its line and column)
 - When no message can be read, `killedBy` is `["proof"]` as before
+- GNATprove 16 puts the place of a message on the next line (`--> file:line:col`). AdaMutant reads this format as well as the one-line format of older versions
 
 ## How it works
 

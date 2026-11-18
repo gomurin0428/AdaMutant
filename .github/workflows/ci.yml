@@ -12,8 +12,8 @@ jobs:
       - uses: alire-project/setup-alire@v4
       - name: Install GNAT, GPRbuild and GNATprove
         run: |
-          alr -n toolchain --select gnat_native gprbuild
-          alr -n get gnatprove
+          alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1
+          alr -n get gnatprove=16.1.0
           echo "$(dirname $(find ~/.local/share/alire -name gnat -path '*/bin/*' -type f | head -1))" >> $GITHUB_PATH
           echo "$(dirname $(find ~/.local/share/alire -name gprbuild -path '*/bin/*' -type f | head -1))" >> $GITHUB_PATH
           echo "$(find $PWD -maxdepth 3 -name bin -path '*gnatprove*' | head -1)" >> $GITHUB_PATH
