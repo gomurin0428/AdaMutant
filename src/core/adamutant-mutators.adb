@@ -682,7 +682,7 @@ package body AdaMutant.Mutators is
                      J := J + 1;
                   end if;
                end loop;
-               if Count = 0 or else Ops (1) /= K then
+               if Count = 0 or else Ops (1) /= K or else L = K then
                   return;
                end if;
                for I in 1 .. Count + 1 loop
@@ -1068,8 +1068,18 @@ package body AdaMutant.Mutators is
                         Add (Arithmetic_Operator, K, K, "*");
 
                      elsif Lw = "and" then
+                        --  Not the "and" of a list of interfaces ("new T
+                        --  and I with", "interface and I") outside aspects.
                         if Options.Enabled (Conjunct_Deletion)
                           and then In_Contract (K)
+                          and then (In_Aspect (K)
+                                    or else not
+                                      (Is_Kw (Seg_Start (K), "new")
+                                       or else Is_Kw (Seg_Start (K), "interface")
+                                       or else Is_Kw (Seg_Start (K), "limited")
+                                       or else Is_Kw (Seg_Start (K), "synchronized")
+                                       or else Is_Kw (Seg_Start (K), "task")
+                                       or else Is_Kw (Seg_Start (K), "protected")))
                         then
                            Add_Conjuncts (K);
                         end if;
@@ -1249,7 +1259,8 @@ package body AdaMutant.Mutators is
                                                 or else Is_Kw (J + 1, "else")
                                                 or else Is_Kw (J + 1, "when")
                                                 or else Is_Kw (J + 1, "exception")
-                                                or else Is_Kw (J + 1, "or"))
+                                                or else Is_Kw (J + 1, "or")
+                                                or else Is_Del (J + 1, "<<"))
                                     then "null;" else ""));
                            end if;
                         end;

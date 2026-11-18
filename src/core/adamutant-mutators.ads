@@ -71,8 +71,9 @@ package AdaMutant.Mutators is
       Contract    : Boolean := False;
    end record;
    --  Source (First .. Last) is replaced by Replacement.  Contract is set
-   --  when the mutation is in an aspect or in ghost code (which the
-   --  program only contains when assertions are enabled).
+   --  when the mutation is in a contract aspect, in ghost code or in an
+   --  assertion pragma (which the program only contains when assertions
+   --  are enabled).
 
    package Mutation_Vectors is new Ada.Containers.Vectors (Positive, Mutation);
 

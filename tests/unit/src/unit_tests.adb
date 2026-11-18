@@ -551,6 +551,42 @@ procedure Unit_Tests is
               "ConjunctDeletion A" & LF & "    and then B->B" & LF
               & "|ConjunctDeletion A" & LF & "    and then B->A" & LF,
               "contract weakening: line breaks", O);
+      --  Applied, every mutant keeps the lines of the source, so the
+      --  lines after it do not move.
+      declare
+         Source : constant String :=
+           "procedure R with" & LF
+           & "  Post => A" & LF
+           & "    and then B" & LF
+           & "    and then C;" & LF
+           & "procedure Q is begin" & LF
+           & "   pragma Assert (X > 0" & LF
+           & "                  and Y > 0);" & LF
+           & "   null;" & LF
+           & "end Q;" & LF;
+
+         function Lines (S : String) return Natural is
+            N : Natural := 0;
+         begin
+            for C of S loop
+               if C = ASCII.LF then
+                  N := N + 1;
+               end if;
+            end loop;
+            return N;
+         end Lines;
+
+         Same  : Boolean := True;
+         Count : Natural := 0;
+      begin
+         for M of Find (Source, O) loop
+            Count := Count + 1;
+            Same := Same and then Lines (Apply (Source, M)) = Lines (Source);
+         end loop;
+         Check (Same and then Count = 6,
+                "contract weakening: applied mutants keep the lines",
+                Count'Image);
+      end;
       --  Ghost code; not with Mutate_Contracts off.
       Expect ("procedure Lemma (X : Integer) with Ghost is" & LF
               & "begin" & LF
@@ -560,6 +596,15 @@ procedure Unit_Tests is
               & "|ConjunctDeletion X > 0 and X < 5->X < 5"
               & "|ConjunctDeletion X > 0 and X < 5->X > 0",
               "contract weakening: a lemma", O);
+      --  Not a list of interfaces of a ghost type; "null;" before a label
+      --  at the end of a sequence.
+      Expect ("package body Q is" & LF
+              & "   type GT is new Root and I1 with null record with Ghost;" & LF
+              & "   type I3 is interface and I1 with Ghost;" & LF
+              & "   procedure P is begin pragma Assert (X > 1); <<L2>> end P;" & LF
+              & "end Q;",
+              "AssertionDeletion pragma Assert (X > 1);->null;",
+              "contract weakening: interfaces and labels", O);
       O.Mutate_Contracts := False;
       Expect ("procedure P with Pre => A and B is begin" & LF
               & "pragma Assert (C and D); X := Y; end P;",
