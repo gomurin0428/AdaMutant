@@ -272,7 +272,7 @@ procedure Unit_Tests is
               & " end P;",
               "", "interface list and");
       Expect ("procedure P is begin return; end P;", "",
-              "return and null are not deleted");
+              "a return before the end of the body and null are not deleted");
    end Test_Skipped;
 
    procedure Test_Attributes is
@@ -384,6 +384,60 @@ procedure Unit_Tests is
                             .Contains ("x"),
              "type names of a spec");
    end Test_Loop_Direction;
+
+   procedure Test_Deletions is
+      O : Scan_Options;
+   begin
+      O.Enabled := [others => False];
+      O.Enabled (Statement_Deletion) := True;
+      --  Raise and return without a value, besides calls and
+      --  assignments; not a return right before "exception" or the end
+      --  of a body, nor an exit or delay statement.
+      Expect ("procedure P is begin" & LF
+              & "   loop exit when X > 3; X := X + 1; end loop;" & LF
+              & "   if Bad then raise Constraint_Error with ""bad""; else Y := 1; end if;" & LF
+              & "   if Done then Y := 2; return; end if;" & LF
+              & "   delay 0.1;" & LF
+              & "   <<L>> exit Outer;" & LF
+              & "   Y := (if B then 1 else raise E);" & LF
+              & "   return;" & LF
+              & "exception when others => raise;" & LF
+              & "end P;",
+              "StatementDeletion X := X + 1;->null;"
+              & "|StatementDeletion raise Constraint_Error with ""bad"";->null;"
+              & "|StatementDeletion Y := 1;->null;"
+              & "|StatementDeletion Y := 2;->null;"
+              & "|StatementDeletion return;->null;"
+              & "|StatementDeletion Y := (if B then 1 else raise E);->null;"
+              & "|StatementDeletion raise;->null;",
+              "statement deletion of raise and return", O);
+      --  A return with a value stays.
+      Expect ("function F return Integer is begin return 1; end F;", "",
+              "statement deletion keeps a return with a value", O);
+      --  The whole branch of an if without an else is condition -> False,
+      --  which ConditionalExpression makes; without it, it is deleted.
+      declare
+         Guard : constant String :=
+           "procedure P is begin" & LF
+           & "   if Bad then raise E; end if;" & LF
+           & "   if A then null; elsif Done then return; end if;" & LF
+           & "end P;";
+         C : Scan_Options := O;
+      begin
+         C.Enabled (Conditional_Expression) := True;
+         Check (Ada.Strings.Fixed.Index (Describe (Guard, C),
+                                         "StatementDeletion") = 0,
+                "statement deletion leaves guard clauses",
+                Describe (Guard, C));
+         Expect (Guard, "StatementDeletion raise E;->null;"
+                 & "|StatementDeletion return;->null;",
+                 "statement deletion of guard clauses without"
+                 & " ConditionalExpression", O);
+      end;
+      --  A raise or return at the very end of a file.
+      Expect ("procedure P is begin raise", "",
+              "statement deletion: raise at the end of a file", O);
+   end Test_Deletions;
 
    procedure Test_Comments is
    begin
@@ -2070,6 +2124,7 @@ begin
    Test_Comments;
    Test_Attributes;
    Test_Loop_Direction;
+   Test_Deletions;
    Test_Ghost_Names;
    Test_Contract_Flag;
    Test_Apply;
