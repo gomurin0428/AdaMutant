@@ -1279,7 +1279,7 @@ def check_library():
                     "vendor/src/vend.adb:7:10 ConditionalExpression True": "Killed",
                     "vendor/src/vend.adb:7:10 ConditionalExpression False": "Killed",
                     "vendor/src/vend.adb:7:12 EqualityOperator >=": "Survived",
-                    "vendor/src/vend.adb:7:12 EqualityOperator <=": "Killed",
+                    "vendor/src/vend.adb:7:12 EqualityOperator /=": "Killed",
                     "vendor/src/vend.adb:7:16 ArithmeticOperator -": "Survived"}
         errors = []
         # The objects of a mutant are compiled within a second of the build

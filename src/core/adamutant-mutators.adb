@@ -653,6 +653,119 @@ package body AdaMutant.Mutators is
             end;
          end Add_Logical;
 
+         function Is_Relational (J : Positive) return Boolean is
+           (Is_Del (J, "=") or else Is_Del (J, "/=") or else Is_Del (J, "<")
+            or else Is_Del (J, "<=") or else Is_Del (J, ">")
+            or else Is_Del (J, ">="));
+
+         procedure Relation (K : Positive; L, R : out Positive);
+         --  L .. R is the relation whose operator is at K, such as "A < B".
+
+         procedure Relation (K : Positive; L, R : out Positive) is
+            D : constant Natural := Depth (K);
+
+            --  J ends the relation: a boundary, a logical operator (with
+            --  its "then" or "else"), another relational operator or "in".
+            function Inside (J : Positive) return Boolean is
+              (Depth (J) > D
+               or else (Depth (J) = D
+                        and then not Is_Boundary (J)
+                        and then Op_Width (J) = 0
+                        and then not (Is_Kw (J, "then") and then Is_Kw (J - 1, "and"))
+                        and then not (Is_Kw (J, "else") and then Is_Kw (J - 1, "or"))
+                        and then not Is_Relational (J)
+                        and then not Is_Kw (J, "in")));
+         begin
+            L := K;
+            R := K;
+            while L > 1 and then Inside (L - 1) loop
+               L := L - 1;
+            end loop;
+            while R < N and then Inside (R + 1) loop
+               R := R + 1;
+            end loop;
+         end Relation;
+
+         function Zero (J : Positive) return Boolean is
+           (S (J).Kind = Numeric_Literal and then Squash (Txt (J)) = "0");
+         --  The integer literal 0.  In "X > 0" and "0 < X", the mutant "/="
+         --  differs from the relation only when X < 0, which a count, a
+         --  length or a Natural never is: it would mostly be equivalent.
+
+         --  EqualityOperator: the relation at K (its operator), such as "A
+         --  < B", replaced as a whole by Value ("False" or "True").  Not
+         --  when it is the whole condition of an if, elsif, while or exit
+         --  when, also in parentheses or under "not": ConditionalExpression
+         --  makes the same mutant, or the loop would never end ("while
+         --  True", "exit when False").  Not "False" for an entry barrier,
+         --  which would never open.  Not "True" for an operand of an "and"
+         --  in a contract, where ConjunctDeletion leaves the operand out.
+         procedure Add_Constant (K : Positive; Value : String) is
+            L, R   : Positive;
+            Lc, Rc : Positive;
+            --  The relation with the parentheses and "not" around it.
+            Holds  : Boolean := Value = "True";
+            --  What the mutant makes of Lc .. Rc.
+
+            function Exit_When (J : Integer) return Boolean is
+              (J > 2 and then Is_Kw (J, "when")
+               and then (Is_Kw (J - 1, "exit")
+                         or else (S (J - 1).Kind = Identifier
+                                  and then Is_Kw (J - 2, "exit"))));
+         begin
+            Relation (K, L, R);
+            if L = K or else R = K then
+               return;
+            end if;
+            Lc := L;
+            Rc := R;
+            loop
+               if Lc > 1 and then Rc < N and then Is_Del (Lc - 1, "(")
+                 and then Is_Del (Rc + 1, ")")
+                 and then Depth (Rc + 1) = Depth (Lc - 1) + 1
+               then
+                  Lc := Lc - 1;
+                  Rc := Rc + 1;
+               elsif Lc > 1 and then Is_Kw (Lc - 1, "not") then
+                  Lc := Lc - 1;
+                  Holds := not Holds;
+               else
+                  exit;
+               end if;
+            end loop;
+            declare
+               If_Cond    : constant Boolean :=
+                 ((Is_Kw (Lc - 1, "if") and then not Is_Kw (Lc - 2, "end"))
+                  or else Is_Kw (Lc - 1, "elsif"))
+                 and then Is_Kw (Rc + 1, "then");
+               While_Cond : constant Boolean :=
+                 Is_Kw (Lc - 1, "while") and then Is_Kw (Rc + 1, "loop");
+               Exit_Cond  : constant Boolean :=
+                 Exit_When (Lc - 1) and then Is_Del (Rc + 1, ";");
+               Barrier    : constant Boolean :=
+                 Is_Kw (Lc - 1, "when") and then Is_Kw (Rc + 1, "is");
+               In_And     : constant Boolean :=
+                 Is_Kw (Lc - 1, "and")
+                 or else (Is_Kw (Lc - 1, "then") and then Is_Kw (Lc - 2, "and"))
+                 or else Is_Kw (Rc + 1, "and");
+               CE         : constant Boolean :=
+                 Options.Enabled (Conditional_Expression);
+            begin
+               if (While_Cond and then (Holds or else CE))
+                 or else (Exit_Cond and then (not Holds or else CE))
+                 or else (If_Cond and then CE)
+                 or else (Barrier and then not Holds)
+                 or else (Holds and then In_And
+                          and then Options.Enabled (Conjunct_Deletion)
+                          and then Options.Mutate_Contracts
+                          and then In_Contract (K))
+               then
+                  return;
+               end if;
+            end;
+            Add (Equality_Operator, L, R, Value, Anchor => K);
+         end Add_Constant;
+
          --  ConjunctDeletion: the chain "A and B and C" (or with "and
          --  then") at K, its first operator, without one of its operands,
          --  for each operand: "B and C", "A and C", "A and B".  The line
@@ -1043,22 +1156,48 @@ package body AdaMutant.Mutators is
                         Add (Arithmetic_Operator, K, K, "*");
                      elsif Lw = "**" then
                         Add (Arithmetic_Operator, K, K, "*");
+                     --  A relation splits its inputs in three: A < B, A =
+                     --  B and A > B.  Each mutant differs from it in one
+                     --  of them only, so killing all three takes a test
+                     --  that checks the result in each (the sufficient
+                     --  set of Kaminski, Ammann and Offutt, 2011).  "=" and
+                     --  "/=" may compare records, which have no "<".
                      elsif Lw = "=" then
                         Add (Equality_Operator, K, K, "/=");
+                        Add_Constant (K, "False");
                      elsif Lw = "/=" then
                         Add (Equality_Operator, K, K, "=");
+                        Add_Constant (K, "True");
                      elsif Lw = "<" then
                         Add (Equality_Operator, K, K, "<=");
-                        Add (Equality_Operator, K, K, ">=");
+                        declare
+                           L, R : Positive;
+                        begin
+                           Relation (K, L, R);
+                           if not (L = K - 1 and then Zero (L)) then
+                              Add (Equality_Operator, K, K, "/=");
+                           end if;
+                        end;
+                        Add_Constant (K, "False");
                      elsif Lw = "<=" then
                         Add (Equality_Operator, K, K, "<");
-                        Add (Equality_Operator, K, K, ">");
+                        Add (Equality_Operator, K, K, "=");
+                        Add_Constant (K, "True");
                      elsif Lw = ">" then
                         Add (Equality_Operator, K, K, ">=");
-                        Add (Equality_Operator, K, K, "<=");
+                        declare
+                           L, R : Positive;
+                        begin
+                           Relation (K, L, R);
+                           if not (R = K + 1 and then Zero (R)) then
+                              Add (Equality_Operator, K, K, "/=");
+                           end if;
+                        end;
+                        Add_Constant (K, "False");
                      elsif Lw = ">=" then
                         Add (Equality_Operator, K, K, ">");
-                        Add (Equality_Operator, K, K, "<");
+                        Add (Equality_Operator, K, K, "=");
+                        Add_Constant (K, "True");
                      end if;
 
                   when Reserved_Word =>
