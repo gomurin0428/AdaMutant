@@ -47,7 +47,7 @@ Survived mutants:
 ## Requirements
 
 - GNAT with Ada 2022 support and GPRbuild (tested with GNAT 16.1 and GPRbuild 26; GNAT 14 builds it too)
-- GNATprove (required; tested with GNATprove 16.1). GNATprove only analyses SPARK code (`SPARK_Mode`), so the proof never detects a mutant in other code
+- GNATprove (required; tested with GNATprove 16.1). GNATprove only analyses SPARK code (`SPARK_Mode`), so the proof never detects a mutant in other code. GNATprove 16 fails when there is no SPARK code at all; for such a project, write `prove = "exit 0"` (a command that always passes), as [examples/calculator](examples/calculator) does
 - Python 3, to run the end-to-end tests
 
 ## Building

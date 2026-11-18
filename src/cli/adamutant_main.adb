@@ -278,8 +278,13 @@ exception
       Put_Line (Standard_Error, "error: " & Ada.Exceptions.Exception_Message (E));
       Put_Line (Standard_Error, "Run 'adamutant --help' for usage.");
       Set_Exit_Status (Exit_Error);
+   when E : AdaMutant.Runner.Run_Error =>
+      Put_Line (Standard_Error, "error: " & Ada.Exceptions.Exception_Message (E));
+      if AdaMutant.Runner.Details /= "" then
+         Put_Line (Standard_Error, AdaMutant.Runner.Details);
+      end if;
+      Set_Exit_Status (Exit_Error);
    when E : AdaMutant.Config.Config_Error
-      | AdaMutant.Runner.Run_Error
       | AdaMutant.Files.File_Error =>
       Put_Line (Standard_Error, "error: " & Ada.Exceptions.Exception_Message (E));
       Set_Exit_Status (Exit_Error);

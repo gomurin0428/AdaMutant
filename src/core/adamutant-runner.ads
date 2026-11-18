@@ -7,6 +7,11 @@ package AdaMutant.Runner is
 
    Run_Error : exception;
 
+   function Details return String;
+   --  More about the Run_Error that Execute raised last (the command, its
+   --  log and the end of it, what to do), or "".  GNAT keeps no more than
+   --  200 characters of an exception message.
+
    function Discover
      (Settings : AdaMutant.Config.Configuration;
       Only     : AdaMutant.Files.String_Vectors.Vector;

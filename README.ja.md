@@ -47,7 +47,7 @@ Survived mutants:
 ## 必要なもの
 
 - GNAT（Ada 2022 対応）と GPRbuild（GNAT 16.1 と GPRbuild 26 で確認。GNAT 14 でもビルドできます）
-- GNATprove（必須。GNATprove 16.1 で確認）。GNATprove は SPARK のコード（`SPARK_Mode`）しか解析しないので、それ以外のコードのミュータントを証明が検出することはありません
+- GNATprove（必須。GNATprove 16.1 で確認）。GNATprove は SPARK のコード（`SPARK_Mode`）しか解析しないので、それ以外のコードのミュータントを証明が検出することはありません。SPARK のコードが 1 つもないと、GNATprove 16 は失敗で終わります。そのようなプロジェクトでは `prove = "exit 0"`（必ず通るコマンド）と書きます（[examples/calculator](examples/calculator) がこの例です）
 - E2E テストを動かす場合は Python 3
 
 ## ビルド
