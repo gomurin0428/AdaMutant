@@ -15,7 +15,8 @@ package AdaMutant.Mutators is
       Conditional_Expression,
       Statement_Deletion,
       Numeric_Literal,
-      String_Literal);
+      String_Literal,
+      Attribute_Swap);
 
    type Mutator_Set is array (Mutator_Kind) of Boolean;
 
