@@ -358,18 +358,40 @@ package body AdaMutant.Runner is
                         Depth : Natural := 0;
                         Stop  : Natural := 0;
                      begin
+                        --  The parentheses of the values count, but not
+                        --  those in a character (')') or in a string.
                         if Start > 0 then
-                           for K in Start + 1 .. Msg'Last loop
-                              if Msg (K) = '(' then
-                                 Depth := Depth + 1;
-                              elsif Msg (K) = ')' then
-                                 Depth := Depth - 1;
-                                 if Depth = 0 then
-                                    Stop := K;
-                                    exit;
+                           declare
+                              K : Positive := Start + 1;
+                           begin
+                              while K <= Msg'Last loop
+                                 if Msg (K) = '''
+                                   and then K + 2 <= Msg'Last
+                                   and then Msg (K + 2) = '''
+                                 then
+                                    K := K + 2;
+                                 elsif Msg (K) = '"' then
+                                    --  "" in a string is one quote.
+                                    K := K + 1;
+                                    while K <= Msg'Last
+                                      and then (Msg (K) /= '"'
+                                                or else (K < Msg'Last
+                                                  and then Msg (K + 1) = '"'))
+                                    loop
+                                       K := K + (if Msg (K) = '"' then 2 else 1);
+                                    end loop;
+                                 elsif Msg (K) = '(' then
+                                    Depth := Depth + 1;
+                                 elsif Msg (K) = ')' then
+                                    Depth := Depth - 1;
+                                    if Depth = 0 then
+                                       Stop := K;
+                                       exit;
+                                    end if;
                                  end if;
-                              end if;
-                           end loop;
+                                 K := K + 1;
+                              end loop;
+                           end;
                         end if;
                         --  The text up to the counterexample, as in the
                         --  other format: the counterexample is not part of

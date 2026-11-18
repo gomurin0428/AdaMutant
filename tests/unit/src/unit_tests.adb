@@ -613,6 +613,30 @@ procedure Unit_Tests is
                    (if P.Is_Empty then "none"
                     else To_String (P (1).Example)));
          end;
+         --  Parentheses in characters and strings are not those of the
+         --  counterexample; an attribute is not a character.
+         declare
+            use AdaMutant.Runner.Proof_Message_Vectors;
+            P : constant Vector := Proof_Messages
+              ("p.adb:4:7: high: assertion might fail (e.g. when C = ')')"
+               & " [x]" & LF
+               & "p.adb:5:7: high: assertion might fail (e.g. when C = '('"
+               & " and S = ""a("""")b"" and N = Count'Last)" & LF
+               & "p.adb:6:7: high: assertion might fail (e.g. when C = '''"
+               & " and D = (1, 2))" & LF);
+         begin
+            Check (Natural (P.Length) = 3
+                   and then To_String (P (1).Example) = "e.g. when C = ')'"
+                   and then To_String (P (2).Example)
+                            = "e.g. when C = '(' and S = ""a("""")b"" and"
+                              & " N = Count'Last"
+                   and then To_String (P (3).Example)
+                            = "e.g. when C = ''' and D = (1, 2)",
+                   "proof messages: parentheses in characters and strings",
+                   (if P.Is_Empty then "none"
+                    else To_String (P (1).Example) & " | "
+                      & To_String (P (P.Last_Index).Example)));
+         end;
          Check (Proof_Failures ("gnatprove: error" & LF).Is_Empty,
                 "proof failures: none");
       end;
