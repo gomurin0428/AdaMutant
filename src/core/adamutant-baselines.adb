@@ -287,9 +287,12 @@ package body AdaMutant.Baselines is
       if M.Status = Timeout and then Starts_With (Reason, Old_Proof_Timeout)
       then
          M.Status := Survived;
+         --  No "coveredBy" and no "testsCompleted": an earlier version
+         --  that ran the proof alone.
          M.Status_Reason := To_Unbounded_String
            ((if M.Reached = Not_Covered
              then "no test executes this code, and "
+             elsif M.Tests_Run = 0 then ""
              else "the tests passed, and ")
             & Proof_Unfinished & From_Baseline);
          M.Killed_By := None;

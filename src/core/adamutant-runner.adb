@@ -25,10 +25,19 @@ package body AdaMutant.Runner is
          Last_Details := Null_Unbounded_String;
          raise Run_Error with Text;
       end if;
-      --  The whole text after the message, which GNAT cuts at 200.
+      --  The whole text after the message, which GNAT cuts at 200.  The
+      --  message ends before a character of UTF-8, not inside one.
       Last_Details := To_Unbounded_String (Text);
-      raise Run_Error with
-        Text (Text'First .. Text'First + 179) & " ... (below)";
+      declare
+         Last : Natural := Text'First + 179;
+      begin
+         while Last > Text'First
+           and then Character'Pos (Text (Last + 1)) in 16#80# .. 16#BF#
+         loop
+            Last := Last - 1;
+         end loop;
+         raise Run_Error with Text (Text'First .. Last) & " ... (below)";
+      end;
    end Fail;
 
    use AdaMutant.Config;
@@ -1902,7 +1911,9 @@ package body AdaMutant.Runner is
                   if Warn /= null then
                      Warn ("the search for equivalent mutants has stopped: "
                            & Ada.Exceptions.Exception_Name (E) & ": "
-                           & Ada.Exceptions.Exception_Message (E));
+                           & Ada.Exceptions.Exception_Message (E)
+                           & (if Details = "" then ""
+                              else ASCII.LF & Details));
                   end if;
             end;
          end if;

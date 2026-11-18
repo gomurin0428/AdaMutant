@@ -529,6 +529,17 @@ procedure Unit_Tests is
                       "run error: a long message",
                       Ada.Exceptions.Exception_Message (E)'Length'Image);
          end;
+         --  Not inside a character of UTF-8 ("é" is 2 bytes, at 180).
+         begin
+            Fail ([1 .. 179 => 'x'] & Character'Val (16#C3#)
+                  & Character'Val (16#A9#) & [1 .. 100 => 'y']);
+         exception
+            when E : Run_Error =>
+               Check (Ada.Exceptions.Exception_Message (E)
+                      = [1 .. 179 => 'x'] & " ... (below)",
+                      "run error: cut before a character",
+                      Ada.Exceptions.Exception_Message (E));
+         end;
          begin
             Fail ("short");
          exception
@@ -1274,8 +1285,9 @@ procedure Unit_Tests is
                 = " Survived* Timeout* Ignored Ignored Ignored Ignored"
                 and then Slow.Mutants (1).Killed_By = None
                 and then Proof_Timed_Out (Slow.Mutants (1))
+                --  No test ran in that version: the reason does not say so.
                 and then Index (Slow.Mutants (1).Status_Reason,
-                                "the tests passed, and ") = 1
+                                "the proof did not finish") = 1
                 and then not Proof_Timed_Out (Slow.Mutants (2)),
                 "baseline: with --since a proof that timed out survives",
                 Reused'Image & Statuses (Slow));
