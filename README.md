@@ -76,18 +76,21 @@ The proof only sees the mutants that the tests do not detect (tests first). For 
 
 ## Requirements
 
-- GNAT with Ada 2022 support and GPRbuild (tested with GNAT 16.1 and GPRbuild 26; GNAT 14 builds it too)
+- [Alire](https://alire.ada.dev), which gets [Libadalang](https://github.com/AdaCore/libadalang) 26 and the compiler that it supports (GNAT 15 for Libadalang 26) to build AdaMutant. The projects under test are built and proved with whatever compilers their own commands use (tested with GNAT 16.1 and GNATprove 16.1)
 - GNATprove, for the proof (tested with GNATprove 16.1). The `prove` command is required. GNATprove only analyses SPARK code (`SPARK_Mode`), so the proof never detects a mutant in other code. GNATprove 16 fails when there is no SPARK code at all; for such a project, write `prove = "exit 0"` (a command that always passes, so GNATprove is not needed), as [examples/calculator](examples/calculator) does
 - Python 3, to run the end-to-end tests
 
 ## Building
 
 ```sh
-make build        # produces bin/adamutant
+alr build         # produces bin/adamutant, with Libadalang
+make build        # the same, stopping at any warning
 make test         # unit tests + end-to-end tests that use the examples
 ```
 
-With [Alire](https://alire.ada.dev), `alr build` builds the same `bin/adamutant` and gets the compiler for you. A build with Alire does not stop at warnings (`ADAMUTANT_WARNINGS_AS_ERRORS=false`); `make build` does.
+`alr build` gets Libadalang, its dependencies and the compiler, and does not stop at warnings (`ADAMUTANT_WARNINGS_AS_ERRORS=false`). The Makefile runs gprbuild in the environment of the Alire workspace (`alr exec --`) and stops at warnings; with the projects of Libadalang already on `GPR_PROJECT_PATH`, `make ALR_EXEC=` runs it directly. Libadalang is linked statically, so `bin/adamutant` is about 125 MB, and the first build takes about 20 minutes.
+
+A file to mutate must be Ada that Libadalang can parse: AdaMutant stops at a file with a syntax error (for example input for gnatprep), as it does at one that cannot be read.
 
 ## Usage
 

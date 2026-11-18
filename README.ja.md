@@ -76,18 +76,21 @@ Survived mutants:
 
 ## 必要なもの
 
-- GNAT（Ada 2022 対応）と GPRbuild（GNAT 16.1 と GPRbuild 26 で確認。GNAT 14 でもビルドできます）
+- [Alire](https://alire.ada.dev)。AdaMutant のビルドに使う [Libadalang](https://github.com/AdaCore/libadalang) 26 と、それが対応するコンパイラ（Libadalang 26 なら GNAT 15）を用意します。テストするプロジェクトのビルドと証明には、そのプロジェクトのコマンドが使うコンパイラを使います（GNAT 16.1 と GNATprove 16.1 で確認）
 - 証明に GNATprove（GNATprove 16.1 で確認）。`prove` のコマンドは必須です。GNATprove は SPARK のコード（`SPARK_Mode`）しか解析しないので、それ以外のコードのミュータントを証明が検出することはありません。SPARK のコードが 1 つもないと、GNATprove 16 は失敗で終わります。そのようなプロジェクトでは `prove = "exit 0"`（必ず通るコマンドで、GNATprove は要りません）と書きます（[examples/calculator](examples/calculator) がこの例です）
 - E2E テストを動かす場合は Python 3
 
 ## ビルド
 
 ```sh
-make build        # bin/adamutant ができる
+alr build         # Libadalang を含めて bin/adamutant ができる
+make build        # 同じものを、警告で止まるようにビルドする
 make test         # 単体テスト + examples を使った E2E テスト
 ```
 
-[Alire](https://alire.ada.dev) を使う場合は、`alr build` で同じ `bin/adamutant` ができ、コンパイラも Alire が用意します。Alire でのビルドは警告では止まりません（`ADAMUTANT_WARNINGS_AS_ERRORS=false`）。`make build` は警告で止まります。
+`alr build` は、Libadalang とその依存先、コンパイラを用意します。警告では止まりません（`ADAMUTANT_WARNINGS_AS_ERRORS=false`）。Makefile は、Alire の作業環境で gprbuild を実行し（`alr exec --`）、警告で止まります。Libadalang のプロジェクトがすでに `GPR_PROJECT_PATH` にあるときは、`make ALR_EXEC=` でそのまま実行します。Libadalang を静的にリンクするので、`bin/adamutant` はおよそ 125 MB になり、最初のビルドには 20 分ほどかかります。
+
+変異させるファイルは、Libadalang が構文解析できる Ada でなければなりません。構文エラーのあるファイル（gnatprep の入力など）があると、読めないファイルと同じく、AdaMutant はそこで止まります。
 
 ## 使い方
 
