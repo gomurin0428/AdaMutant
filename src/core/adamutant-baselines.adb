@@ -202,7 +202,9 @@ package body AdaMutant.Baselines is
       --  was no proof), a survivor of the tests alone or of the proof
       --  alone, or a mutant that the proof killed without any test (no
       --  "coveredBy", no "testsCompleted").  Now a mutant goes to the
-      --  tests first and then to the proof, whatever happened before.
+      --  tests first and then to the proof, whatever happened before.  Such
+      --  a result is not reused: the mutant runs again, or, on a line
+      --  unchanged since the revision of --since, stays Ignored.
       use AdaMutant.Json;
       Status : constant String := Text_Field (Old, "status");
       Reason : constant String := Text_Field (Old, "statusReason");

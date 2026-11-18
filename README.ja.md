@@ -246,7 +246,7 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - GNATprove 16 は、メッセージの場所を次の行（`--> file:line:col`）に出します。AdaMutant は、この形式も、それより前の版の 1 行の形式も読みます
 - 証明だけが検出したミュータントは、コンソールの `Detected only by the proof (candidates for a missing test):` にも 1 つずつ出ます。括弧の中は証明できなかった検査の種類です。どのテストも実行しない場所のミュータントには `no test executes this code` が付きます
 - 証明が時間内に終わらなかったミュータントは Survived です（`statusReason` は `... the proof did not finish within the timeout`）。証明が失敗するはずなのか、遅いだけなのかを区別できないためです。`--baseline` では、以前の版のレポートにある証明の Timeout は実行し直します。`--since` のリビジョンから変わっていない行では、Survived として再利用します
-- 以前の版は、テストだけ、証明だけでも回せました。`--baseline` では、今の版なら出さない結果は、どの場合も実行し直します。NoCoverage、テストだけまたは証明だけで生き残ったもの、テストをせずに証明が検出したものです
+- 以前の版は、テストだけ、証明だけでも回せました。`--baseline` では、今の版なら出さない結果は再利用しません。NoCoverage、テストだけまたは証明だけで生き残ったもの、テストをせずに証明が検出したものです。そのミュータントは実行し直します。ただし、`--since` のリビジョンから変わっていない行では、`--since` だけのときと同じく Ignored（`unchanged since REF`）のままです
 
 ## 仕組み
 

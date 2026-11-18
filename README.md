@@ -246,7 +246,7 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - GNATprove 16 puts the place of a message on the next line (`--> file:line:col`). AdaMutant reads this format as well as the one-line format of older versions
 - The console also lists each mutant that only the proof detects under `Detected only by the proof (candidates for a missing test):`. The parentheses hold the kinds of the checks that could not be proved. A mutant in a place that no test executes also gets `no test executes this code`
 - A mutant whose proof does not finish in time is Survived (its `statusReason` ends with `the proof did not finish within the timeout`), because a proof that would fail cannot be told apart from one that is only slow. With `--baseline`, a proof Timeout in a report of an earlier version runs again, or is reused as Survived on lines unchanged since the revision of `--since`
-- Earlier versions could run the tests alone or the proof alone. With `--baseline`, their results that this version would not give run again in every case: NoCoverage, a survivor of the tests alone or of the proof alone, and a mutant that the proof killed without any test
+- Earlier versions could run the tests alone or the proof alone. With `--baseline`, their results that this version would not give are never reused: NoCoverage, a survivor of the tests alone or of the proof alone, and a mutant that the proof killed without any test. Such a mutant runs again, or, on a line unchanged since the revision of `--since`, stays Ignored (`unchanged since REF`) as with `--since` alone
 
 ## How it works
 
