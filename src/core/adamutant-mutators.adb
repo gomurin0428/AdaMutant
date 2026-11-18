@@ -1,11 +1,15 @@
 with Ada.Characters.Handling; use Ada.Characters.Handling;
+with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Wide_Wide_Unbounded;
 with Langkit_Support.Diagnostics;
 with Langkit_Support.Slocs;
 with Langkit_Support.Text;
+with Langkit_Support.Errors;
+with Langkit_Support.Generic_API.Analysis;
 with Libadalang.Analysis;
 with Libadalang.Common;
+with Libadalang.Generic_API;
 with AdaMutant.Lexer; use AdaMutant.Lexer;
 
 package body AdaMutant.Mutators is
@@ -18,6 +22,7 @@ package body AdaMutant.Mutators is
    use all type LC.Ada_Node_Kind_Type;
    use type LC.Token_Kind;
    use type LC.Token_Reference;
+   use type LC.Grammar_Rule;
 
    function Name (Kind : Mutator_Kind) return String is
      (case Kind is
@@ -317,39 +322,53 @@ package body AdaMutant.Mutators is
    --  A file is a compilation.  The other rules take fragments, such as
    --  the statements or the declarations that the unit tests pass.
 
-   --  Source parsed with the first of Rules that has no diagnostics, as
-   --  Latin-1 and then, when that fails, as UTF-8.  When nothing parses,
-   --  raises Lexical_Error with the first diagnostic of the compilation
-   --  rule, or with Tolerant, gives the tree that Libadalang recovered
-   --  from the errors.
-   function Parse_Tree (Source : String; Tolerant : Boolean) return Syntax_Tree
+   --  The first node of the tree under Root that Libadalang could not
+   --  complete, or No_Ada_Node.  After some syntax errors ("X := (1 + ;")
+   --  Libadalang gives no diagnostic, only incomplete nodes.
+   function First_Incomplete (Root : LAL.Ada_Node) return LAL.Ada_Node is
+      Found : LAL.Ada_Node := LAL.No_Ada_Node;
+
+      function Visit (N : LAL.Ada_Node'Class) return LC.Visit_Status is
+      begin
+         if Langkit_Support.Generic_API.Analysis.Is_Incomplete
+              (Libadalang.Generic_API.To_Generic_Node (N))
+         then
+            Found := N.As_Ada_Node;
+            return LC.Stop;
+         end if;
+         return LC.Into;
+      end Visit;
+
+   begin
+      if not Root.Is_Null then
+         Root.Traverse (Visit'Access);
+      end if;
+      return Found;
+   end First_Incomplete;
+
+   --  Source parsed with the first of Rules that gives a complete tree
+   --  without diagnostics (with Whole_Units, the compilation rule only), as
+   --  Latin-1 and then, when that fails, as UTF-8; then the same with the
+   --  brackets of Bracket_Strings, when the source has '["'.  When nothing
+   --  parses, raises Lexical_Error with the first error of the compilation
+   --  rule, or with Tolerant, gives the tree that Libadalang recovered from
+   --  the errors.
+   function Parse_Tree
+     (Source      : String;
+      Tolerant    : Boolean;
+      Whole_Units : Boolean := False) return Syntax_Tree
    is
       BOM   : constant String :=
         Character'Val (16#EF#) & Character'Val (16#BB#)
         & Character'Val (16#BF#);
       Lines : Positive := 1;
       Line  : Positive := 1;
-   begin
-      for C of Source loop
-         if C = ASCII.LF then
-            Lines := Lines + 1;
-         end if;
-      end loop;
-      return T : Syntax_Tree (Source'First, Source'Last, Lines) do
-         T.Text := Source;
-         if Source'Length >= 3
-           and then Source (Source'First .. Source'First + 2) = BOM
-         then
-            T.Text (Source'First .. Source'First + 2) := "   ";
-         end if;
-         Bracket_Strings (T.Text);
-         T.Starts (1) := Source'First;
-         for I in Source'Range loop
-            if Source (I) = ASCII.LF then
-               Line := Line + 1;
-               T.Starts (Line) := I + 1;
-            end if;
-         end loop;
+      Plain : String := Source;
+
+      --  T gets the tree of Text when one of the rules parses it.
+      function Parsed (T : in out Syntax_Tree; Text : String) return Boolean
+      is
+      begin
          for UTF_8 in Boolean loop
             exit when UTF_8 and then not Is_UTF_8 (Source);
             declare
@@ -359,23 +378,65 @@ package body AdaMutant.Mutators is
                T.Context :=
                  LAL.Create_Context (Charset => Charset, Tab_Stop => 1);
                for Rule of Rules loop
+                  exit when Whole_Units and then Rule /= LC.Compilation_Rule;
                   declare
                      Unit : constant LAL.Analysis_Unit :=
                        T.Context.Get_From_Buffer
                          (Filename => Rule'Image & ".adb",
                           Charset  => Charset,
-                          Buffer   => T.Text,
+                          Buffer   => Text,
                           Rule     => Rule);
                   begin
-                     if not Unit.Has_Diagnostics then
+                     if not Unit.Has_Diagnostics
+                       and then First_Incomplete (Unit.Root).Is_Null
+                     then
                         T.Root := Unit.Root;
                         T.UTF_8 := UTF_8;
-                        return;
+                        T.Text := Text;
+                        return True;
                      end if;
                   end;
                end loop;
             end;
          end loop;
+         return False;
+      end Parsed;
+   begin
+      for C of Source loop
+         if C = ASCII.LF then
+            Lines := Lines + 1;
+         end if;
+      end loop;
+      if Source'Length >= 3
+        and then Source (Source'First .. Source'First + 2) = BOM
+      then
+         Plain (Source'First .. Source'First + 2) := "   ";
+      end if;
+      return T : Syntax_Tree (Source'First, Source'Last, Lines) do
+         T.Text := Plain;
+         T.Starts (1) := Source'First;
+         for I in Source'Range loop
+            if Source (I) = ASCII.LF then
+               Line := Line + 1;
+               T.Starts (Line) := I + 1;
+            end if;
+         end loop;
+         if Parsed (T, Plain) then
+            return;
+         end if;
+         --  Only when the source does not parse as it is: GNAT's brackets
+         --  notation in an identifier (["03C0"]) does.
+         if Ada.Strings.Fixed.Index (Plain, "[""") > 0 then
+            declare
+               Bracketed : String := Plain;
+            begin
+               Bracket_Strings (Bracketed);
+               if Parsed (T, Bracketed) then
+                  return;
+               end if;
+            end;
+         end if;
+         T.Text := Plain;
          T.Context :=
            LAL.Create_Context (Charset => "iso-8859-1", Tab_Stop => 1);
          declare
@@ -385,15 +446,30 @@ package body AdaMutant.Mutators is
                  Charset  => "iso-8859-1",
                  Buffer   => T.Text,
                  Rule     => LC.Compilation_Rule);
-            D    : constant Langkit_Support.Diagnostics.Diagnostic :=
-              Unit.Diagnostics (Unit.Diagnostics'First);
          begin
             if not Tolerant then
-               raise Lexical_Error with
-                 "line" & Positive (D.Sloc_Range.Start_Line)'Image & ": "
-                 & Langkit_Support.Text.To_UTF8
-                     (Ada.Strings.Wide_Wide_Unbounded.To_Wide_Wide_String
-                        (D.Message));
+               if Unit.Has_Diagnostics then
+                  declare
+                     D : constant Langkit_Support.Diagnostics.Diagnostic :=
+                       Unit.Diagnostics (Unit.Diagnostics'First);
+                  begin
+                     raise Lexical_Error with
+                       "line" & Positive (D.Sloc_Range.Start_Line)'Image
+                       & ": "
+                       & Langkit_Support.Text.To_UTF8
+                           (Ada.Strings.Wide_Wide_Unbounded
+                              .To_Wide_Wide_String (D.Message));
+                  end;
+               end if;
+               declare
+                  N : constant LAL.Ada_Node := First_Incomplete (Unit.Root);
+               begin
+                  raise Lexical_Error with
+                    "line"
+                    & (if N.Is_Null then " 1"
+                       else Positive (N.Sloc_Range.Start_Line)'Image)
+                    & ": the syntax is incomplete";
+               end;
             end if;
             T.Root := Unit.Root;
          end;
@@ -600,7 +676,9 @@ package body AdaMutant.Mutators is
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector
    is
-      T : constant Syntax_Tree := Parse_Tree (Source, Tolerant => False);
+      T : constant Syntax_Tree :=
+        Parse_Tree (Source, Tolerant => False,
+                    Whole_Units => Options.Whole_Units);
 
       --  The ghost names of the spec and of Source.
       Ghosts : Name_Sets.Set := Options.Ghost_Names;
@@ -1555,6 +1633,14 @@ package body AdaMutant.Mutators is
             Result.Append (F.Change);
          end loop;
       end return;
+   exception
+      --  A tree that Libadalang could not build as the walk expects.
+      when E : Langkit_Support.Errors.Precondition_Failure
+             | Langkit_Support.Errors.Property_Error
+             | Langkit_Support.Errors.Native_Exception =>
+         raise Lexical_Error with
+           "line 1: the syntax tree cannot be read ("
+           & Ada.Exceptions.Exception_Message (E) & ")";
    end Find;
 
    function Apply (Source : String; M : Mutation) return String is

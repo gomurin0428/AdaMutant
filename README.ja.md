@@ -90,7 +90,7 @@ make test         # 単体テスト + examples を使った E2E テスト
 
 `alr build` は、Libadalang とその依存先、コンパイラを用意します。警告では止まりません（`ADAMUTANT_WARNINGS_AS_ERRORS=false`）。Makefile は、Alire の作業環境で gprbuild を実行し（`alr exec --`）、警告で止まります。Libadalang のプロジェクトがすでに `GPR_PROJECT_PATH` にあるときは、`make ALR_EXEC=` でそのまま実行します。Libadalang を静的にリンクするので、`bin/adamutant` はおよそ 125 MB になり、最初のビルドには 20 分ほどかかります。
 
-変異させるファイルは、Libadalang が構文解析できる Ada でなければなりません。構文エラーのあるファイル（gnatprep の入力など）があると、読めないファイルと同じく、AdaMutant はそこで止まります。
+変異させるファイルは、Libadalang が構文解析できるコンパイル単位でなければなりません。構文エラーのあるファイル（gnatprep の入力や、Libadalang 26 が知らない GNAT の言語拡張 `return when`、`finally` など）があると、読めないファイルと同じく、AdaMutant はそこで止まります。
 
 ## 使い方
 

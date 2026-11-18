@@ -90,7 +90,7 @@ make test         # unit tests + end-to-end tests that use the examples
 
 `alr build` gets Libadalang, its dependencies and the compiler, and does not stop at warnings (`ADAMUTANT_WARNINGS_AS_ERRORS=false`). The Makefile runs gprbuild in the environment of the Alire workspace (`alr exec --`) and stops at warnings; with the projects of Libadalang already on `GPR_PROJECT_PATH`, `make ALR_EXEC=` runs it directly. Libadalang is linked statically, so `bin/adamutant` is about 125 MB, and the first build takes about 20 minutes.
 
-A file to mutate must be Ada that Libadalang can parse: AdaMutant stops at a file with a syntax error (for example input for gnatprep), as it does at one that cannot be read.
+A file to mutate must be a compilation unit that Libadalang can parse: AdaMutant stops at a file with a syntax error (for example input for gnatprep, or GNAT's language extensions that Libadalang 26 does not know, such as `return when` and `finally`), as it does at one that cannot be read.
 
 ## Usage
 

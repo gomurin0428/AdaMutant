@@ -54,6 +54,10 @@ package AdaMutant.Mutators is
       --  scanned source (usually in its spec): LoopDirection takes a loop
       --  over one of these names for a loop over a range.
       Type_Names       : Name_Sets.Set;
+      --  Source is a whole compilation unit, as a file is: it must parse as
+      --  one.  Otherwise statements, declarations or an expression alone
+      --  are taken too (as the unit tests pass them).
+      Whole_Units      : Boolean := False;
    end record;
 
    function Ghost_Names (Source : String) return Name_Sets.Set;

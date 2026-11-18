@@ -916,6 +916,44 @@ procedure Unit_Tests is
               "StatementDeletion raise E with ""bad"";->null;"
               & "|StringLiteral ""bad""->""""",
               "syntax tree: the message of a raise statement");
+      --  GNAT's brackets notation in an identifier parses as it is.
+      Expect ("procedure [""03C0""] is begin X := 1; end [""03C0""];",
+              "StatementDeletion X := 1;->null;|NumericLiteral 1->0",
+              "syntax tree: a bracket-encoded identifier");
+      --  Syntax errors after which Libadalang gives no diagnostic, only
+      --  incomplete nodes; and with Whole_Units, a file that is no
+      --  compilation unit.
+      declare
+         Whole : constant Scan_Options := (Whole_Units => True, others => <>);
+
+         function Raises (Source : String; Options : Scan_Options)
+           return Boolean is
+         begin
+            declare
+               Found : constant Mutation_Vectors.Vector :=
+                 Find (Source, Options);
+            begin
+               return Found.Is_Empty and then False;
+            end;
+         exception
+            when E : AdaMutant.Lexer.Lexical_Error =>
+               return Ada.Exceptions.Exception_Message (E)'Length > 5
+                 and then Ada.Exceptions.Exception_Message (E)
+                            (Ada.Exceptions.Exception_Message (E)'First
+                             .. Ada.Exceptions.Exception_Message (E)'First + 4)
+                          = "line ";
+         end Raises;
+      begin
+         Check (Raises ("procedure P is begin" & LF & "X := (1 + ;" & LF
+                        & "end P;", (others => <>))
+                and then Raises ("procedure P is begin X := (A and then ;"
+                                 & " end P;", Whole),
+                "syntax tree: incomplete syntax raises Lexical_Error");
+         Check (Raises ("package body P is end P;" & LF
+                        & "Y : Integer := 2;", Whole)
+                and then not Raises ("Y : Integer := 2;", (others => <>)),
+                "syntax tree: a file must be a compilation unit");
+      end;
    end Test_Syntax_Tree;
 
    procedure Test_Ghost_Names is

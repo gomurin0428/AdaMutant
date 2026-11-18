@@ -92,6 +92,8 @@ package body AdaMutant.Runner is
                Options : Scan_Options := Settings.Scan;
                Found   : Mutation_Vectors.Vector;
             begin
+               --  A file is a compilation unit, never a fragment.
+               Options.Whole_Units := True;
                begin
                   --  Also when contracts are mutated: the mutations in
                   --  ghost code are known as such.
@@ -1455,8 +1457,17 @@ package body AdaMutant.Runner is
                           M.Mutation.Kind = Statement_Deletion));
                end if;
             end loop;
-            Schemas (F) := AdaMutant.Schemata.Build
-              (To_String (R.Files (F).Source), Candidates, Tag => F);
+            begin
+               Schemas (F) := AdaMutant.Schemata.Build
+                 (To_String (R.Files (F).Source), Candidates, Tag => F);
+            exception
+               --  The lexer of the combined build cannot read everything
+               --  that Libadalang parses (an identifier that starts with
+               --  "_", in GNAT's own units): the mutants of such a file
+               --  are built one at a time.
+               when AdaMutant.Lexer.Lexical_Error =>
+                  null;
+            end;
          end Generate;
 
          procedure Write_Sources (Slot : Positive; Restore : Boolean) is
