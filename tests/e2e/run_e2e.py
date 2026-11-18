@@ -974,10 +974,10 @@ def check_proof_log():
                      " (initialization)",
                      " (the proof timed out)",
                      # What to do about it, without a steps limit.
-                     "  (The proof of 1 mutant did not finish in time.  A goal"
-                     " that a mutant makes fail keeps the provers up to their"
-                     " limit: with a steps limit (gnatprove --steps) they stop"
-                     " there"):
+                     "  (The proof of 1 mutant did not finish in time.  On a"
+                     " goal that a mutant makes fail, the provers run up to"
+                     " their time limit; a steps limit (gnatprove --steps)"
+                     " usually stops them much sooner."):
             if line not in proc.stdout:
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
@@ -1008,8 +1008,9 @@ def check_proof_log():
             for line in config.read_text().splitlines(True)))
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        want = ("  (The proof of 1 mutant did not finish in time.  A lower steps"
-                " limit (--steps) stops the provers sooner")
+        want = ("  (The proof of 1 mutant did not finish in time.  On a goal that"
+                " a mutant makes fail, a lower steps limit (--steps, still enough"
+                " for the unmodified project) stops the provers sooner")
         if proc.returncode != 0 or want not in proc.stdout:
             errors.append(f"with --steps: exit status {proc.returncode},"
                           f" output lacks {want!r}\n{proc.stdout}")
@@ -1055,6 +1056,9 @@ def check_prove_cache():
         if proc.returncode != 0:
             return [f"exit status {proc.returncode}\n{proc.stdout}"]
         errors = []
+        # Survivors whose proof finished: no note about time limits.
+        if "Survived mutants:" not in proc.stdout or "did not finish in time" in proc.stdout:
+            errors.append(f"survivors and a note about time limits\n{proc.stdout}")
         caches = work / ".adamutant" / "sandbox" / "prove-cache"
         for slot in ("1", "2"):
             if not (caches / slot).is_dir() or not any((caches / slot).iterdir()):

@@ -13,6 +13,11 @@ package AdaMutant.Reports is
    procedure Print_Console (R : AdaMutant.Results.Report);
    --  Survived mutants and a per-file score table on standard output.
 
+   function Has_Steps_Limit (Command : String) return Boolean;
+   --  Whether Command gives GNATprove a steps limit: its last --steps
+   --  with a value other than 0, which means no limit.  A limit in the
+   --  project file or in a script that the command runs is not seen.
+
    function Json_String (S : String) return String;
    --  S as a quoted JSON string; bytes that are not valid UTF-8 are read
    --  as Latin-1.
