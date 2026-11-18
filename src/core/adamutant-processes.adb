@@ -22,9 +22,11 @@ package body AdaMutant.Processes is
       Timeout   : Duration;
       Memory_Limit_Mb : Natural := 0;
       Mutant_File : String := "";
-      More_Env    : String := "") return Run_Result
+      Mutant_Line : Natural := 0;
+      Prove_Cache : String := "") return Run_Result
    is
       Id_Image : constant String := Mutant_Id'Image;
+      Line_Image : constant String := Mutant_Line'Image;
       C_Cmd    : chars_ptr := New_String (Command);
       C_Dir    : chars_ptr := New_String (Directory);
       C_Log    : chars_ptr := New_String (Log_File);
@@ -32,11 +34,10 @@ package body AdaMutant.Processes is
       C_Env    : constant char_array := To_C
         ("ADAMUTANT_MUTANT_ID=" & Id_Image (Id_Image'First + 1 .. Id_Image'Last)
          & ASCII.NUL & "ADAMUTANT_MUTANT_FILE=" & Mutant_File & ASCII.NUL
-         --  Empty, not inherited, when More_Env has none.
-         & (if More_Env /= "" then More_Env
-            else "ADAMUTANT_MUTANT_LINE=" & ASCII.NUL
-              & "ADAMUTANT_MUTANT_SUBPROGRAM=" & ASCII.NUL
-              & "ADAMUTANT_PROVE_LIMIT=" & ASCII.NUL));
+         & "ADAMUTANT_MUTANT_LINE="
+         & (if Mutant_Line = 0 then ""
+            else Line_Image (Line_Image'First + 1 .. Line_Image'Last))
+         & ASCII.NUL & "ADAMUTANT_PROVE_CACHE=" & Prove_Cache & ASCII.NUL);
       T_Out    : aliased int := 0;
       Elapsed  : aliased int := 0;
       Ms       : constant int :=

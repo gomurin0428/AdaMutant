@@ -113,12 +113,12 @@ mutate = ["src/**/*.adb", "src/**/*.ads"]   # files to mutate
 exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr"       # required. A mutant that fails to build is CompileError
 test = "bin/run_tests"                      # required (or [tests]); Killed when the exit status is not 0
-prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on"  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
+prove = 'gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # optional. The build used to recognize equivalent mutants
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
 timeout_ms = 5000
-prove_timeout_ms = 0                        # the time limit of one limited proof; 0 takes it from the unchanged proof
+prove_timeout_ms = 300000                   # time limit of the proof of one mutant. The default 0 takes it from the original proof
 test_memory_limit_mb = 2048                 # memory limit of each test process. The default 0 means no limit
 coverage_analysis = true                    # false also runs the mutants in code that no test executes
 bail = true                                 # false runs the remaining tests after one has detected the mutant (for [tests])
@@ -140,7 +140,7 @@ break = 0
 
 The "original time" is the slowest run when the tests (proofs) of the unmutated project run in all the sandboxes at the same time. It is measured under the same load as the parallel runs of the mutants, so tests that become slower in parallel are not reported as Timeout by mistake.
 
-`build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report; it is empty in the baseline runs), and the line and subprogram of the mutant (see [Limiting the proof to the mutated subprogram](#limiting-the-proof-to-the-mutated-subprogram)). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
+`build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report) and the mutated line in `ADAMUTANT_MUTANT_LINE` (both are empty in the baseline runs). The prove command receives a directory for a cache of proof results in `ADAMUTANT_PROVE_CACHE` (see [Speeding up the proof of the mutants](#speeding-up-the-proof-of-the-mutants)). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
 
 ### Reusing the results of an earlier run
 
@@ -170,6 +170,27 @@ A reused result rests on nothing but the lines being unchanged. In the following
 - What an unchanged line does has changed because of a change in another line or another file
 - The build or test commands or the compiler changed
 - Mutants whose result depends on the load of the machine (a Timeout because the time ran out)
+
+### Speeding up the proof of the mutants
+
+The prove command proves the whole unit (or what the command says) for each mutant. In a large unit, the goals that the mutant does not change take time again for every mutant.
+
+GNATprove can keep a cache of proof results (`--memcached-server=file:<directory>`). AdaMutant gives the prove command a directory for it in `ADAMUTANT_PROVE_CACHE`; add it to the command:
+
+```toml
+prove = 'gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+```
+
+On Windows (cmd.exe), write `%ADAMUTANT_PROVE_CACHE%`.
+
+- The proof of the unmodified project fills the cache. In the proof of a mutant, the goals that did not change get their answers from the cache, and only the goals that the mutant changes are proved again
+- The keys of the cache are the goals themselves, so the results are those of a whole proof without the cache. With GNATprove 16.1, the messages were the same, counterexamples and `possible fix` included. AdaMutant does not guess which subprograms a mutant affects
+- Each sandbox has its own cache (`.adamutant/sandbox/prove-cache/<n>`). It starts empty in every run and goes with the sandbox
+- The goals that a mutant makes fail are not faster: the provers may keep at them up to their time limit. Keep that time down with GNATprove's `--timeout` or `--steps`, or with `prove_timeout_ms`
+
+An example with GNATprove 16.1: in a unit of 24 functions (480 checks), with a mutant in the body of one function, the whole proof took 40.9 s without the cache and 1.4 s with the cache filled by the proof of the unmodified project. Both found the same 2 failed checks.
+
+`prove_timeout_ms` is the time limit of the proof of one mutant. When it is 0 (the default), it comes from the proof of the unmodified project, as for the tests. A mutant whose proof does not finish in time is not counted as detected (Survived).
 
 ## Mutators
 
@@ -261,42 +282,6 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - AdaMutant reads the default output of GNATprove (`--output=pretty`). With `--output=oneline` it reads the counterexample and the `possible fix` in the message; `--output=brief` has no counterexamples
 - A mutant whose proof does not finish in time is Survived (its `statusReason` ends with `the proof did not finish within the timeout`), because a proof that would fail cannot be told apart from one that is only slow. With `--baseline`, a proof Timeout in a report of an earlier version runs again, or is reused as Survived on lines unchanged since the revision of `--since`
 - Earlier versions could run the tests alone or the proof alone. With `--baseline`, their results that this version would not give are never reused: NoCoverage, a survivor of the tests alone or of the proof alone, and a mutant that the proof killed without any test. Such a mutant runs again, or, on a line unchanged since the revision of `--since`, stays Ignored (`unchanged since REF`) as with `--since` alone
-
-### Limiting the proof to the mutated subprogram
-
-By default the prove command proves the whole unit for each mutant (or the whole project, as the command says). In a large unit this takes long: a goal that the mutant makes fail keeps the provers busy up to their time limit.
-
-The build, the tests and the proof of a mutant receive environment variables that tell where the mutant is (they are empty for the unchanged project):
-
-| Variable | Value |
-|---|---|
-| `ADAMUTANT_MUTANT_LINE` | The line of the mutant |
-| `ADAMUTANT_MUTANT_SUBPROGRAM` | The name of the innermost subprogram around the mutant, or empty |
-| `ADAMUTANT_PROVE_LIMIT` | A GNATprove switch that limits the proof to the subprogram of the mutant (such as `--limit-subp=counters.adb:8`, at the line of its name), or empty in the cases below |
-
-On POSIX, add it at the end of the prove command. When it is empty nothing is added, so the unchanged project is proved as a whole:
-
-```toml
-prove = "gnatprove -P prove.gpr --level=1 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_LIMIT"
-prove_timeout_ms = 300000   # the time limit of one limited proof
-```
-
-cmd.exe leaves an empty variable as the text `%ADAMUTANT_PROVE_LIMIT%`, so on Windows put a small script in between that adds the switch only when there is one (`check_prove_limit` in `tests/e2e/run_e2e.py` has one in Python).
-
-`ADAMUTANT_PROVE_LIMIT` limits the proof only to a subprogram of the package itself that meets one of these, and only for a mutant in its own code (not in a subprogram or expression function declared in it):
-
-- The spec declares it (unless the body has more completions of the name, that is, an overload that only the body has; imported declarations do not count)
-- Its body has an aspect after which GNATprove proves it on its own: `Pre`, `Post`, `Contract_Cases`, `Global`, `Depends`, `Subprogram_Variant`, `Always_Terminates` or `Exceptional_Cases`
-
-Otherwise it is empty. GNATprove proves an expression function, and a subprogram without a contract or such an aspect, inlined in its callers, and it may inline a subprogram declared inside another one in the subprogram around it or beside it; the failures of a mutant there can then show in the proof of another subprogram only. A generic unit (GNATprove proves the instances), a subunit (`separate`) and a mutant of a contract (aspects, ghost code) get no limit either.
-
-A deleted statement, a changed condition (ConditionalExpression) and a changed Boolean literal can change which variables the code reads or writes. When GNATprove makes the Global contract from the body, that change shows only in the flow analysis of the callers, so these mutants are limited only when the subprogram has `Global` or `Depends` (on its declaration in the spec or on its body).
-
-These rules come from comparing limited proofs with whole proofs on GNATprove 16.1, and the results were the same on the small projects tried. They are decided from the tokens alone, though, so the results may differ in some case: on a large project, compare them with a whole proof once.
-
-A limited proof leaves the results of the other units as they were. So that the failures of an earlier mutant do not stay, AdaMutant puts back GNATprove's results of the unchanged project (the `.spark` files in the `gnatprove` directories) before the proof of each mutant (those that have changed since). A limited proof that ends with "no checks generated by GNATprove" (a body without `SPARK_Mode`, for example) proved nothing, and does not count as a detection.
-
-`prove_timeout_ms` is the time limit of one limited proof. A proof that cannot be limited, and all proofs when `prove_timeout_ms` is 0 (the default), take their time limit from the proof of the unchanged project, as the tests do. A mutant whose proof does not finish in time is not counted as detected (Survived).
 
 ## How it works
 

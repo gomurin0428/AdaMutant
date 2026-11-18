@@ -874,9 +874,10 @@ def check_proof_log():
         (work / "fake_prove.py").write_text(
             "import os, sys, time\n"
             "n = os.environ.get('ADAMUTANT_MUTANT_ID', '0')\n"
-            "print('place: [%s] [%s] [%s]' % tuple(os.environ.get(v, 'unset') for v in\n"
-            "      ('ADAMUTANT_MUTANT_LINE', 'ADAMUTANT_MUTANT_SUBPROGRAM',\n"
-            "       'ADAMUTANT_PROVE_LIMIT')))\n"
+            "cache = os.environ.get('ADAMUTANT_PROVE_CACHE', '')\n"
+            "print('place: [%s] [%s]' % (os.environ.get('ADAMUTANT_MUTANT_LINE', 'unset'),\n"
+            "      'cache' if cache and os.path.isdir(cache) else 'no cache'))\n"
+            "print('cache:', cache)\n"
             "# The unmodified project has this message too; a mutant moves it.\n"
             "# Both formats: the one line of GNATprove 14, and the place on the\n"
             "# next line (GNATprove 16), for the unmodified project and mutant 3.\n"
@@ -976,15 +977,21 @@ def check_proof_log():
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
             errors.append("a message of the unmodified project is counted")
-        # Where a mutant is: the variables of its proof.  Increment is
-        # declared in the spec, so the proof can be limited to it.
+        # The line of the mutant, and a cache of proof results for each
+        # sandbox, which its proof of the unmodified project fills.
         logs = work / ".adamutant" / "logs"
-        for log, want in (("baseline-prove.log", "place: [] [] []"),
-                          ("mutant-1-prove.log",
-                           "place: [5] [Increment] [--limit-subp=counters.adb:3]")):
-            text = (logs / log).read_text() if (logs / log).exists() else ""
-            if want not in text:
-                errors.append(f"{log} lacks {want!r}\n{text}")
+        texts = {}
+        for log, want in (("baseline-prove.log", "place: [] [cache]"),
+                          ("baseline-prove-2.log", "place: [] [cache]"),
+                          ("mutant-1-prove.log", "place: [5] [cache]")):
+            texts[log] = (logs / log).read_text() if (logs / log).exists() else ""
+            if want not in texts[log]:
+                errors.append(f"{log} lacks {want!r}\n{texts[log]}")
+
+        def cache_of(text):
+            return [line for line in text.splitlines() if line.startswith("cache:")]
+        if cache_of(texts["baseline-prove.log"]) == cache_of(texts["baseline-prove-2.log"]):
+            errors.append("two sandboxes share a proof cache")
         # Some failures have a counterexample: no note about them.
         if "The proof gave no counterexample" in proc.stdout:
             errors.append(f"a note about counterexamples\n{proc.stdout}")
@@ -1014,47 +1021,26 @@ def check_proof_log():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def check_prove_limit():
-    """The proof of each mutant limited to its subprogram gives the same results."""
+def check_prove_cache():
+    """The proofs fill a cache of proof results in each sandbox."""
     # The directory to remove afterwards: "work" becomes the project in it.
-    root = Path(tempfile.mkdtemp(prefix="adamutant-limit-"))
+    root = Path(tempfile.mkdtemp(prefix="adamutant-cache-"))
     work = root / "p"
     try:
         shutil.copytree(ROOT / "examples" / "spark_counter", work,
                         ignore=shutil.ignore_patterns("obj", "bin", ".adamutant"))
-        # A wrapper adds the switch only when there is one, in every shell.
-        (work / "limited.py").write_text(
-            "import os, subprocess, sys\n"
-            "limit = os.environ.get('ADAMUTANT_PROVE_LIMIT', '')\n"
-            "cmd = ['gnatprove', '-P', 'counters.gpr', '--level=1', '--report=fail',\n"
-            "       '--checks-as-errors=on', '--counterexamples=on', '-j1']\n"
-            "cmd += [limit] if limit else []\n"
-            "print('command:', ' '.join(cmd), flush=True)\n"
-            "sys.exit(subprocess.call(cmd))\n")
-        python = (f'"{sys.executable}"' if " " in sys.executable
-                  else sys.executable).replace("\\", "/")
-        config = work / "adamutant.toml"
-        config.write_text("".join(
-            f"prove = '{python} limited.py'\n" if line.startswith("prove =") else line
-            for line in config.read_text().splitlines(True)))
-        proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        report = work / ".adamutant" / "reports" / "mutation-report.json"
-        if proc.returncode != 0 or not report.exists():
+        if "ADAMUTANT_PROVE_CACHE" not in (work / "adamutant.toml").read_text():
+            return ["examples/spark_counter does not use ADAMUTANT_PROVE_CACHE"]
+        proc = subprocess.run([str(EXE), "run", "--keep-sandbox"], cwd=work,
+                              text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT)
+        if proc.returncode != 0:
             return [f"exit status {proc.returncode}\n{proc.stdout}"]
         errors = []
-        expected = json.loads((ROOT / "tests" / "e2e" / "expected"
-                               / "spark_counter.json").read_text(encoding="utf-8"))
-        got = statuses(json.loads(report.read_text(encoding="utf-8")))
-        if got != expected:
-            errors.append(f"not the results of the whole proof: {got}")
-        logs = work / ".adamutant" / "logs"
-        if "--limit-subp" in (logs / "baseline-prove.log").read_text():
-            errors.append("the proof of the unmodified project is limited")
-        limited = [p.name for p in logs.glob("mutant-*-prove.log")
-                   if "--limit-subp=halves.adb:8" in p.read_text()]
-        if not limited:
-            errors.append("no proof is limited to Even_Down")
+        caches = work / ".adamutant" / "sandbox" / "prove-cache"
+        for slot in ("1", "2"):
+            if not (caches / slot).is_dir() or not any((caches / slot).iterdir()):
+                errors.append(f"the proof cache of sandbox {slot} is empty")
         return errors
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -1304,7 +1290,7 @@ def main():
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
     checks = (("since", check_since), ("proof_log", check_proof_log),
               ("baseline", check_baseline), ("library", check_library),
-              ("prove_limit", check_prove_limit))
+              ("prove_cache", check_prove_cache))
     unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:
         sys.exit("no such case: " + " ".join(unknown))

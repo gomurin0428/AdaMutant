@@ -472,8 +472,13 @@ package body AdaMutant.Config is
       & "# bail = true" & LF
       & "# A mutant that the tests do not detect goes to the proof; a" & LF
       & "# non-zero exit status of 'prove' kills it there." & LF
-      & "prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on"
-      & " --counterexamples=on""" & LF
+      & "# ADAMUTANT_PROVE_CACHE is a cache of proof results that the" & LF
+      & "# proof of the unmodified project fills: the proof of a mutant" & LF
+      & "# then proves again only what the mutant changes.  On Windows," & LF
+      & "# write %ADAMUTANT_PROVE_CACHE%." & LF
+      & "prove = 'gnatprove -P project.gpr --level=1 --checks-as-errors=on"
+      & " --counterexamples=on"
+      & " ""--memcached-server=file:$ADAMUTANT_PROVE_CACHE""'" & LF
       & "# A build with optimization and without debug information.  A" & LF
       & "# surviving mutant whose object files are the same as those of the" & LF
       & "# unmodified project is an equivalent mutant and becomes Ignored." & LF
@@ -483,10 +488,8 @@ package body AdaMutant.Config is
       & "# concurrency = 4" & LF
       & "timeout_factor = 1.5" & LF
       & "timeout_ms = 5000" & LF
-      & "# The time limit, in ms, of the proof of a mutant that can be" & LF
-      & "# limited to its subprogram (ADAMUTANT_PROVE_LIMIT in the README)." & LF
-      & "# Other proofs, and all by default, take it from the proof of the" & LF
-      & "# unmodified project, like the tests." & LF
+      & "# The time limit, in ms, of the proof of a mutant.  By default it" & LF
+      & "# comes from the proof of the unmodified project, like the tests." & LF
       & "# prove_timeout_ms = 300000" & LF
       & "# test_memory_limit_mb = 2048" & LF
       & "# Mutants in code that no test executes skip the tests and go to" & LF
