@@ -958,10 +958,9 @@ package body AdaMutant.Mutators is
                      --  An attribute and its counterpart, which gives a
                      --  value of the same type: the other bound, the other
                      --  extreme, the other neighbour, the other rounding.
-                     --  Not in the subtype of a declaration, for the reason
-                     --  given at Is_Declared_Bound.
-                     if Is_Del (K - 1, "'") and then not In_Declared_Subtype (K)
-                     then
+                     --  Not in the subtype of a declaration, like the
+                     --  bounds of NumericLiteral (see Is_Declared_Bound).
+                     if Is_Del (K - 1, "'") then
                         declare
                            Other : constant String :=
                              (if Lw = "first" then "Last"
@@ -972,9 +971,12 @@ package body AdaMutant.Mutators is
                               elsif Lw = "pred" then "Succ"
                               elsif Lw = "floor" then "Ceiling"
                               elsif Lw = "ceiling" then "Floor"
+                              elsif Lw = "first_valid" then "Last_Valid"
+                              elsif Lw = "last_valid" then "First_Valid"
                               else "");
                         begin
-                           if Other /= "" then
+                           if Other /= "" and then not In_Declared_Subtype (K)
+                           then
                               Add (Attribute_Swap, K, K,
                                    Same_Case (Txt (K), Other));
                            end if;

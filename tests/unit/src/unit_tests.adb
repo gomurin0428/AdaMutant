@@ -292,12 +292,14 @@ procedure Unit_Tests is
               & "      X := Integer'Max (X, T'Succ (I)) + A'Length;" & LF
               & "   end loop;" & LF
               & "   Y := Float'FLOOR (Z) + Float'ceiling (Z);" & LF
+              & "   V := Even'First_Valid + Even'First_Bit;" & LF
               & "   for X'Size use 32;" & LF
               & "end P;",
               "AttributeSwap Last->First|AttributeSwap First->Last"
               & "|AttributeSwap Last->First|AttributeSwap Max->Min"
               & "|AttributeSwap Succ->Pred|AttributeSwap FLOOR->CEILING"
-              & "|AttributeSwap ceiling->floor",
+              & "|AttributeSwap ceiling->floor"
+              & "|AttributeSwap First_Valid->Last_Valid",
               "attribute swaps", O);
       --  A predicate is a contract: mutated with mutate_contracts only,
       --  also in a subtype declaration.  So are the bounds of a range in
