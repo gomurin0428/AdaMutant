@@ -122,7 +122,9 @@ prove_timeout_ms = 0                        # time limit (ms) of the proof of on
 test_memory_limit_mb = 2048                 # memory limit of each test process. The default 0 means no limit
 coverage_analysis = true                    # false also runs the mutants in code that no test executes
 bail = true                                 # false runs the remaining tests after one has detected the mutant (for [tests])
-mutators = ["ArithmeticOperator", "EqualityOperator"]  # all of them when omitted
+mutators = ["ArithmeticOperator", "EqualityOperator"]  # when omitted, all but LoopDirection
+exclude_mutators = ["StringLiteral"]        # left out of the mutators above
+include_mutators = ["LoopDirection"]        # added to them
 mutate_contracts = false                    # true also mutates aspects such as Pre/Post
 sandbox_exclude = [".git", "obj", "bin"]    # not copied into the sandboxes
 report_dir = ".adamutant/reports"
@@ -211,6 +213,7 @@ An example with GNATprove 16.1: in a unit of 24 functions (480 checks), with a m
 | NumericLiteral | `0`→`1`, `1`→`0`, `n`→`n+1`, a real literal → `0.0`. Based integer literals and integer literals with an exponent follow the same rules, and the base is kept (`16#FF#`→`16#100#`, `1E6`→`1000001`). The bounds of the range of a declared subtype, such as `String (1 .. 6)`, are not mutated |
 | StringLiteral | `"abc"`→`""`, `""`→`"AdaMutant was here!"` |
 | AttributeSwap | `'First`↔`'Last`, `'Min`↔`'Max`, `'Succ`↔`'Pred`, `'Floor`↔`'Ceiling`, `'First_Valid`↔`'Last_Valid`. The counterpart gives a value of the same type, so the mutant type-checks; it can still fail to compile where choices must differ or cover the type (case choices, named array aggregates) or where a static value goes out of range (`Color'Succ (Color'Last)`), and is then a CompileError. Not in the subtype of a declaration (`X : String (1 .. A'Last)`, `subtype S is T range T'First .. T'Last`), like the bounds of NumericLiteral; an initial value (`L : constant Natural := A'Last`) and an aspect of the declaration (a predicate, with `mutate_contracts`) are mutated |
+| LoopDirection | `for I in A .. B loop`↔`for I in reverse A .. B loop`, for a loop over a range (`A .. B`, `X'Range`) or a subtype (`for I in Index loop`); not over an iterator (`for C in V.Iterate`, `for E of A`), which need not go backwards, nor in a quantified expression or an aggregate. **Off by default**: in many loops the order does not matter (a sum, a copy into another array), and the mutant is then equivalent; with a loop invariant, the proof usually fails all the same, and such a mutant looks like a missing test. Turn it on with `include_mutators = ["LoopDirection"]` |
 
 `with`/`use` clauses, `pragma`s, representation clauses (`for X'Size use ...`) and `digits`/`delta` are not mutated. The default values of the formal parameters of a subprogram are not mutated either, because the program does not compile unless the declaration and the body match (full conformance). The default values in `is null` and `is abstract` subprograms, in expression functions and in generic formal subprograms are mutated. Aspects (`Pre`, `Post`, `Type_Invariant` and so on) and ghost code (the declarations and bodies of the subprograms, objects and types declared with the `Ghost` aspect, and the statements that call them or assign to them) are mutated only when `mutate_contracts = true`. The ghost names are collected from the `.adb` being mutated and from the `.ads` of the same name.
 

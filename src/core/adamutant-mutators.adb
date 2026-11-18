@@ -16,7 +16,8 @@ package body AdaMutant.Mutators is
          when Statement_Deletion     => "StatementDeletion",
          when Numeric_Literal        => "NumericLiteral",
          when String_Literal         => "StringLiteral",
-         when Attribute_Swap         => "AttributeSwap");
+         when Attribute_Swap         => "AttributeSwap",
+         when Loop_Direction         => "LoopDirection");
 
    function Squash (S : String) return String is
       R    : String (1 .. S'Length);
@@ -878,6 +879,49 @@ package body AdaMutant.Mutators is
 
                      elsif Lw = "abs" then
                         Add (Unary_Operator, K, K, "");
+
+                     --  The direction of a loop over a range ("for I in A ..
+                     --  B loop", "for I in X'Range loop") or over a subtype
+                     --  ("for I in Index loop").  Not over an iterator ("for
+                     --  C in V.Iterate", "for E of A"), which need not go
+                     --  backwards; a quantified expression or an aggregate is
+                     --  inside parentheses.
+                     elsif Lw = "for" and then Depth (K) = 0
+                       and then K + 3 <= N
+                       and then S (K + 1).Kind = Identifier
+                       and then Is_Kw (K + 2, "in")
+                     then
+                        declare
+                           J        : Positive := K + 3;
+                           Discrete : Boolean := False;
+                        begin
+                           while J <= N
+                             and then not (Depth (J) = 0
+                                           and then (Is_Kw (J, "loop")
+                                                     or else Is_Del (J, ";")))
+                           loop
+                              if Depth (J) = 0
+                                and then (Is_Del (J, "..")
+                                          or else (Lower (Txt (J)) = "range"
+                                                   and then Is_Del (J - 1, "'")))
+                              then
+                                 Discrete := True;
+                              end if;
+                              J := J + 1;
+                           end loop;
+                           if J <= N and then Is_Kw (J, "loop") then
+                              if Is_Kw (K + 3, "reverse") then
+                                 Add (Loop_Direction, K + 2, K + 3,
+                                      Same_Case (Txt (K + 2), "in"));
+                              elsif Discrete
+                                or else (J = K + 4
+                                         and then S (K + 3).Kind = Identifier)
+                              then
+                                 Add (Loop_Direction, K + 2, K + 2,
+                                      Same_Case (Txt (K + 2), "in reverse"));
+                              end if;
+                           end if;
+                        end;
 
                      elsif Lw = "in" and then Binary
                        and then not Is_Kw (K - 1, "not")
