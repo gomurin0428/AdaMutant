@@ -113,7 +113,7 @@ mutate = ["src/**/*.adb", "src/**/*.ads"]   # 変異させるファイル
 exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr -cargs -gnata"  # 必須。失敗したミュータントは CompileError
 test = "bin/run_tests"                      # 必須（または [tests]）。終了コード 0 以外なら Killed
-prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # 必須。テストが通ったミュータントだけに実行。0 以外なら Killed (証明)
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # 必須。テストが通ったミュータントだけに実行。0 以外なら Killed (証明)
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -gnata -O2 -g0"  # 省略可。等価ミュータントの判定に使うビルド
 concurrency = 4                             # 既定は CPU 数の半分
 timeout_factor = 1.5                        # テスト時間の上限 = 元の時間 * factor + timeout_ms
@@ -141,7 +141,7 @@ break = 0
 
 「元の時間」は、変異させていないプロジェクトのテスト（証明）を全サンドボックスで同時に流したときの最も遅い実行時間です。ミュータントを並列で流すときと同じ負荷で測るので、並列にすると遅くなるテストでも誤って Timeout になりません。
 
-`build`、テスト（`test` か `[tests]`）、`prove` は必須です。ミュータントはまずテストにかけ、テストが通ったものだけを証明にかけます。コマンドは POSIX では `/bin/sh -c`、Windows では `cmd.exe /c` で実行され、環境変数 `ADAMUTANT_MUTANT_ID` が渡されます。ミュータントのビルド・テスト・証明には、変異させたファイルのパス（`files` に書いたとおりのプロジェクトルートからの相対パス）が `ADAMUTANT_MUTANT_FILE` で、変異させた行が `ADAMUTANT_MUTANT_LINE` で渡されます（ベースラインの実行では空です）。証明のコマンドには、証明結果のキャッシュのディレクトリが `ADAMUTANT_PROVE_CACHE` で渡されます（[ミュータントの証明を速くする](#ミュータントの証明を速くする)）。cmd.exe は `bin/test` の `/` 以降をスイッチとして解釈するため、`/` を含むパスは `test = '"bin/test"'` のように引用符で囲んでください（`/bin/sh` でもそのまま動きます）。未知のキーはエラーになります。
+`build`、テスト（`test` か `[tests]`）、`prove` は必須です。ミュータントはまずテストにかけ、テストが通ったものだけを証明にかけます。コマンドは POSIX では `/bin/sh -c`、Windows では `cmd.exe /c` で実行され、環境変数 `ADAMUTANT_MUTANT_ID` が渡されます。ミュータントのビルド・テスト・証明には、変異させたファイルのパス（`files` に書いたとおりのプロジェクトルートからの相対パス）が `ADAMUTANT_MUTANT_FILE` で、変異させた行が `ADAMUTANT_MUTANT_LINE` で渡されます（ベースラインの実行では空です）。証明のコマンドには、証明結果のキャッシュのディレクトリが `ADAMUTANT_PROVE_CACHE` で（[ミュータントの証明を速くする](#ミュータントの証明を速くする)）、GNATprove のスイッチが `ADAMUTANT_PROVE_SWITCHES` で（[証明が何でも通してしまう場所](#証明が何でも通してしまう場所)）渡されます。cmd.exe は `bin/test` の `/` 以降をスイッチとして解釈するため、`/` を含むパスは `test = '"bin/test"'` のように引用符で囲んでください（`/bin/sh` でもそのまま動きます）。未知のキーはエラーになります。
 
 ### 前回の結果の再利用
 
@@ -180,7 +180,7 @@ break = 0
 GNATprove には、証明結果のキャッシュがあります（`--memcached-server=file:<ディレクトリ>`）。AdaMutant は、証明のコマンドに、キャッシュのディレクトリを `ADAMUTANT_PROVE_CACHE` で渡します。これを、証明器のステップ数の上限（`--steps`、下記）と一緒に、コマンドに足してください。
 
 ```toml
-prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
 ```
 
 Windows（cmd.exe）では `%ADAMUTANT_PROVE_CACHE%` と書きます。
@@ -197,6 +197,23 @@ Windows（cmd.exe）では `%ADAMUTANT_PROVE_CACHE%` と書きます。
 GNATprove 16.1 での例です。24 個の関数（チェック 480 個）からなるユニットで、1 つの関数の本体を変異させました。全体の証明はキャッシュなしで 40.9 秒、変更前の証明で埋めたキャッシュありで 1.4 秒でした。失敗したチェックは、どちらも同じ 2 つです。
 
 `prove_timeout_ms` は、ミュータントの証明 1 回の制限時間です。0（既定）のときは、テストと同じく、変更前のプロジェクトの証明の時間から決めます。時間内に終わらなかったミュータントは、検出扱いにしません（Survived）。
+
+### 証明が何でも通してしまう場所
+
+常に偽の事前条件や `pragma Assume`、到達しないコードがあると、その場所では、どんな証明も通ります。そこにあるミュータントは、どれほど間違っていても証明を通り抜け、変更前のプロジェクトの証明もそれについて何も言いません。GNATprove は、`--proof-warnings=on` でこうした場所を見つけます。
+
+prove のコマンドに `ADAMUTANT_PROVE_SWITCHES` があると、AdaMutant は、変更前のプロジェクトについて、その変数を `--proof-warnings=on --warnings=continue` にして、コマンドをもう 1 回実行します。それ以外の証明では、変数は `--proof-warnings=off` です。コマンドの、`--warnings` のスイッチより後ろに、引用符で囲まずに足してください（Windows では `%ADAMUTANT_PROVE_SWITCHES%`。この変数は空になりません）。コマンドがスクリプトを実行するときは、変数をスクリプトに渡し（`./prove.sh $ADAMUTANT_PROVE_SWITCHES`）、スクリプトの中で gnatprove に渡してください。
+
+```toml
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+```
+
+- 両方の証明の警告（`precondition is always False`、`postcondition is always False`、`pragma Assume is always False`、`unreachable code`、`unreachable branch`、および `return` の後ろのコードのようなコンパイラの警告）は、同じ行の同じ内容を 1 つにまとめて、コンソールの `The proof of the unmodified project proves anything here` の下に出ます。`unreachable code` の警告の位置から次のセミコロンまで（複合文なら、その最初の行と、中の最初の文）で生き残ったミュータントには、`(GNATprove: never reached)` と付きます。GNATprove は、到達しないコードの最初の文しか報告しないことが多く、ほかの警告は式の中を指すので、残りは一覧で見てください。変異させるファイルに同じ名前のものが 2 つあるときは付けません。GNATprove はディレクトリを付けずにファイルを名指すからです
+- 契約を直すか、コードを消してください。それまでは、テストも証明も、そこのミュータントを検出できません
+- この追加の証明には、変更前のプロジェクトの証明とほぼ同じ時間がかかります。実行するミュータントがあるときだけ、ミュータントの前に、時間の制限なしで実行します。`--proof-warnings=on` だと、GNATprove は同じチェックに別の目標を作るので、それで埋めたキャッシュは、ミュータントの証明には当たりません。また、GNATprove が残すファイルが、あとの証明を変えてしまいます。そのため、追加の証明は専用のキャッシュを使い、GNATprove のディレクトリ `gnatprove` を除いたプロジェクトのコピーで実行し、終わったらコピーを消します。サンドボックスにも、プロジェクトの `gnatprove` ディレクトリはコピーしません。前に別のスイッチで証明したときに残ったものが、証明を変えないようにするためです
+- その終了ステータスは見ません。`--warnings=continue` は、コマンドでそれより前にある `--warnings=error`（`-j1` だと、警告のある最初のユニットで GNATprove が止まります）や `--warnings=off` を打ち消します
+- prove のコマンドに `gnatprove` があり、`ADAMUTANT_PROVE_SWITCHES` も `--proof-warnings` もないときは、注意を出します。変数がないときの一覧は、変更前のプロジェクトの証明の警告です（そのコマンドが自分で証明の警告を有効にしているならそのすべて。この場合、ミュータントの証明でも毎回探すことになります）
+- GNATprove 16.1 で確かめました。`--proof-warnings` のない GNATprove では、このスイッチで失敗します
 
 ## ミュータント
 

@@ -455,6 +455,47 @@ package body AdaMutant.Runner is
       return Result;
    end Proof_Failures;
 
+   function Proof_Warnings (Log : String) return String_Vectors.Vector is
+      Text   : constant String := One_Line_Messages (Log);
+      Result : String_Vectors.Vector;
+      First  : Positive := Text'First;
+      Last   : Natural;
+   begin
+      while First <= Text'Last loop
+         Last := First;
+         while Last <= Text'Last and then Text (Last) /= ASCII.LF loop
+            Last := Last + 1;
+         end loop;
+         declare
+            D : constant AdaMutant.Schemata.Diagnostic_Vectors.Vector :=
+              AdaMutant.Schemata.Diagnostics (Text (First .. Last - 1));
+         begin
+            if not D.Is_Empty then
+               declare
+                  Line : constant String := To_String (D.First_Element.Text);
+                  Msg  : constant String :=
+                    Line (Line'First + D.First_Element.Name_First - 1
+                          .. Line'Last);
+                  F    : Positive;
+                  Sev  : constant String := Severity_Of (Msg, F);
+               begin
+                  if Sev = "warning"
+                    and then (Ada.Strings.Fixed.Index
+                                (Msg (F .. Msg'Last), "always False") > 0
+                              or else Ada.Strings.Fixed.Index
+                                (Msg (F .. Msg'Last), "unreachable") > 0)
+                    and then not Result.Contains (Msg)
+                  then
+                     Result.Append (Msg);
+                  end if;
+               end;
+            end if;
+         end;
+         First := Last + 1;
+      end loop;
+      return Result;
+   end Proof_Warnings;
+
    function Check_Kind (Message : String) return String is
       First : Positive;
       Sev   : constant String := Severity_Of (Message, First);
@@ -788,7 +829,14 @@ package body AdaMutant.Runner is
                  Run (Command, Slot_Dir (Mine), Log (Mine), 0, Timeout,
                       Memory_Limit_Mb,
                       Prove_Cache =>
-                        (if Name = "prove" then Cache_Dir (Mine) else ""));
+                        (if Name = "prove" then Cache_Dir (Mine) else ""),
+                      --  As for the mutants: GNATprove makes other goals
+                      --  with proof warnings on, which the cache that this
+                      --  proof fills would not answer (see
+                      --  Look_For_Vacuous_Proofs).
+                      Prove_Switches =>
+                        (if Name = "prove" then "--proof-warnings=off"
+                         else ""));
             exception
                when E : others =>
                   Errors (Mine) := To_Unbounded_String
@@ -1051,7 +1099,9 @@ package body AdaMutant.Runner is
            (Run (Command, Dir, Log_Base & "-" & Name & ".log", M.Id, Timeout,
                  Mutant_File => Rel, Mutant_Line => M.Start_Pos.Line,
                  Prove_Cache =>
-                   (if Name = "prove" then Cache_Dir (Slot) else "")));
+                   (if Name = "prove" then Cache_Dir (Slot) else ""),
+                 Prove_Switches =>
+                   (if Name = "prove" then "--proof-warnings=off" else "")));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          if not Built then
@@ -2121,6 +2171,92 @@ package body AdaMutant.Runner is
             Fail (Survivor_Queue.Failure);
          end if;
       end Find_Equivalent;
+      procedure Look_For_Vacuous_Proofs is
+         --  One more proof of the unmodified project, with
+         --  ADAMUTANT_PROVE_SWITCHES "--proof-warnings=on
+         --  --warnings=continue": GNATprove then reports contracts that are
+         --  always False and code that is never reached, where the proof of
+         --  anything succeeds, and --warnings=continue undoes a
+         --  --warnings=error (which stops at the first unit with -j1) or
+         --  --warnings=off before it.  With proof warnings on, GNATprove
+         --  makes other goals for the same checks, so this proof has a
+         --  cache of its own, and it runs in a copy of sandbox 1 without
+         --  GNATprove's files: what it leaves there would change the proofs
+         --  of the mutants in that sandbox.  No time limit, as for the
+         --  proof of the unmodified project; its exit status does not
+         --  count.  Its warnings join those of the proof of the unmodified
+         --  project (R.Proof_Warnings), once for each line and message.
+         Dir   : constant String := Join (Sandbox, "proof-warnings");
+         Cache : constant String := Join (Prove_Caches, "proof-warnings");
+         Log   : constant String := Join (Logs, "baseline-proof-warnings.log");
+         Skip  : String_Vectors.Vector;
+         Done  : Run_Result;
+         Found : Boolean := False;
+
+         function Without_Column (W : String) return String is
+            --  "f.adb:13:10: warning: ..." without ":10".
+            Colons : Natural := 0;
+            Second : Natural := 0;
+         begin
+            for K in W'Range loop
+               if W (K) = ':' then
+                  Colons := Colons + 1;
+                  if Colons = 2 then
+                     Second := K;
+                  elsif Colons = 3 then
+                     return W (W'First .. Second - 1) & W (K .. W'Last);
+                  end if;
+               end if;
+            end loop;
+            return W;
+         end Without_Column;
+
+         function Listed (W : String) return Boolean is
+           (for some V of R.Proof_Warnings =>
+              Without_Column (V) = Without_Column (W));
+      begin
+         Skip.Append ("gnatprove");
+         Skip.Append ("**/gnatprove");
+         begin
+            Copy_Tree (Slot_Dir (1), Dir, Skip);
+            Ada.Directories.Create_Path (Cache);
+            Done := Run (To_String (S.Prove), Dir, Log, 0, 0.0,
+                         Prove_Cache => Ada.Directories.Full_Name (Cache),
+                         Prove_Switches =>
+                           "--proof-warnings=on --warnings=continue");
+         exception
+            when E : Spawn_Error | AdaMutant.Files.File_Error
+                   | Ada.Directories.Name_Error | Ada.Directories.Use_Error =>
+               if Warn /= null then
+                  Warn ("the proof that looks for contracts that are always"
+                        & " False and code that is never reached could not"
+                        & " run: " & Ada.Exceptions.Exception_Message (E));
+               end if;
+               return;
+         end;
+         for W of Proof_Warnings (Read (Log)) loop
+            Found := True;
+            if not Listed (W) then
+               R.Proof_Warnings.Append (W);
+            end if;
+         end loop;
+         if Done.Exit_Code /= 0 and then not Found and then Warn /= null then
+            Warn ("the proof that looks for contracts that are always False"
+                  & " and code that is never reached (--proof-warnings=on)"
+                  & " failed (exit status" & Done.Exit_Code'Image & "); log: "
+                  & Log);
+         end if;
+         if not Keep_Sandbox then
+            begin
+               Delete_Tree (Dir);
+               Delete_Tree (Cache);
+            exception
+               when AdaMutant.Files.File_Error =>
+                  null;
+            end;
+         end if;
+      end Look_For_Vacuous_Proofs;
+
    begin
       Last_Details := Null_Unbounded_String;
       for K in Work_Items'Range loop
@@ -2133,7 +2269,15 @@ package body AdaMutant.Runner is
       Delete_Tree (Sandbox);
       Delete_Tree (Logs);
       Ada.Directories.Create_Path (Logs);
-      Copy_Tree (Root, Slot_Dir (1), S.Sandbox_Exclude);
+      --  Without the directories of GNATprove: what an earlier proof with
+      --  other switches left there would change the proofs here.
+      declare
+         Skip : String_Vectors.Vector := S.Sandbox_Exclude;
+      begin
+         Skip.Append ("gnatprove");
+         Skip.Append ("**/gnatprove");
+         Copy_Tree (Root, Slot_Dir (1), Skip);
+      end;
 
       declare
          Elapsed : Duration;
@@ -2221,6 +2365,36 @@ package body AdaMutant.Runner is
             end if;
          end;
       end loop;
+      --  Where the proof proves anything: contracts that are always False
+      --  and code that is never reached (--proof-warnings).
+      --  Those of the proof of the unmodified project first: the
+      --  compiler's (code after a return, a condition that is always
+      --  False), or all of them when the command turns proof warnings on
+      --  itself.
+      R.Proof_Warnings :=
+        Proof_Warnings (Read (Join (Logs, "baseline-prove.log")));
+      if Ada.Strings.Fixed.Index
+           (To_String (S.Prove), "ADAMUTANT_PROVE_SWITCHES") > 0
+      then
+         if Pending_Count > 0 then
+            Look_For_Vacuous_Proofs;
+         end if;
+      else
+         if Warn /= null and then Uses_Gnatprove
+           and then Ada.Strings.Fixed.Index
+                      (Ada.Characters.Handling.To_Lower (To_String (S.Prove)),
+                       "gnatprove") > 0
+           and then Ada.Strings.Fixed.Index
+                      (To_String (S.Prove), "proof-warnings") = 0
+         then
+            Warn ("the prove command does not use ADAMUTANT_PROVE_SWITCHES:"
+                  & " AdaMutant does not look for contracts that are always"
+                  & " False or code that the proof never reaches, where the"
+                  & " proof of anything succeeds; add"
+                  & " $ADAMUTANT_PROVE_SWITCHES to the gnatprove command"
+                  & " (see the README)");
+         end if;
+      end if;
 
       if Pending_Count > 0 then
          Run_Combined;

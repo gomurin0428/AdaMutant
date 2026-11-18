@@ -26,4 +26,18 @@ package AdaMutant.Reports is
    --  S with each line break and the blanks around it replaced by one
    --  space, for showing a mutation spanning several lines on one line.
 
+   function Never_Reached
+     (Warning : String;
+      Source  : String;
+      Name    : String;
+      First   : Positive;
+      Last    : Natural) return Boolean;
+   --  Warning, a proof warning of GNATprove ("f.adb:13:10: warning:
+   --  unreachable code"), says that Source (First .. Last) is never
+   --  reached: Name (the base name of the file of Source) is the file of
+   --  the warning, and the text lies between the token at its line and
+   --  column (as GNAT counts them: bytes, tabs to the next multiple of 8)
+   --  and the first semicolon after it outside parentheses.  Other
+   --  warnings never say so.
+
 end AdaMutant.Reports;

@@ -113,7 +113,7 @@ mutate = ["src/**/*.adb", "src/**/*.ads"]   # files to mutate
 exclude = ["src/generated/**"]
 build = "gprbuild -p -q -P tests.gpr -cargs -gnata"  # required. A mutant that fails to build is CompileError
 test = "bin/run_tests"                      # required (or [tests]); Killed when the exit status is not 0
-prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -gnata -O2 -g0"  # optional. The build used to recognize equivalent mutants
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
@@ -141,7 +141,7 @@ break = 0
 
 The "original time" is the slowest run when the tests (proofs) of the unmutated project run in all the sandboxes at the same time. It is measured under the same load as the parallel runs of the mutants, so tests that become slower in parallel are not reported as Timeout by mistake.
 
-`build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report) and the mutated line in `ADAMUTANT_MUTANT_LINE` (both are empty in the baseline runs). The prove command receives a directory for a cache of proof results in `ADAMUTANT_PROVE_CACHE` (see [Speeding up the proof of the mutants](#speeding-up-the-proof-of-the-mutants)). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
+`build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report) and the mutated line in `ADAMUTANT_MUTANT_LINE` (both are empty in the baseline runs). The prove command receives a directory for a cache of proof results in `ADAMUTANT_PROVE_CACHE` (see [Speeding up the proof of the mutants](#speeding-up-the-proof-of-the-mutants)) and switches for GNATprove in `ADAMUTANT_PROVE_SWITCHES` (see [Where the proof proves anything](#where-the-proof-proves-anything)). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
 
 ### Reusing the results of an earlier run
 
@@ -180,7 +180,7 @@ The prove command proves the whole unit (or what the command says) for each muta
 GNATprove can keep a cache of proof results (`--memcached-server=file:<directory>`). AdaMutant gives the prove command a directory for it in `ADAMUTANT_PROVE_CACHE`; add it to the command, with a steps limit for the provers (`--steps`, see below):
 
 ```toml
-prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
 ```
 
 On Windows (cmd.exe), write `%ADAMUTANT_PROVE_CACHE%`.
@@ -197,6 +197,23 @@ On Windows (cmd.exe), write `%ADAMUTANT_PROVE_CACHE%`.
 An example with GNATprove 16.1: in a unit of 24 functions (480 checks), with a mutant in the body of one function, the whole proof took 40.9 s without the cache and 1.4 s with the cache filled by the proof of the unmodified project. Both found the same 2 failed checks.
 
 `prove_timeout_ms` is the time limit of the proof of one mutant. When it is 0 (the default), it comes from the proof of the unmodified project, as for the tests. A mutant whose proof does not finish in time is not counted as detected (Survived).
+
+### Where the proof proves anything
+
+A precondition that is always False, a `pragma Assume` that is always False, or code that is never reached makes the proof of anything succeed there: a mutant in such a place survives the proof however wrong it is, and the proof of the unmodified project says nothing about it. GNATprove finds these places with `--proof-warnings=on`.
+
+When the prove command mentions `ADAMUTANT_PROVE_SWITCHES`, AdaMutant runs it once more on the unmodified project, with `--proof-warnings=on --warnings=continue` in that variable; every other proof gets `--proof-warnings=off`. Add it to the command, after any `--warnings` switch and without quotes (`%ADAMUTANT_PROVE_SWITCHES%` on Windows; the variable is never empty). When the command runs a script, pass the variable to it (`./prove.sh $ADAMUTANT_PROVE_SWITCHES`) and give it to gnatprove there:
+
+```toml
+prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+```
+
+- The console lists the warnings of both proofs (`precondition is always False`, `postcondition is always False`, `pragma Assume is always False`, `unreachable code`, `unreachable branch`, and those of the compiler, such as code after a `return`), once for each line and message, under `The proof of the unmodified project proves anything here`. A survivor between the place of an `unreachable code` warning and the next semicolon (for a compound statement, its first line and its first inner statement) gets `(GNATprove: never reached)`. GNATprove usually reports only the first statement of code that is never reached, and the other warnings point inside expressions, so look at the list for the rest. The mark is left out when two mutated files have the same name, since GNATprove names files without their directory
+- Fix the contract or remove the code: until then, neither the tests nor the proof can detect a mutant there
+- The extra proof costs about as much as the proof of the unmodified project, and runs before the mutants, without a time limit, when there are mutants to run. With `--proof-warnings=on`, GNATprove makes other goals for the same checks, which a cache filled with them would not answer for the mutants, and leaves files that change the proofs that follow. So the extra proof has a cache of its own, and runs in a copy of the project without the directories `gnatprove` of GNATprove, which is deleted afterwards. The sandboxes leave out the project's own directories `gnatprove` as well, so that what an earlier proof with other switches left there does not change the proofs
+- Its exit status does not count. `--warnings=continue` undoes a `--warnings=error` (which stops GNATprove at the first unit with a warning under `-j1`) or a `--warnings=off` that comes before it in the command
+- When the prove command names `gnatprove` and mentions neither `ADAMUTANT_PROVE_SWITCHES` nor `--proof-warnings`, AdaMutant warns. Without the variable, the list holds the warnings of the proof of the unmodified project (all of them if its command turns proof warnings on itself, which makes every proof of a mutant look for them as well)
+- Checked with GNATprove 16.1. A GNATprove without `--proof-warnings` fails on the switch
 
 ## Mutators
 

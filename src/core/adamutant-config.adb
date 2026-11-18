@@ -490,8 +490,12 @@ package body AdaMutant.Config is
       & "# bail = true" & LF
       & "# A mutant that the tests do not detect goes to the proof; a" & LF
       & "# non-zero exit status of 'prove' kills it there." & LF
+      & "# With ADAMUTANT_PROVE_SWITCHES, the unmodified project is proved" & LF
+      & "# once more to look for contracts that are always False and code" & LF
+      & "# that is never reached (--proof-warnings).  On Windows, write" & LF
+      & "# %ADAMUTANT_PROVE_SWITCHES%." & LF
       & "prove = ""gnatprove -P project.gpr --level=1 --checks-as-errors=on"
-      & " --counterexamples=on""" & LF
+      & " --counterexamples=on $ADAMUTANT_PROVE_SWITCHES""" & LF
       & "# Faster: ADAMUTANT_PROVE_CACHE is a cache of proof results that" & LF
       & "# the proof of the unmodified project fills, so that the proof of" & LF
       & "# a mutant proves again only what the mutant changes.  Give the" & LF
@@ -499,7 +503,7 @@ package body AdaMutant.Config is
       & "# unmodified project); see the README.  On Windows, write" & LF
       & "# %ADAMUTANT_PROVE_CACHE%." & LF
       & "# prove = 'gnatprove -P project.gpr --level=1 --steps=2000" & LF
-      & "#   --checks-as-errors=on --counterexamples=on" & LF
+      & "#   --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES" & LF
       & "#   ""--memcached-server=file:$ADAMUTANT_PROVE_CACHE""'" & LF
       & "# A build with optimization and without debug information.  A" & LF
       & "# surviving mutant whose object files are the same as those of the" & LF

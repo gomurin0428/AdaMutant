@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with AdaMutant.Config;
 with AdaMutant.Mutators;
+with AdaMutant.Lexer;
 with AdaMutant.Positions;
 
 package body AdaMutant.Reports is
@@ -309,6 +310,100 @@ package body AdaMutant.Reports is
       return Result;
    end Has_Steps_Limit;
 
+   function Never_Reached
+     (Warning : String;
+      Source  : String;
+      Name    : String;
+      First   : Positive;
+      Last    : Natural) return Boolean
+   is
+      Line, Column : Natural := 0;
+      K            : Positive := Warning'First + Name'Length;
+
+      function Gnat_Column (Offset : Positive) return Positive is
+         --  The column of Source (Offset) as GNAT counts it: bytes, and a
+         --  tab goes on to the next multiple of 8.
+         From : Positive := Offset;
+         C    : Positive := 1;
+      begin
+         while From > Source'First and then Source (From - 1) /= ASCII.LF loop
+            From := From - 1;
+         end loop;
+         for I in From .. Offset - 1 loop
+            C := (if Source (I) = ASCII.HT then ((C - 1) / 8 + 1) * 8 + 1
+                  else C + 1);
+         end loop;
+         return C;
+      end Gnat_Column;
+   begin
+      if Warning'Length <= Name'Length
+        or else Warning (Warning'First .. K - 1) /= Name
+        or else Ada.Strings.Fixed.Index (Warning, ": unreachable code") = 0
+      then
+         return False;
+      end if;
+      --  ":line:column:"
+      for Field in 1 .. 2 loop
+         if K > Warning'Last or else Warning (K) /= ':' then
+            return False;
+         end if;
+         K := K + 1;
+         declare
+            V : Natural := 0;
+            Start : constant Positive := K;
+         begin
+            while K <= Warning'Last and then Warning (K) in '0' .. '9' loop
+               if V > 100_000_000 then
+                  return False;
+               end if;
+               V := V * 10 + Character'Pos (Warning (K)) - Character'Pos ('0');
+               K := K + 1;
+            end loop;
+            if K = Start or else V = 0 then
+               return False;
+            end if;
+            if Field = 1 then
+               Line := V;
+            else
+               Column := V;
+            end if;
+         end;
+      end loop;
+      declare
+         use AdaMutant.Lexer;
+         T     : constant Token_Vectors.Vector := Tokenize (Source);
+         Depth : Natural := 0;
+         Start : Natural := 0;
+         --  The first byte of the token that the warning points at.
+      begin
+         for Tok of T loop
+            if Tok.Kind /= Comment then
+               if Start = 0 then
+                  if Tok.Line > Line then
+                     return False;
+                  elsif Tok.Line = Line and then Gnat_Column (Tok.First) = Column
+                  then
+                     Start := Tok.First;
+                  end if;
+               end if;
+               if Start /= 0 then
+                  if Image (Source, Tok) in "(" | "[" then
+                     Depth := Depth + 1;
+                  elsif Image (Source, Tok) in ")" | "]" then
+                     Depth := (if Depth > 0 then Depth - 1 else 0);
+                  elsif Depth = 0 and then Image (Source, Tok) = ";" then
+                     return Start <= First and then Last <= Tok.Last;
+                  end if;
+               end if;
+            end if;
+         end loop;
+         return False;
+      end;
+   exception
+      when AdaMutant.Lexer.Lexical_Error =>
+         return False;
+   end Never_Reached;
+
    procedure Print_Console (R : Report) is
       All_Counts : constant Status_Counts := AdaMutant.Results.Count (R);
 
@@ -346,6 +441,40 @@ package body AdaMutant.Reports is
          Ada.Text_IO.Put_Line
            ("    + " & One_Line (To_String (M.Mutation.Replacement)));
       end Put_Mutant;
+
+      function Base_Name (Path : String) return String is
+         Name : Natural := Path'First;
+      begin
+         for K in Path'Range loop
+            if Path (K) in '/' | '\' then
+               Name := K + 1;
+            end if;
+         end loop;
+         return Path (Name .. Path'Last);
+      end Base_Name;
+
+      function Unreached (M : Mutant) return Boolean is
+         --  GNATprove's --proof-warnings say that the statement of M is
+         --  never reached.  GNATprove names a file without its directory,
+         --  so not when another mutated file has the same name.
+         Name : constant String := Base_Name (To_String (R.Files (M.File).Path));
+      begin
+         for I in R.Files.First_Index .. R.Files.Last_Index loop
+            if I /= M.File
+              and then Base_Name (To_String (R.Files (I).Path)) = Name
+            then
+               return False;
+            end if;
+         end loop;
+         for W of R.Proof_Warnings loop
+            if Never_Reached (W, To_String (R.Files (M.File).Source), Name,
+                              M.Mutation.First, M.Mutation.Last)
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Unreached;
 
       function Checks (M : Mutant) return String is
          S : Unbounded_String;
@@ -429,6 +558,7 @@ package body AdaMutant.Reports is
             if M.Status = Survived then
                Put_Mutant
                  (M, (if Proof_Timed_Out (M) then "the proof timed out"
+                      elsif Unreached (M) then "GNATprove: never reached"
                       else ""));
             end if;
          end loop;
@@ -473,6 +603,18 @@ package body AdaMutant.Reports is
                           & " the mutants"" in the README.)"));
             end if;
          end;
+      end if;
+
+      --  Where the proof of anything succeeds: a contract that is always
+      --  False, or code that is never reached.
+      if not R.Proof_Warnings.Is_Empty then
+         Ada.Text_IO.New_Line;
+         Ada.Text_IO.Put_Line
+           ("The proof of the unmodified project proves anything here"
+            & " (--proof-warnings); mutants there survive the proof:");
+         for W of R.Proof_Warnings loop
+            Ada.Text_IO.Put_Line ("  " & W);
+         end loop;
       end if;
 
       if (for some M of R.Mutants => M.Equivalent) then

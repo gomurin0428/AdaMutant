@@ -485,6 +485,77 @@ procedure Unit_Tests is
               "only contract aspects are mutated", O);
    end Test_Contract_Aspects;
 
+   procedure Test_Proof_Warnings is
+      --  The output of GNATprove 16.1 with --proof-warnings=on, and the one
+      --  line format of earlier versions.
+      Log : constant String :=
+        "Phase 3 of 3: flow analysis and proof ..." & LF
+        & " warning: unreachable code" & LF
+        & "--> v.adb:8:10" & LF
+        & "    8 |             return 200;" & LF
+        & "      |             ^~~~~~~~~~" & LF & LF
+        & " medium: loop invariant might fail in first iteration" & LF
+        & "--> v.adb:15:33" & LF
+        & " warning: pragma Assume is always False" & LF
+        & "--> /home/x/src/v.adb:21:07" & LF
+        & " warning: statement has no effect" & LF
+        & "--> v.adb:30:7" & LF
+        & "v.ads:4:14: warning: precondition is always False" & LF
+        & "v.adb:25:21: warning: unreachable branch" & LF;
+      W : constant AdaMutant.Files.String_Vectors.Vector :=
+        AdaMutant.Runner.Proof_Warnings (Log);
+      All_Of : Unbounded_String;
+   begin
+      for X of W loop
+         Append (All_Of, X & "|");
+      end loop;
+      Check (To_String (All_Of) =
+               "v.adb:8:10: warning: unreachable code"
+               & "|v.adb:21:07: warning: pragma Assume is always False"
+               & "|v.ads:4:14: warning: precondition is always False"
+               & "|v.adb:25:21: warning: unreachable branch|",
+             "proof warnings: always False and unreachable only",
+             To_String (All_Of));
+   end Test_Proof_Warnings;
+
+   procedure Test_Never_Reached is
+      Source : constant String :=
+        "procedure P (X : Integer) is" & LF
+        & "begin" & LF
+        & "   if X > 0 then return; end if; Y := 1; Z := 2;" & LF
+        & "end P;" & LF;
+      --  Line 3 starts at byte 36.
+      W : constant String := "p.adb:3:34: warning: unreachable code";
+
+      function At_Col (C : Positive) return Boolean is
+        (AdaMutant.Reports.Never_Reached (W, Source, "p.adb", 35 + C, 35 + C));
+
+      --  GNAT counts a tab up to the next multiple of 8.
+      Tabbed : constant String :=
+        "begin" & LF & ASCII.HT & "Y := 1; Z := 2;" & LF & "end;" & LF;
+   begin
+      Check (At_Col (39), "never reached: in the statement of the warning");
+      Check (not At_Col (47), "never reached: not the next statement");
+      Check (not At_Col (11), "never reached: not before it on the line");
+      Check (not AdaMutant.Reports.Never_Reached (W, Source, "q.adb", 74, 74),
+             "never reached: not in another file");
+      Check (not AdaMutant.Reports.Never_Reached
+                   ("unreachable.adb:3:34: warning: precondition is always"
+                    & " False", Source, "unreachable.adb", 74, 74),
+             "never reached: only unreachable code");
+      Check (not AdaMutant.Reports.Never_Reached
+                   ("p.adb:3:35: warning: unreachable code", Source, "p.adb",
+                    74, 74),
+             "never reached: the warning must point at a token");
+      Check (AdaMutant.Reports.Never_Reached
+               ("p.adb:2:9: warning: unreachable code", Tabbed, "p.adb",
+                13, 13)
+             and then not AdaMutant.Reports.Never_Reached
+               ("p.adb:2:9: warning: unreachable code", Tabbed, "p.adb",
+                21, 21),
+             "never reached: a tab");
+   end Test_Never_Reached;
+
    procedure Test_Assertions_Check is
       use AdaMutant.Files;
       Tmp     : constant String :=
@@ -2224,6 +2295,8 @@ begin
    Test_Comments;
    Test_Assertions_Check;
    Test_Contract_Aspects;
+   Test_Proof_Warnings;
+   Test_Never_Reached;
    Test_Attributes;
    Test_Loop_Direction;
    Test_Deletions;
