@@ -17,7 +17,14 @@ package AdaMutant.Mutators is
       Numeric_Literal,
       String_Literal,
       Attribute_Swap,
-      Loop_Direction);
+      Loop_Direction,
+      Conjunct_Deletion,
+      Assertion_Deletion);
+   --  Conjunct_Deletion and Assertion_Deletion only change contracts:
+   --  the first leaves out an operand of "and" or "and then" in a
+   --  contract aspect, in ghost code or in an assertion pragma, the
+   --  second deletes an assertion pragma (Assert, Assert_And_Cut, Assume,
+   --  Loop_Invariant, Loop_Variant).
 
    type Mutator_Set is array (Mutator_Kind) of Boolean;
 
