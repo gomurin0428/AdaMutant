@@ -277,11 +277,36 @@ package body AdaMutant.Schemata is
                if Ends_Without_Body (K + 1) then
                   null;
                elsif Is_Del (K + 1, "(") and then Pending = A_Subprogram then
-                  --  An expression function.
+                  --  An expression function.  Not one with the aspect
+                  --  Static, whose expression must stay potentially
+                  --  static, which a case expression on the active
+                  --  mutant is not.
                   J := Closing (K + 1);
                   if J /= 0 then
-                     Regions.Append
-                       (Region'(Expression, S (K + 1).First, S (J).Last));
+                     declare
+                        Static : Boolean := False;
+                        I      : Positive := J + 1;
+                     begin
+                        if Is_Kw (I, "with") then
+                           while I <= N
+                             and then not (Depth (I) = 0 and then Is_Del (I, ";"))
+                           loop
+                              if Depth (I) = 0
+                                and then S (I).Kind = Identifier
+                                and then Lower (Txt (I)) = "static"
+                                and then (Is_Kw (I - 1, "with")
+                                          or else Is_Del (I - 1, ","))
+                              then
+                                 Static := True;
+                              end if;
+                              I := I + 1;
+                           end loop;
+                        end if;
+                        if not Static then
+                           Regions.Append
+                             (Region'(Expression, S (K + 1).First, S (J).Last));
+                        end if;
+                     end;
                   end if;
                else
                   Top := Top + 1;

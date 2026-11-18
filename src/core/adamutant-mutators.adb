@@ -588,7 +588,11 @@ package body AdaMutant.Mutators is
                   D := (if D > 0 then D - 1 else 0);
                elsif D = 0 then
                   if Aspect then
-                     if Is_Del (K, ";") or else Is_Kw (K, "is") then
+                     --  "do" ends the aspects of an extended return
+                     --  statement ("return R : T with ... do").
+                     if Is_Del (K, ";") or else Is_Kw (K, "is")
+                       or else Is_Kw (K, "do")
+                     then
                         Aspect := False;
                         Start := K + 1;
                      end if;
