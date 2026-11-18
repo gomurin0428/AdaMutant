@@ -70,8 +70,9 @@ package AdaMutant.Runner is
    --  Dir, outside the directories of GNATprove, show that it was compiled
    --  without assertions (no "-gnata"), or "" when one of them was
    --  compiled with them, when there is no such ALI file, or when a
-   --  project file, a configuration pragma file or one of Sources says
-   --  Assertion_Policy, which can turn them on without the switch.
+   --  configuration pragma file (.adc) or one of Sources has an
+   --  Assertion_Policy with Check, which can turn them on without the
+   --  switch.
 
    function Check_Kind (Message : String) return String;
    --  What a message of Proof_Failures is about: "postcondition" for

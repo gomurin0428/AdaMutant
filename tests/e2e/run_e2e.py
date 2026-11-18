@@ -922,10 +922,6 @@ def check_proof_log():
                  if not line.startswith(("prove", "test", "equivalence_build"))]
         config.write_text(f"prove = '{python} fake_prove.py'\ntimeout_ms = 1000\n"
                           f"test = '{python} -c \"pass\"'\n" + "".join(lines))
-        # The tests without assertions: a warning about the mutants of
-        # contracts.
-        gpr = work / "counters_tests.gpr"
-        gpr.write_text(gpr.read_text().replace(', "-gnata"', ""))
         proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if proc.returncode != 0:
@@ -986,8 +982,6 @@ def check_proof_log():
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
             errors.append("a message of the unmodified project is counted")
-        if "the tests are compiled without assertions (no -gnata" not in proc.stdout:
-            errors.append(f"no warning about assertions\n{proc.stdout}")
         # The line of the mutant, and a cache of proof results for each
         # sandbox, which its proof of the unmodified project fills.
         logs = work / ".adamutant" / "logs"
@@ -1062,9 +1056,6 @@ def check_prove_cache():
         if proc.returncode != 0:
             return [f"exit status {proc.returncode}\n{proc.stdout}"]
         errors = []
-        # The tests are compiled with -gnata: no warning about assertions.
-        if "without assertions" in proc.stdout:
-            errors.append(f"a warning about assertions\n{proc.stdout}")
         # Survivors whose proof finished: no note about time limits.
         if "Survived mutants:" not in proc.stdout or "did not finish in time" in proc.stdout:
             errors.append(f"survivors and a note about time limits\n{proc.stdout}")
@@ -1072,6 +1063,87 @@ def check_prove_cache():
         for slot in ("1", "2"):
             if not (caches / slot).is_dir() or not any((caches / slot).iterdir()):
                 errors.append(f"the proof cache of sandbox {slot} is empty")
+        return errors
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_assertions():
+    """Mutants of contracts need code built with assertions."""
+    # The directory to remove afterwards: "work" becomes the project in it.
+    root = Path(tempfile.mkdtemp(prefix="adamutant-assert-"))
+    work = root / "p"
+    try:
+        (work / "src").mkdir(parents=True)
+        (work / "src" / "steps.ads").write_text(
+            "package Steps is\n"
+            "   function Next (X : Integer) return Integer;\n"
+            "end Steps;\n")
+        (work / "src" / "steps.adb").write_text(
+            "package body Steps is\n"
+            "   function Inc (X : Integer) return Integer\n"
+            "     with Post => Inc'Result > X, Inline => True\n"
+            "   is\n"
+            "   begin\n"
+            "      return X + 1;\n"
+            "   end Inc;\n"
+            "   function Next (X : Integer) return Integer is (Inc (X));\n"
+            "end Steps;\n")
+        (work / "src" / "test_steps.adb").write_text(
+            "with Steps;\n"
+            "with Ada.Command_Line;\n"
+            "procedure Test_Steps is\n"
+            "begin\n"
+            "   if Steps.Next (1) /= 2 then\n"
+            "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+            "   end if;\n"
+            "end Test_Steps;\n")
+        python = (f'"{sys.executable}"' if " " in sys.executable
+                  else sys.executable).replace("\\", "/")
+        errors = []
+        for switches, warned in (('"-gnat2022"', True), ('"-gnat2022", "-gnata"', False)):
+            (work / "p.gpr").write_text(
+                "project P is\n"
+                '   for Source_Dirs use ("src");\n'
+                '   for Object_Dir use "obj";\n'
+                '   for Exec_Dir use "bin";\n'
+                '   for Main use ("test_steps.adb");\n'
+                "   package Compiler is\n"
+                f'      for Default_Switches ("Ada") use ({switches});\n'
+                "   end Compiler;\n"
+                "end P;\n")
+            (work / "adamutant.toml").write_text(
+                "mutate = ['src/steps.adb']\n"
+                "build = 'gprbuild -p -q -P p.gpr'\n"
+                "test = '\"bin/test_steps\"'\n"
+                f"prove = '{python} -c \"pass\"'\n"
+                "sandbox_exclude = ['obj', 'bin']\n")
+            shutil.rmtree(work / "obj", ignore_errors=True)
+            shutil.rmtree(work / "bin", ignore_errors=True)
+            proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            report = work / ".adamutant" / "reports" / "mutation-report.json"
+            if proc.returncode != 0 or not report.exists():
+                return [f"{switches}: exit status {proc.returncode}\n{proc.stdout}"]
+            want = ("src/steps.adb is compiled without assertions (no -gnata in"
+                    " its GNAT ALI file)")
+            if (want in proc.stdout) != warned:
+                errors.append(f"{switches}: warning {'missing' if warned else 'given'}"
+                              f"\n{proc.stdout}")
+            mutants = [m for f in json.loads(report.read_text(encoding="utf-8"))
+                       ["files"].values() for m in f["mutants"]]
+            # The postcondition is mutated; Inline is no contract (no
+            # BooleanLiteral of its True).
+            if not any(m["location"]["start"]["line"] == 3 for m in mutants) \
+                    or any(m["mutatorName"] == "BooleanLiteral" for m in mutants):
+                errors.append(f"{switches}: the mutants of the aspects: {mutants}")
+            # With assertions, the test detects a mutant that makes the
+            # postcondition false for Next (1) = 2 (> to <=).
+            if not warned and not any(
+                    m["location"]["start"]["line"] == 3 and m["status"] == "Killed"
+                    for m in mutants):
+                errors.append(f"{switches}: no mutant of the postcondition is"
+                              f" detected\n{proc.stdout}")
         return errors
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -1321,7 +1393,8 @@ def main():
     only = [a for a in sys.argv[1:] if not a.startswith("--")]
     checks = (("since", check_since), ("proof_log", check_proof_log),
               ("baseline", check_baseline), ("library", check_library),
-              ("prove_cache", check_prove_cache))
+              ("prove_cache", check_prove_cache),
+              ("assertions", check_assertions))
     unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:
         sys.exit("no such case: " + " ".join(unknown))

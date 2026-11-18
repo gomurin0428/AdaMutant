@@ -585,19 +585,39 @@ package body AdaMutant.Runner is
 
       function Has_Line (Text, Line : String) return Boolean is
         (Ada.Strings.Fixed.Index (Text, ASCII.LF & Line & ASCII.LF) > 0
+         or else Ada.Strings.Fixed.Index
+                   (Text, ASCII.LF & Line & ASCII.CR & ASCII.LF) > 0
          or else (Text'Length >= Line'Length + 1
                   and then Text (Text'First .. Text'First + Line'Length)
                            = Line & ASCII.LF));
    begin
       for Path of Files loop
-         if Has_Extension (Path, ".adc") or else Has_Extension (Path, ".gpr")
-           or else Sources.Contains (Path)
-         then
-            if Ada.Strings.Fixed.Index
-                 (Lower (Read (Join (Dir, Path))), "assertion_policy") > 0
-            then
-               return "";
-            end if;
+         if Has_Extension (Path, ".adc") or else Sources.Contains (Path) then
+            --  "pragma Assertion_Policy (Check)" or "(Pre => Check, ...)":
+            --  a Check before the end of the pragma.
+            declare
+               Text : constant String := Lower (Read (Join (Dir, Path)));
+               At_K : Natural := Ada.Strings.Fixed.Index
+                                   (Text, "assertion_policy");
+            begin
+               while At_K > 0 loop
+                  declare
+                     Stop  : Natural := Ada.Strings.Fixed.Index
+                                          (Text (At_K .. Text'Last), ";");
+                  begin
+                     if Stop = 0 then
+                        Stop := Text'Last;
+                     end if;
+                     if Ada.Strings.Fixed.Index
+                          (Text (At_K .. Stop), "check") > 0
+                     then
+                        return "";
+                     end if;
+                     At_K := Ada.Strings.Fixed.Index
+                               (Text (Stop .. Text'Last), "assertion_policy");
+                  end;
+               end loop;
+            end;
          end if;
       end loop;
       for Path of Files loop
@@ -2120,9 +2140,12 @@ package body AdaMutant.Runner is
       begin
          Baseline_Step ("build", To_String (S.Build), Build_TO, Elapsed);
       end;
-      --  Contracts are always mutated, and only tests built with
-      --  assertions can detect those mutants.
-      if Warn /= null then
+      --  Contracts are always mutated, and only code built with assertions
+      --  lets the tests detect those mutants.
+      if Warn /= null
+        and then (for some M of R.Mutants =>
+                    M.Mutation.Contract and then M.Status = Pending)
+      then
          declare
             Sources : String_Vectors.Vector;
          begin
@@ -2134,11 +2157,11 @@ package body AdaMutant.Runner is
                  Without_Assertions (Slot_Dir (1), Sources);
             begin
                if File /= "" then
-                  Warn ("the tests are compiled without assertions (no -gnata"
-                        & " in the GNAT ALI file of " & File & "): mutants of"
-                        & " contracts (aspects and ghost code) are then"
-                        & " detected only by the proof; compile the tests"
-                        & " with -gnata");
+                  Warn (File & " is compiled without assertions (no -gnata"
+                        & " in its GNAT ALI file), so the tests cannot detect"
+                        & " mutants of contracts (aspects and ghost code);"
+                        & " build the code under test with -gnata (with"
+                        & " gprbuild: -cargs -gnata)");
                end if;
             end;
          end;

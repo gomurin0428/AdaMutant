@@ -505,7 +505,7 @@ package body AdaMutant.Config is
       & "# surviving mutant whose object files are the same as those of the" & LF
       & "# unmodified project is an equivalent mutant and becomes Ignored." & LF
       & "# equivalence_build = ""gprbuild -p -q -c -P tests/tests.gpr"
-      & " -cargs -O2 -g0""" & LF
+      & " -cargs -gnata -O2 -g0""" & LF
       & LF
       & "# concurrency = 4" & LF
       & "timeout_factor = 1.5" & LF

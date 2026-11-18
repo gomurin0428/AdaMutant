@@ -111,10 +111,10 @@ adamutant run --baseline .adamutant/reports/mutation-report.json   # 前回の�
 ```toml
 mutate = ["src/**/*.adb", "src/**/*.ads"]   # 変異させるファイル
 exclude = ["src/generated/**"]
-build = "gprbuild -p -q -P tests.gpr"       # 必須。失敗したミュータントは CompileError
+build = "gprbuild -p -q -P tests.gpr -cargs -gnata"  # 必須。失敗したミュータントは CompileError
 test = "bin/run_tests"                      # 必須（または [tests]）。終了コード 0 以外なら Killed
 prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # 必須。テストが通ったミュータントだけに実行。0 以外なら Killed (証明)
-equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"  # 省略可。等価ミュータントの判定に使うビルド
+equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -gnata -O2 -g0"  # 省略可。等価ミュータントの判定に使うビルド
 concurrency = 4                             # 既定は CPU 数の半分
 timeout_factor = 1.5                        # テスト時間の上限 = 元の時間 * factor + timeout_ms
 timeout_ms = 5000
@@ -170,7 +170,7 @@ break = 0
 - テストを削った、または弱くした（検出済みのはずのミュータントが、今は生き残る）
 - 変わっていない行の動作が、ほかの行やほかのファイルの変更で変わった
 - ビルドやテストのコマンド、コンパイラを変えた
-- 変異の種類の設定を変えた（`mutators`、`exclude_mutators`、`include_mutators`）。`--since` があると、変わっていない行の新しいミュータントは、レポートに結果がないので Ignored（`unchanged since REF`）のままです
+- 変異の種類の設定を変えた（`mutators`、`exclude_mutators`、`include_mutators`）。`--since` があると、変わっていない行の新しいミュータントは、レポートに結果がないので Ignored（`unchanged since REF`）のままです。契約を変異させていなかった以前の版のレポートも同じです
 - マシンの負荷で結果が変わるミュータント（時間切れで Timeout になったもの）
 
 ### ミュータントの証明を速くする
@@ -215,16 +215,18 @@ GNATprove 16.1 での例です。24 個の関数（チェック 480 個）から
 | AttributeSwap | `'First`↔`'Last`、`'Min`↔`'Max`、`'Succ`↔`'Pred`、`'Floor`↔`'Ceiling`、`'First_Valid`↔`'Last_Valid`。入れ替え先も同じ型の値を返すので、型は合います。それでも、選択肢が重なってはいけない所や型を覆わなければならない所（case の選択肢、名前付きの配列集成体）や、静的な値が範囲を外れる所（`Color'Succ (Color'Last)`）ではコンパイルが通らず、CompileError になります。宣言の部分型の中（`X : String (1 .. A'Last)`、`subtype S is T range T'First .. T'Last`）は、NumericLiteral の範囲の上下限と同じく変異させません。初期値（`L : constant Natural := A'Last`）と宣言のアスペクト（述語）は変異させます |
 | LoopDirection | `for I in A .. B loop`↔`for I in reverse A .. B loop`。`reverse` を足すのは、範囲（`A .. B`、`X'Range`）を回すループと、そのファイルか仕様か Standard で宣言された型・部分型の名前だけを回すループ（`for I in Index loop`、`for C in Character loop`）です。ほかの名前（`for C in L loop`、`for I in Types.Index loop`）やイテレータ（`for C in V.Iterate`、`for E of A`）のループは、逆向きに回せないコンテナやイテレータかもしれないので、足しません。量化式・集成体の中の `for` も変異させません。反復のフィルタの `when` から後ろは、範囲として見ません。`reverse` を外すのは、イテレータも含めてすべての `for ... in reverse` のループです（前向きなら必ずコンパイルが通ります）。**既定では使いません**。回す順序が結果に影響しないループ（合計、別の配列へのコピーなど）は多く、そのミュータントは等価です。それでもループ不変条件があると証明はたいてい失敗するため、「テストの穴の候補」に挙がってしまいます。使うときは `include_mutators = ["LoopDirection"]` と書きます |
 
-`with`/`use` 節、`pragma`、表現節（`for X'Size use ...`）、`digits`/`delta` は変異させません。サブプログラムの仮引数の既定値も、宣言と本体で一致していないとコンパイルできない（完全準拠）ため変異させません（`is null`、`is abstract`、式関数、ジェネリック仮サブプログラムの既定値は変異させます）。アスペクト（`Pre`, `Post`, `Type_Invariant` など）とゴーストコード（`Ghost` アスペクト付きで宣言されたサブプログラム・オブジェクト・型の宣言と本体、およびそれらを呼び出す・代入する文）は、常に変異させます。これらは契約で、契約のミュータントは、その契約の強さを表すからです（下記）。ゴーストの名前は変異対象の `.adb` と、同じ名前の `.ads` から集めます。
+`with`/`use` 節、`pragma`、表現節（`for X'Size use ...`）、`digits`/`delta` は変異させません。サブプログラムの仮引数の既定値も、宣言と本体で一致していないとコンパイルできない（完全準拠）ため変異させません（`is null`、`is abstract`、式関数、ジェネリック仮サブプログラムの既定値は変異させます）。契約のアスペクト（`Pre`、`Post` とその `'Class` 形、`Contract_Cases`、`Type_Invariant`、述語、`Default_Initial_Condition`、`Initial_Condition`、`Subprogram_Variant`、`Refined_Post`、`Exceptional_Cases` など）とゴーストコード（`Ghost` アスペクト付きで宣言されたサブプログラム・オブジェクト・型の宣言と本体、およびそれらを呼び出す・代入する文）は、常に変異させます。契約のミュータントから、その契約の強さがわかるからです（下記）。契約ではないアスペクト（`Size`、`Alignment`、`Inline`、`Import`、`External_Name`、`Global`、`Depends`、`Annotate` など）は、表現節と同じく変異させません。ゴーストの名前は変異対象の `.adb` と、同じ名前の `.ads` から集めます。
 
-契約とゴーストコードは、アサーションを有効にしたビルドでしか実行されません。テストは `-gnata` を付けてビルドしてください。付けないと、テストは契約のミュータントを検出できず、それらはすべて証明に回ります。AdaMutant は、変更前のプロジェクトをビルドしたあと、変異させるファイルの GNAT の ALI ファイルを読み、どれも `-gnata` なしでコンパイルされていれば注意を出します（プロジェクトファイル、構成プラグマのファイル、ソースに `Assertion_Policy` があるときは出しません）。以前の版の `mutate_contracts = false` が書かれた設定は受け付けないので、その行を消してください。
+契約とゴーストコードは、アサーションを有効にしたビルドでしか実行されません。テストするコードも `-gnata` を付けてビルドしてください（gprbuild なら `-cargs -gnata`。テストのプロジェクトが使うプロジェクトにも効きます）。付けないと、テストは契約のミュータントを検出できません。AdaMutant は、契約のミュータントがあるとき、変更前のプロジェクトをビルドしたあとで、変異させるファイルの GNAT の ALI ファイルを読み、どれも `-gnata` なしでコンパイルされていれば警告を出します（構成プラグマのファイル `.adc` かソースに、`Check` を指定した `Assertion_Policy` があるときは出しません）。この確認には `build` のあとの ALI ファイルが要るので、テストのコマンドがビルドするときは警告を出しません。以前の版の `mutate_contracts = false` が書かれた設定は受け付けないので、その行を消してください。
 
-テストも証明も検出しなかった、契約のミュータントの読み方です。
+証明が検出した契約のミュータントは、「テストの穴の候補」には挙げません。たとえば弱めた事後条件は、コードが同じなので、どんなテストでも検出できないからです。テストでも証明でも検出されなかった契約のミュータントは、次のように読めます。
 
-- 事後条件を強めても（`Post => R >= 0` → `Post => R > 0`）証明できる：コードは契約より多くを保証しているので、契約をもっと強く書ける
-- 事後条件を弱めても、どこでも証明できる：その部分は、どの呼び出し側もテストも必要としていない
-- 事前条件を強めても証明できる：どの呼び出し側も、もうそれを満たしている
+- 事後条件を強めても（`Post => R >= 0` → `Post => R > 0`）証明できる：本体は契約より多くを保証しているので、契約をもっと強く書ける。これは GNATprove が証明する本体の場合で、SPARK の外の本体では、GNATprove は事後条件を仮定するだけです
+- 事後条件を弱めても証明できる：その部分を必要とする呼び出し側の証明がない。弱めた事後条件は、テストでは決して検出できません
+- 事前条件を強めても証明できる：SPARK の呼び出し側はすべて、すでにそれを満たしており、その外で呼ぶテストもない。SPARK のコードから呼ばれない手続き（API など）なら、境界で呼ぶテストを足す
 - 事前条件を弱めても証明できる：本体はその部分を必要としていない
+- 契約のミュータントにも、言い方が違うだけで同じことを言う等価なものがあります。`equivalence_build` は契約のミュータントを調べないので、そうしたものは Survived のまま残ります
+- 証明がないとき（`prove = "exit 0"`）は、アサーション付きのテストだけが契約を調べます。弱めた事後条件は必ず生き残り、スコアは下がります
 
 ミュータントを無効にするコメントはありません。テストで観測できないミュータントは証明に任せ（[想定している使い方](#想定している使い方)）、等価ミュータントは `equivalence_build` で見分けます。
 
@@ -372,7 +374,7 @@ end case;
 元のプログラムと動作が同じミュータント（等価ミュータント）は、どんなテストを書いても検出できません。`equivalence_build` にコマンドを書くと、AdaMutant は生き残ったミュータントをそのコマンドでビルドし、できたオブジェクトファイルを変更前のものと比べます。すべて同じなら、そのミュータントは変更前と同じプログラムなので、Ignored（理由は `equivalent mutant: ...`）にしてスコアから外します。等価と判定したミュータントは、コンソールに `Equivalent mutants` として出ます。
 
 ```toml
-equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -O2 -g0"
+equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -gnata -O2 -g0"
 ```
 
 コマンドは、`build` のコマンドから最適化とデバッグ情報のスイッチだけを変えたものにしてください。
