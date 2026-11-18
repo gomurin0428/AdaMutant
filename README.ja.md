@@ -231,7 +231,7 @@ prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --c
 | 名前 | 例 |
 |---|---|
 | ArithmeticOperator | `+`↔`-`, `*`↔`/`, `mod`,`rem`→`*`（`mod`↔`rem` は符号が異なるときしか差が出ず、ほぼ等価ミュータントになるため）, `**`→`*`, `&` は対象外 |
-| EqualityOperator | `<`→`<=`,`>=`、`=`↔`/=` など |
+| EqualityOperator | `<`→`<=`、`/=`、`False`。`<=`→`<`、`=`、`True`。`>`→`>=`、`/=`、`False`。`>=`→`>`、`=`、`True`。`=`→`/=`、`False`。`/=`→`=`、`True`。`False` と `True` は比較全体を置き換えます（`A < B`→`False`）。比較は、入力を `A < B`、`A = B`、`A > B` の 3 つに分けます。`<` の 3 つのミュータントは、それぞれそのうち 1 つでだけ元と結果が違います（`A < B` なら `False`、`A = B` なら `<=`、`A > B` なら `/=`）。3 つとも殺すには、それぞれの場合に結果を確かめるテストが要り、そうしたテストは否定の `>=` のような、ほかの置き換えも殺します（Kaminski、Ammann、Offutt、2011 年）。`=` と `/=` はレコードを比べることもあり、レコードには `<` がないので、否定と定数だけにします。`if`、`elsif`、`while`、`exit when` の条件全体は定数にしません。ConditionalExpression がすでに同じミュータントを作るか、ループが終わらなくなる（`while True`）からです |
 | LogicalOperator | `and`↔`or`, `and then`↔`or else`, `xor`→`or`。`A and then B and then C` のような連鎖では `(A or else B) and then C` のように括弧を補う |
 | UnaryOperator | `not X`→`X`, `-X`↔`+X`, `abs X`→`X` |
 | BooleanLiteral | `True`↔`False` |

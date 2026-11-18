@@ -231,7 +231,7 @@ prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --c
 | Name | Examples |
 |---|---|
 | ArithmeticOperator | `+`↔`-`, `*`↔`/`, `mod`,`rem`→`*` (`mod`↔`rem` differ only when the signs differ, so that would almost always be an equivalent mutant), `**`→`*`. `&` is not mutated |
-| EqualityOperator | `<`→`<=`,`>=`, `=`↔`/=` and so on |
+| EqualityOperator | `<`→`<=`,`/=`,`False`; `<=`→`<`,`=`,`True`; `>`→`>=`,`/=`,`False`; `>=`→`>`,`=`,`True`; `=`→`/=`,`False`; `/=`→`=`,`True`. `False` and `True` replace the whole relation (`A < B`→`False`). A relation splits its inputs in three: `A < B`, `A = B` and `A > B`, and each of the three mutants of `<` differs from it in one of them only (`False` when `A < B`, `<=` when `A = B`, `/=` when `A > B`). So killing all three takes a test that checks the result in each case, and such tests also kill the other replacements, such as the negation `>=` (Kaminski, Ammann and Offutt, 2011). `=` and `/=` may compare records, which have no `<`, so they only get the negation and the constant. No constant replaces the whole condition of an `if`, `elsif`, `while` or `exit when`: ConditionalExpression already makes that mutant, or the loop would never end (`while True`) |
 | LogicalOperator | `and`↔`or`, `and then`↔`or else`, `xor`→`or`. In a chain such as `A and then B and then C`, parentheses are added, as in `(A or else B) and then C` |
 | UnaryOperator | `not X`→`X`, `-X`↔`+X`, `abs X`→`X` |
 | BooleanLiteral | `True`↔`False` |

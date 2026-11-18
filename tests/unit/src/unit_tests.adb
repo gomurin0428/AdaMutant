@@ -208,8 +208,65 @@ procedure Unit_Tests is
               "if condition");
       Expect ("procedure P is begin while A < B loop null; end loop; end P;",
               "ConditionalExpression A < B->False|EqualityOperator <-><="
-              & "|EqualityOperator <->>=",
+              & "|EqualityOperator <->/=",
               "while condition never becomes True");
+      --  Each relational operator: two operators and a constant, which
+      --  differ from it in one of A < B, A = B, A > B each.
+      declare
+         O : Scan_Options;
+      begin
+         O.Enabled := [others => False];
+         O.Enabled (Equality_Operator) := True;
+         Expect ("X := A < B; Y := A <= B; Z := A > B; W := A >= B;"
+                 & " V := A = B; U := A /= B;",
+                 "EqualityOperator <-><=|EqualityOperator <->/="
+                 & "|EqualityOperator A < B->False"
+                 & "|EqualityOperator <=-><|EqualityOperator <=->="
+                 & "|EqualityOperator A <= B->True"
+                 & "|EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|EqualityOperator A > B->False"
+                 & "|EqualityOperator >=->>|EqualityOperator >=->="
+                 & "|EqualityOperator A >= B->True"
+                 & "|EqualityOperator =->/=|EqualityOperator A = B->False"
+                 & "|EqualityOperator /=->=|EqualityOperator A /= B->True",
+                 "relational operators: the sufficient set", O);
+         --  The whole relation, between the operators around it.
+         Expect ("X := not F (A) + 1 < B (2) * C and then D or else"
+                 & " (for all I in R => G (I) = H) and then (if P = Q then 1"
+                 & " else 2) > 0;",
+                 "EqualityOperator <-><=|EqualityOperator <->/="
+                 & "|EqualityOperator not F (A) + 1 < B (2) * C->False"
+                 & "|EqualityOperator =->/=|EqualityOperator G (I) = H->False"
+                 & "|EqualityOperator =->/=|EqualityOperator P = Q->False"
+                 & "|EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|EqualityOperator (if P = Q then 1 else 2) > 0->False",
+                 "relational operators: the extent of the relation", O);
+         --  The whole condition of a loop: never the constant, which
+         --  would not end it; with ConditionalExpression off, the other
+         --  one.
+         Expect ("while A < B loop null; end loop; exit when A >= B;"
+                 & " exit Outer when A /= B; if A = B then null; end if;",
+                 "EqualityOperator <-><=|EqualityOperator <->/="
+                 & "|EqualityOperator A < B->False"
+                 & "|EqualityOperator >=->>|EqualityOperator >=->="
+                 & "|EqualityOperator A >= B->True"
+                 & "|EqualityOperator /=->=|EqualityOperator A /= B->True"
+                 & "|EqualityOperator =->/=|EqualityOperator A = B->False",
+                 "relational operators: whole conditions without"
+                 & " ConditionalExpression", O);
+         O.Enabled (Conditional_Expression) := True;
+         Expect ("while A < B loop null; end loop; exit when A >= B;"
+                 & " if A = B then null; end if;",
+                 "ConditionalExpression A < B->False"
+                 & "|EqualityOperator <-><=|EqualityOperator <->/="
+                 & "|ConditionalExpression A >= B->True"
+                 & "|EqualityOperator >=->>|EqualityOperator >=->="
+                 & "|ConditionalExpression A = B->True"
+                 & "|ConditionalExpression A = B->False"
+                 & "|EqualityOperator =->/=",
+                 "relational operators: no constant for a whole condition",
+                 O);
+      end;
       Expect ("procedure P is begin exit when Done; end P;",
               "ConditionalExpression Done->True",
               "exit when only becomes True (False would hang the loop)");
@@ -229,7 +286,8 @@ procedure Unit_Tests is
               "", "aspects are not mutated by default");
       Expect ("package P is function F (X : Integer) return Integer"
               & " with Pre => X > 0; end P;",
-              "EqualityOperator >->>=|EqualityOperator >-><=|NumericLiteral 0->1",
+              "EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator X > 0->False|NumericLiteral 0->1",
               "aspects with mutate_contracts",
               (Mutate_Contracts => True, others => <>));
       Expect ("package body P is "
@@ -843,7 +901,7 @@ procedure Unit_Tests is
       end loop;
       --  > and 1 (two mutations of > and one of 1) in the aspect; + and 2
       --  in F; the deletion, * and 3 in G.
-      Check (To_String (Marked) = "CCC--CCC",
+      Check (To_String (Marked) = "CCCC--CCC",
              "mutations of contracts and ghost code are marked",
              To_String (Marked) & " " & Describe (Source, Options));
    end Test_Contract_Flag;
