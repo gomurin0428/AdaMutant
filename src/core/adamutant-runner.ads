@@ -52,6 +52,9 @@ package AdaMutant.Runner is
       Example : Ada.Strings.Unbounded.Unbounded_String;
       --  The counterexample that GNATprove prints under the message, on
       --  one line ("e.g. when A = 0 and B = 1"), or "".
+      Weak_Contract : Boolean := False;
+      --  GNATprove adds "possible fix: add or complete related loop
+      --  invariants or postconditions" (see Results.Proof_Evidence).
    end record;
 
    package Proof_Message_Vectors is new Ada.Containers.Vectors

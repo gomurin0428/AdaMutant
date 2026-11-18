@@ -306,6 +306,9 @@ package body AdaMutant.Runner is
       return To_String (Result);
    end One_Line_Messages;
 
+   Weak_Hint : constant String :=
+     "add or complete related loop invariants or postconditions";
+
    function Proof_Messages
      (Log : String) return Proof_Message_Vectors.Vector
    is
@@ -346,9 +349,39 @@ package body AdaMutant.Runner is
                   Current := Sev in "high" | "medium" | "low" | "error";
                   In_Example := False;
                   if Current then
-                     Result.Append
-                       (Proof_Message'(Text    => To_Unbounded_String (Msg),
-                                       Example => Null_Unbounded_String));
+                     --  "--output=oneline" puts the counterexample and the
+                     --  notes into the message: "... (e.g. when X = 1)
+                     --  [possible fix: ...]".
+                     declare
+                        Start : constant Natural :=
+                          Ada.Strings.Fixed.Index (Msg, " (e.g. when ");
+                        Depth : Natural := 0;
+                        Stop  : Natural := 0;
+                     begin
+                        if Start > 0 then
+                           for K in Start + 1 .. Msg'Last loop
+                              if Msg (K) = '(' then
+                                 Depth := Depth + 1;
+                              elsif Msg (K) = ')' then
+                                 Depth := Depth - 1;
+                                 if Depth = 0 then
+                                    Stop := K;
+                                    exit;
+                                 end if;
+                              end if;
+                           end loop;
+                        end if;
+                        Result.Append
+                          (Proof_Message'
+                             (Text          => To_Unbounded_String (Msg),
+                              Example       =>
+                                (if Stop > 0
+                                 then To_Unbounded_String
+                                   (Msg (Start + 2 .. Stop - 1))
+                                 else Null_Unbounded_String),
+                              Weak_Contract =>
+                                Ada.Strings.Fixed.Index (Msg, Weak_Hint) > 0));
+                     end;
                   end if;
                end;
             elsif Current then
@@ -364,6 +397,9 @@ package body AdaMutant.Runner is
                        (T0 (T0'First + 2 .. T0'Last), Ada.Strings.Both)
                      else T0);
                begin
+                  if Ada.Strings.Fixed.Index (T, Weak_Hint) > 0 then
+                     Result (Result.Last_Index).Weak_Contract := True;
+                  end if;
                   if Starts_With (T, "e.g. when ")
                     and then Length (Result.Last_Element.Example) = 0
                   then
@@ -962,17 +998,25 @@ package body AdaMutant.Runner is
                                  M.Failed_Checks.Append (Check_Kind (F));
                               end if;
                               --  A failure that GNATprove confirmed counts
-                              --  before one with a counterexample that
-                              --  the real code does not reach.
+                              --  before one that a contract causes, and
+                              --  that before the others.  Of the others,
+                              --  one with a counterexample is shown.
                               if Sev in "high" | "error" then
                                  if M.Evidence /= Confirmed then
                                     M.Evidence := Confirmed;
                                     Shown := K;
                                  end if;
-                              elsif Length (Failures (K).Example) > 0
-                                and then M.Evidence = Undecided
+                              elsif Failures (K).Weak_Contract then
+                                 if M.Evidence = Undecided then
+                                    M.Evidence := Weak_Contract;
+                                    Shown := K;
+                                 end if;
+                              elsif M.Evidence = Undecided
+                                and then Length (Failures (K).Example) > 0
+                                and then (Shown = 0
+                                          or else Length
+                                            (Failures (Shown).Example) = 0)
                               then
-                                 M.Evidence := Weak_Contract;
                                  Shown := K;
                               end if;
                            end;
@@ -985,7 +1029,7 @@ package body AdaMutant.Runner is
                            M.Status_Reason := To_Unbounded_String
                              ((case M.Evidence is
                                  when Confirmed     => Confirmed_Failure,
-                                 when Weak_Contract => Unreached_Example,
+                                 when Weak_Contract => Weak_Contract_Failure,
                                  when others        => "proof failed: ")
                               & To_String (Failures (Shown).Text)
                               & (if Length (M.Example) > 0

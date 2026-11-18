@@ -20,10 +20,12 @@ package AdaMutant.Results is
    --  For a mutant that only the proof detects, what GNATprove gives with
    --  the failure.  Confirmed: a message of severity high (GNATprove ran
    --  a counterexample with the real code and the check failed), or an
-   --  error.  Weak_Contract: a counterexample that the real code does
-   --  not reach, which happens when the code relies on more than the
-   --  contracts of what it calls (or a loop invariant) say.  Undecided:
-   --  no counterexample, or no message that can be read.
+   --  error.  Weak_Contract: GNATprove adds "possible fix: add or complete
+   --  related loop invariants or postconditions", which it does when the
+   --  counterexample fails only with the contracts of the calls (or the
+   --  loop invariants) in place of the code they stand for.  Undecided:
+   --  anything else, with or without a counterexample (GNATprove could
+   --  not run it with the real code, or gave none).
 
    type Coverage is (Unknown, Covered, Not_Covered);
    --  Whether the unmodified tests execute the place of a mutant.
@@ -44,8 +46,8 @@ package AdaMutant.Results is
       --  once, in the order of the messages.
       Evidence      : Proof_Evidence := None;
       Example       : Unbounded_String;
-      --  With Evidence = Weak_Contract or Confirmed: the counterexample,
-      --  "e.g. when H = 51", or "".
+      --  The counterexample that GNATprove gives with the failure, "e.g.
+      --  when H = 51", or "".
       Reached       : Coverage := Unknown;
       Covered_By    : AdaMutant.Config.String_Vector;
       --  With Reached = Covered: the names of the tests that execute the
@@ -104,11 +106,9 @@ package AdaMutant.Results is
    function Score_Image (C : Status_Counts) return String;
    --  "83.33" or "n/a".
 
-   Confirmed_Failure : constant String :=
-     "proof failed, confirmed by a counterexample: ";
-   Unreached_Example : constant String :=
-     "proof failed, with a counterexample that the real code does not"
-     & " reach: ";
+   Confirmed_Failure : constant String := "proof failed, confirmed: ";
+   Weak_Contract_Failure : constant String :=
+     "proof failed, a contract says too little: ";
    --  How the reason of a mutant with Evidence = Confirmed or
    --  Weak_Contract starts.  The other proof failures start with "proof
    --  failed".

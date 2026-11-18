@@ -20,13 +20,13 @@ Ada / SPARK 向けのミューテーションテストツールです。.NET の
 AdaMutant は、テストと GNATprove の証明を両方使う前提のツールです。次の流れで使うことを想定しています。
 
 1. テストと証明の両方を設定して回します。ミュータントはまずテストにかけ、テストが検出できなかったものだけを証明にかけます（テスト先行）。テストだけ、証明だけで回す設定はありません。
-2. 証明だけが検出したミュータントは、「テストの穴の候補」として一覧で見ます。コンソールの `Detected only by the proof (candidates for a missing test):` に、GNATprove が失敗と一緒に出したものによって 3 つに分けて出ます（prove のコマンドに `--counterexamples=on` が要ります）。
+2. 証明だけが検出したミュータントは、「テストの穴の候補」として一覧で見ます。コンソールの `Detected only by the proof (candidates for a missing test):` に、GNATprove が失敗と一緒に出したものによって 3 つに分けて出ます。分けるには GNATprove の反例が要るので、prove のコマンドに `--counterexamples=on` を付けます。
 
    | 区分 | 判定の材料 | 人がすること |
    |---|---|---|
-   | `Confirmed`（確定） | severity が high（GNATprove が反例を本物のコードで実行し、検査が落ちた）、またはエラー | テストで観測できる振る舞いなら、テストを足す |
-   | `A counterexample that the real code does not reach`（契約が足りない） | severity が medium で、本物のコードでは起こらない反例がある | 反例の値を見て、どの契約（呼び出し先の事後条件、ループ不変条件）が緩いかを探し、強める |
-   | `Undecided`（不明） | severity が medium で、反例がない | 人が判断する |
+   | `Confirmed`（確定） | severity が high、またはエラー。high は、GNATprove が反例を本物のコードで実行して、検査が落ちたことを表します | テストで観測できる振る舞いなら、テストを足す |
+   | `A contract says too little`（契約が足りない） | GNATprove が `possible fix: add or complete related loop invariants or postconditions` と添えたもの。呼び出し先を契約に（ループをループ不変条件に）置き換えたときだけ、反例で検査が落ちています | どの契約（呼び出し先の事後条件、ループ不変条件）が緩いかを探し、強める |
+   | `Undecided`（不明） | それ以外。反例がないもの、反例を本物のコードで確かめられなかったもの（呼び出し先が SPARK でない、ループが長すぎる、など） | 人が判断する。反例があれば一覧に出る |
 
    - 到達しない分岐のように、テストでは観測できないものは、証明に任せてそのままにします。除外の指定は要りません。
    - 「契約が足りない」に入るのは、本当は動作が変わらない（同値な）ミュータントのことも、本物のバグのこともあります。GNATprove が確かめるのは、自分が選んだ反例 1 つだけだからです。契約を強めると、同値なものは証明が通り、本物のバグは「確定」に移ります。
@@ -37,12 +37,12 @@ AdaMutant は、テストと GNATprove の証明を両方使う前提のツー�
 
 ```
 Detected only by the proof (candidates for a missing test):
-  Confirmed: the check fails in the real code
+  Confirmed: the failure happens with the real code (or GNATprove reports an error)
   #8 src/counters.adb:13:19 ArithmeticOperator (range check, postcondition; no test executes this code)
     - +
     + -
     e.g. when A = 0 and B = 1
-  A counterexample that the real code does not reach: a contract says less than the code relies on
+  A contract says too little: the failure happens only with the contracts of the calls (or the loop invariants) in place of the code
   #12 src/halves.adb:13:10 ConditionalExpression (range check; no test executes this code)
     - H > 50
     + False
@@ -61,8 +61,8 @@ Survived mutants:
     + 3
 ```
 
-- #8 は `Saturating_Add` の `A + B` を `A - B` にする変異で、A = 0、B = 1 で本当に事後条件が落ちます。テストを足す候補です（2）。
-- `Halves.Half` の本体は `X / 2` を返しますが、契約は「結果は X 以下」としか言っていません。#12 は `H > 50` の判定を消す変異で、実際には H が 50 を超えないので、動作は変わりません（同値）。#18 は `H * 2` を `H * 3` にする変異で、X = 100 のとき 150 になる本物のバグです。どちらも、GNATprove の反例（H = 51、H = 34）は本物の `Half` では起こりません。`Half` の事後条件を `Half'Result = X / 2` に強めると、#12 は証明が通り、#18 は確定に移ります。
+- #8 は `Saturating_Add` の `A + B` を `A - B` にする変異です。A = 0、B = 1 のとき `A - B` が `Count` の範囲を外れ、本物のコードで範囲検査が落ちます。テストを足す候補です（2）。
+- `Halves.Half` の本体は `X / 2` を返しますが、契約は「結果は X 以下」としか言っていません。#12 は `H > 50` の判定を消す変異で、実際には H が 50 を超えないので、動作は変わりません（同値）。#18 は `H * 2` を `H * 3` にする変異で、X が 68 以上のとき結果が範囲を外れて Constraint_Error になる、本物のバグです。どちらも GNATprove は、`Half` をその契約に置き換えたときにしか失敗を見つけられず、本物のコードでは確かめられませんでした。`Half` の事後条件を `Half'Result = X / 2` に強めると、#12 は証明が通り、#18 は確定に移ります。
 - 生き残った #6 は、`A + B = Max` のときにどちらの分岐も `Max` を返す等価ミュータントです。`equivalence_build` を設定しても（この例では設定していません）、最適化したオブジェクトコードが変わるので自動では外れず、Survived のまま残ります（3）。#10 は `X / 2` を `X / 3` にする変異で、`Half` の契約が緩いので、証明でも検出できません。これも契約を強める箇所を示しています（3）。
 
 ## 必要なもの
@@ -266,8 +266,9 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 - メッセージを読み取れなかったときは、これまでどおり `killedBy` は `["proof"]` です
 - GNATprove 16 は、メッセージの場所を次の行（`--> file:line:col`）に出します。AdaMutant は、この形式も、それより前の版の 1 行の形式も読みます
 - 証明だけが検出したミュータントは、コンソールの `Detected only by the proof (candidates for a missing test):` にも 1 つずつ出ます。括弧の中は証明できなかった検査の種類です。どのテストも実行しない場所のミュータントには `no test executes this code` が付きます。GNATprove が反例を出したときは、その下の行に出ます
-- 3 つの区分（[想定している使い方](#想定している使い方)）は、`statusReason` の書き出しでも分かります。`proof failed, confirmed by a counterexample: ` が確定、`proof failed, with a counterexample that the real code does not reach: ` が契約が足りないもの、それ以外の `proof failed` が不明です。反例は、メッセージのあとの括弧に入ります（`... (e.g. when H = 51)`）。`--baseline` で結果を再利用するときも、ここから区分を読み取ります
-- 区分の材料は、変更前のプロジェクトの証明にないメッセージのうち、high かエラーのもの（確定）、反例のあるもの（契約が足りない）の順に選びます。prove のコマンドに `--counterexamples=on` がないと、GNATprove は反例を出さず、検査を high にもしないので、ほとんどが不明になります。不明のものがあって、コマンドに `--counterexamples=on` がないときは、コンソールにその旨が出ます
+- 3 つの区分（[想定している使い方](#想定している使い方)）は、`statusReason` の書き出しでも分かります。`proof failed, confirmed: ` が確定、`proof failed, a contract says too little: ` が契約が足りないもの、それ以外の `proof failed` が不明です。反例は、メッセージのあとの括弧に入ります（`... (e.g. when H = 51)`）。`--baseline` で結果を再利用するときも、ここから区分を読み取ります（書き出しのない以前の版の理由は、メッセージが high かエラーなら確定とします）
+- 区分の材料は、変更前のプロジェクトの証明にないメッセージから、high かエラーのもの（確定）、`possible fix: add or complete related loop invariants or postconditions` が付いたもの（契約が足りない）の順に選びます。GNATprove は、`--counterexamples=on` のときに反例を出し、`--check-counterexamples=off` でなければ、それを本物のコードで確かめます。反例がないと、ほとんどが不明になります。証明が反例を 1 つも出さなかったときは、コンソールにその旨が出ます
+- 読むのは GNATprove の既定の出力（`--output=pretty`）です。`--output=oneline` でも、メッセージの中の反例と `possible fix` を読みます。`--output=brief` には反例が出ません
 - 証明が時間内に終わらなかったミュータントは Survived です（`statusReason` は `... the proof did not finish within the timeout`）。証明が失敗するはずなのか、遅いだけなのかを区別できないためです。`--baseline` では、以前の版のレポートにある証明の Timeout は実行し直します。`--since` のリビジョンから変わっていない行では、Survived として再利用します
 - 以前の版は、テストだけ、証明だけでも回せました。`--baseline` では、今の版なら出さない結果は再利用しません。NoCoverage、テストだけまたは証明だけで生き残ったもの、テストをせずに証明が検出したものです。そのミュータントは実行し直します。ただし、`--since` のリビジョンから変わっていない行では、`--since` だけのときと同じく Ignored（`unchanged since REF`）のままです
 

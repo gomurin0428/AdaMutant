@@ -301,13 +301,22 @@ package body AdaMutant.Baselines is
               (if More > 0 and then Plain'Length > 6
                  and then Plain (Plain'Last - 5 .. Plain'Last) = " more)"
                then Plain (Plain'First .. More - 1) else Plain);
-            Start : constant Natural :=
-              Ada.Strings.Fixed.Index (Rest, " (e.g. when ");
+            --  The last one: with "--output=oneline" the message holds
+            --  one too.
+            Start : constant Natural := Ada.Strings.Fixed.Index
+              (Rest, " (e.g. when ", Ada.Strings.Backward);
          begin
+            --  A reason of an earlier version has no prefix; the severity
+            --  of its message tells a confirmed failure.
             M.Evidence :=
               (if Starts_With (Plain, Confirmed_Failure) then Confirmed
-               elsif Starts_With (Plain, Unreached_Example)
+               elsif Starts_With (Plain, Weak_Contract_Failure)
                then Weak_Contract
+               elsif Starts_With (Plain, "proof failed: ")
+                 and then (Ada.Strings.Fixed.Index (Plain, ": high: ") > 0
+                           or else Ada.Strings.Fixed.Index (Plain, ": error: ")
+                                   > 0)
+               then Confirmed
                else Undecided);
             if Start > 0 and then Rest (Rest'Last) = ')' then
                M.Example := To_Unbounded_String

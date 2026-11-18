@@ -563,6 +563,8 @@ procedure Unit_Tests is
               & "      + e.g. when H = 51" & LF
               & "      + reason for check: returned value must fit" & LF
               & "      and so on" & LF
+              & "      + possible fix: add or complete related loop invariants"
+              & " or postconditions" & LF
               & " medium: postcondition might fail" & LF
               & "--> hard.ads:4:19" & LF
               & "      + provers reached time limit before completing the"
@@ -579,11 +581,35 @@ procedure Unit_Tests is
                             = "weak.adb:13:19: medium: range check might"
                               & " fail, cannot prove upper bound for H * 2"
                    and then To_String (P (2).Example) = "e.g. when H = 51"
-                   and then To_String (P (3).Example) = "",
+                   and then To_String (P (3).Example) = ""
+                   and then not P (1).Weak_Contract
+                   and then P (2).Weak_Contract
+                   and then not P (3).Weak_Contract,
                    "proof messages: counterexamples",
                    P.Length'Image
                    & (if P.Is_Empty then ""
                       else " [" & To_String (P (P.Last_Index).Example) & "]"));
+         end;
+         --  "--output=oneline": all in the message.
+         declare
+            use AdaMutant.Runner.Proof_Message_Vectors;
+            P : constant Vector := Proof_Messages
+              ("w.adb:13:19: medium: range check might fail (e.g. when"
+               & " R = (A => 1, B => (2, 3))) [reason for check: x]"
+               & " [possible fix: add or complete related loop invariants or"
+               & " postconditions]" & LF
+               & "w.adb:14:1: medium: overflow check might fail (e.g. when"
+               & " X = 1" & LF);
+         begin
+            Check (Natural (P.Length) = 2
+                   and then To_String (P (1).Example)
+                            = "e.g. when R = (A => 1, B => (2, 3))"
+                   and then P (1).Weak_Contract
+                   and then To_String (P (2).Example) = ""
+                   and then not P (2).Weak_Contract,
+                   "proof messages: one line each",
+                   (if P.Is_Empty then "none"
+                    else To_String (P (1).Example)));
          end;
          Check (Proof_Failures ("gnatprove: error" & LF).Is_Empty,
                 "proof failures: none");
@@ -1242,7 +1268,7 @@ procedure Unit_Tests is
          R := One (Before, 2);
          Apply (R, Report_With
                      (Before, ",""killedBy"":[""proof: range check""],"
-                      & """statusReason"":""" & Unreached_Example
+                      & """statusReason"":""" & Weak_Contract_Failure
                       & "weak.adb:13:19: medium: x (e.g. when H = (1, 2))"
                       & " (and 1 more) (from the baseline report)"",""testsCompleted"":1"),
                 Reused);
@@ -1263,6 +1289,15 @@ procedure Unit_Tests is
                          = "e.g. when A = 0",
                 "baseline: a confirmed failure",
                 To_String (R.Mutants (1).Example));
+         --  A reason of an earlier version: its severity tells.
+         R := One (Before, 2);
+         Apply (R, Report_With
+                     (Before, ",""killedBy"":[""proof: postcondition""],"
+                      & """statusReason"":""proof failed: p.ads:9:17: high:"
+                      & " postcondition might fail"",""testsCompleted"":1"),
+                Reused);
+         Check (Reused = 1 and then R.Mutants (1).Evidence = Confirmed,
+                "baseline: an old reason with a high message");
          R := One ("begin" & LF & "   Call (1," & LF & "         3);" & LF
                    & "end;" & LF, 2);
          Apply (R, Report_With (Before, ""), Reused);

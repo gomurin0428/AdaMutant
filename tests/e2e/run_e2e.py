@@ -889,6 +889,8 @@ def check_proof_log():
             "          ' might fail, cannot prove lower bound')\n"
             "    print('  e.g. when C = 0')\n"
             "    print('        and D = 1')\n"
+            "    print('  possible fix: add or complete related loop invariants'\n"
+            "          ' or postconditions')\n"
             "    print('counters.ads:9:17: medium: postcondition might fail')\n"
             "    print('counters.ali:0:0: note: not a message')\n"
             "    sys.exit(1)\n"
@@ -901,6 +903,12 @@ def check_proof_log():
             "    sys.exit(1)\n"
             "if n == '4':\n"
             "    time.sleep(30)\n"
+            "if n == '5':\n"
+            "    # A counterexample that GNATprove could not run with the real code.\n"
+            "    print(' medium: division check might fail')\n"
+            "    print('--> counters.adb:5:16')\n"
+            "    print('      + e.g. when C = 99')\n"
+            "    sys.exit(1)\n"
             "sys.exit(0)\n")
         python = (f'"{sys.executable}"' if " " in sys.executable
                   else sys.executable).replace("\\", "/")
@@ -920,19 +928,23 @@ def check_proof_log():
         expected = {
             # Only the message that the unmodified project has too.
             "1": ("Killed", ["proof"], "proof failed with exit status 1"),
-            # A counterexample that the real code does not reach (medium).
+            # GNATprove says that a contract says too little.
             "2": ("Killed", ["proof: range check", "proof: postcondition"],
-                  "proof failed, with a counterexample that the real code does not"
-                  " reach: counters.adb:5:16: medium: range check might fail,"
-                  " cannot prove lower bound (e.g. when C = 0 and D = 1) (and 1 more)"),
+                  "proof failed, a contract says too little: counters.adb:5:16:"
+                  " medium: range check might fail, cannot prove lower bound"
+                  " (e.g. when C = 0 and D = 1) (and 1 more)"),
             # A message of severity high.
             "3": ("Killed", ["proof: initialization"],
-                  "proof failed, confirmed by a counterexample: counters.adb:7:8:"
+                  "proof failed, confirmed: counters.adb:7:8:"
                   ' high: "Y" is not initialized in "Init" (and 1 more)'),
             # A proof that does not finish detects nothing.
             "4": ("Survived", None,
                   "the tests passed, and the proof did not finish within the timeout"),
-            "5": ("Survived", None, "the tests and the proof passed"),
+            # A counterexample without GNATprove's word on it.
+            "5": ("Killed", ["proof: division check"],
+                  "proof failed: counters.adb:5:16: medium: division check might"
+                  " fail (e.g. when C = 99)"),
+            "6": ("Survived", None, "the tests and the proof passed"),
         }
         errors = []
         for n, want in expected.items():
@@ -941,13 +953,15 @@ def check_proof_log():
             if got != want:
                 errors.append(f"mutant {n}: {got}, expected {want}")
         for line in ("Detected only by the proof (candidates for a missing test):\n"
-                     "  Confirmed: the check fails in the real code\n  #3 ",
-                     "  A counterexample that the real code does not reach: a contract"
-                     " says less than the code relies on\n  #2 ",
+                     "  Confirmed: the failure happens with the real code (or GNATprove"
+                     " reports an error)\n  #3 ",
+                     "  A contract says too little: the failure happens only with the"
+                     " contracts of the calls (or the loop invariants) in place of the"
+                     " code\n  #2 ",
                      "\n    e.g. when C = 0 and D = 1\n",
-                     "  Undecided: no counterexample\n  #1 ",
-                     "  (GNATprove gives counterexamples only with --counterexamples=on"
-                     " in the prove command.)",
+                     "  Undecided: GNATprove could not confirm the failure with the real"
+                     " code\n  #1 ",
+                     "\n    e.g. when C = 99\n",
                      "  range check    |     1 |     0 alone",
                      "  postcondition  |     1 |     0 alone",
                      "  initialization |     1 |     1 alone",

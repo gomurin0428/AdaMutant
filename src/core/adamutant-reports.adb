@@ -345,13 +345,15 @@ package body AdaMutant.Reports is
                   Ada.Text_IO.Put_Line
                     (case Group is
                         when Confirmed =>
-                          "  Confirmed: the check fails in the real code",
+                          "  Confirmed: the failure happens with the real"
+                          & " code (or GNATprove reports an error)",
                         when Weak_Contract =>
-                          "  A counterexample that the real code does not"
-                          & " reach: a contract says less than the code"
-                          & " relies on",
+                          "  A contract says too little: the failure happens"
+                          & " only with the contracts of the calls (or the"
+                          & " loop invariants) in place of the code",
                         when others =>
-                          "  Undecided: no counterexample");
+                          "  Undecided: GNATprove could not confirm the"
+                          & " failure with the real code");
                   for M of R.Mutants loop
                      if In_Group (M) then
                         Put_Mutant
@@ -366,13 +368,15 @@ package body AdaMutant.Reports is
                         end if;
                      end if;
                   end loop;
+                  --  Without counterexamples GNATprove confirms nothing.
                   if Group = Undecided
-                    and then Index (R.Settings.Prove, "counterexamples=on")
-                             = 0
+                    and then not (for some M of R.Mutants =>
+                                    M.Killed_By = Proof
+                                    and then Length (M.Example) > 0)
                   then
                      Ada.Text_IO.Put_Line
-                       ("  (GNATprove gives counterexamples only with"
-                        & " --counterexamples=on in the prove command.)");
+                       ("  (GNATprove gave no counterexample: add"
+                        & " --counterexamples=on to the prove command.)");
                   end if;
                end if;
             end;
