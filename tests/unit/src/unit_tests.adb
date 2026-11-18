@@ -335,7 +335,9 @@ procedure Unit_Tests is
    procedure Test_Loop_Direction is
       O : Scan_Options;
       Loops : constant String :=
-        "procedure P is begin" & LF
+        "procedure P is" & LF
+        & "   subtype Index is Positive range 1 .. 9;" & LF
+        & "begin" & LF
         & "   for I in 1 .. N loop X := X + I; end loop;" & LF
         & "   Outer : for J in reverse A'Range loop null; end loop;" & LF
         & "   for K in Index loop null; end loop;" & LF
@@ -345,6 +347,11 @@ procedure Unit_Tests is
         & "   for C in V.Iterate loop null; end loop;" & LF
         & "   for D in reverse V.Iterate loop null; end loop;" & LF
         & "   for S in Types.Index loop null; end loop;" & LF
+        & "   for B in Boolean loop null; end loop;" & LF
+        & "   for F in Index when F > 1 loop null; end loop;" & LF
+        & "   for G in Ext loop null; end loop;" & LF
+        & "   for H in L loop null; end loop;" & LF
+        & "   for M in Mp.Iterate when Key (M) in 1 .. 3 loop null; end loop;" & LF
         & "   for E of A loop null; end loop;" & LF
         & "   X := (for all I in 1 .. N => A (I) > 0);" & LF
         & "   Y := [for I in 1 .. 3 => I];" & LF
@@ -353,19 +360,29 @@ procedure Unit_Tests is
    begin
       O.Enabled := [others => False];
       O.Enabled (Loop_Direction) := True;
-      --  Over a range or a subtype, both ways; not over an iterator, a
-      --  qualified name (an iterator function or a subtype), in a
-      --  quantified expression or an aggregate.  Removing "reverse"
-      --  always compiles, also for an iterator.
+      O.Type_Names.Include ("ext");
+      --  Over a range or a declared subtype (of the source, of the spec
+      --  through Type_Names, or of Standard), both ways, also before an
+      --  iterator filter; not over another name (a container, an
+      --  iterator or a qualified name), in a quantified expression or an
+      --  aggregate.  Removing "reverse" always compiles, also for an
+      --  iterator.
       Expect (Loops,
               "LoopDirection in->in reverse|LoopDirection in reverse->in"
               & "|LoopDirection in->in reverse|LoopDirection in->in reverse"
               & "|LoopDirection in->in reverse|LoopDirection IN->IN REVERSE"
-              & "|LoopDirection in reverse->in",
+              & "|LoopDirection in reverse->in"
+              & "|LoopDirection in->in reverse|LoopDirection in->in reverse"
+              & "|LoopDirection in->in reverse",
               "loop direction", O);
       --  Off by default.
       Check (Ada.Strings.Fixed.Index (Describe (Loops), "LoopDirection") = 0,
              "loop direction is off by default");
+      Check (Type_Names ("package Q is type T is (A, B); subtype S is T;"
+                         & " task type Worker; X : Integer; end Q;").Contains ("s")
+             and then not Type_Names ("package Q is X : Integer; end Q;")
+                            .Contains ("x"),
+             "type names of a spec");
    end Test_Loop_Direction;
 
    procedure Test_Comments is

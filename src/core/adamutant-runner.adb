@@ -100,6 +100,8 @@ package body AdaMutant.Runner is
                   then
                      Options.Ghost_Names.Union
                        (Ghost_Names (Read (Join (Root, Spec))));
+                     Options.Type_Names.Union
+                       (Type_Names (Read (Join (Root, Spec))));
                   end if;
                   Found := Find (Source, Options);
                exception

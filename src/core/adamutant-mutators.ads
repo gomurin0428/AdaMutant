@@ -43,11 +43,18 @@ package AdaMutant.Mutators is
       --  Lower-case names of ghost entities declared outside the scanned
       --  source (usually in its spec).
       Ghost_Names      : Name_Sets.Set;
+      --  Lower-case names of types and subtypes declared outside the
+      --  scanned source (usually in its spec): LoopDirection takes a loop
+      --  over one of these names for a loop over a range.
+      Type_Names       : Name_Sets.Set;
    end record;
 
    function Ghost_Names (Source : String) return Name_Sets.Set;
    --  Lower-case names of the subprograms, objects and types that Source
    --  declares with the Ghost aspect.
+
+   function Type_Names (Source : String) return Name_Sets.Set;
+   --  Lower-case names of the types and subtypes that Source declares.
 
    type Mutation is record
       Kind        : Mutator_Kind := Arithmetic_Operator;
