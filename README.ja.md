@@ -210,7 +210,7 @@ GNATprove 16.1 での例です。24 個の関数（チェック 480 個）から
 | BooleanLiteral | `True`↔`False` |
 | MembershipOperator | `in`↔`not in` |
 | ConditionalExpression | `if`/`elsif` の条件 → `True`/`False`、`while` → `False`、`exit when` → `True` |
-| StatementDeletion | 代入文、手続き呼び出し文、raise 文、値のない return 文（`return;`）→ `null;`。本体や例外ハンドラの終わりの直前の `return;` は、消しても何も変わらないので除きます。exit 文はループが終わらなくなるおそれがあるので、delay 文はその時間をテストも証明もほとんど見ないので、変異させません |
+| StatementDeletion | 代入文、手続き呼び出し文、raise 文、値のない return 文（`return;`）→ `null;`。`exception` や `end`（`end if`、`end loop`、`end case`、`end select` を除く）のすぐ前にある `return;` は、本体の最後なら消しても動きが変わらないので除きます（入れ子のブロックの最後では動きが変わりますが、これも除かれます）。`else` のない `if`・`elsif` の分岐が raise 文や `return;` だけのときも除きます。消したプログラムは、ConditionalExpression の「条件 → `False`」と同じだからです。exit 文と delay 文は変異させません。exit 文を消すとループが終わらなくなることがあり、delay 文の待ち時間はテストでも証明でもほとんど確かめないからです |
 | NumericLiteral | `0`→`1`, `1`→`0`, `n`→`n+1`, 実数 → `0.0`。基数付き・指数付きの整数リテラルも同じ規則で、基数は保ちます（`16#FF#`→`16#100#`, `1E6`→`1000001`）。宣言した部分型の範囲の上下限 `String (1 .. 6)` などは対象外 |
 | StringLiteral | `"abc"`→`""`, `""`→`"AdaMutant was here!"` |
 | AttributeSwap | `'First`↔`'Last`、`'Min`↔`'Max`、`'Succ`↔`'Pred`、`'Floor`↔`'Ceiling`、`'First_Valid`↔`'Last_Valid`。入れ替え先も同じ型の値を返すので、型は合います。それでも、選択肢が重なってはいけない所や型を覆わなければならない所（case の選択肢、名前付きの配列集成体）や、静的な値が範囲を外れる所（`Color'Succ (Color'Last)`）ではコンパイルが通らず、CompileError になります。宣言の部分型の中（`X : String (1 .. A'Last)`、`subtype S is T range T'First .. T'Last`）は、NumericLiteral の範囲の上下限と同じく変異させません。初期値（`L : constant Natural := A'Last`）と宣言のアスペクト（述語。`mutate_contracts` のとき）は変異させます |

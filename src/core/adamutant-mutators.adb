@@ -983,15 +983,18 @@ package body AdaMutant.Mutators is
                      end if;
 
                      --  Statement deletion: a raise statement, or a return
-                     --  statement without a value, except right before the
-                     --  end of a body or its exception handlers, where it
-                     --  changes nothing.  Not an exit statement, which could
-                     --  make the loop run for ever (see exit when), nor a
-                     --  delay statement, whose time the tests and the proof
-                     --  hardly ever see.
+                     --  statement without a value, except right before
+                     --  "exception" or an "end" (not of an if, loop, case or
+                     --  select), where it changes nothing in a body.  Not
+                     --  the whole branch of an if or elsif without an else:
+                     --  that is ConditionalExpression's condition -> False.
+                     --  Not an exit statement, which could make the loop run
+                     --  for ever (see exit when), nor a delay statement,
+                     --  whose only effect (time) tests and proof rarely
+                     --  observe.
                      if Lw in "raise" | "return"
                        and then Seg_Start (K) = K and then Depth (K) = 0
-                       and then not In_Aspect (K)
+                       and then not In_Aspect (K) and then K < N
                      then
                         declare
                            J : Positive := K + 1;
@@ -1002,6 +1005,11 @@ package body AdaMutant.Mutators is
                               J := J + 1;
                            end loop;
                            if Seg_Start (J) = K and then Is_Del (J, ";")
+                             and then not
+                               (Options.Enabled (Conditional_Expression)
+                                and then Is_Kw (K - 1, "then")
+                                and then Is_Kw (J + 1, "end")
+                                and then Is_Kw (J + 2, "if"))
                              and then (Lw /= "return"
                                        or else (J = K + 1
                                                 and then not
