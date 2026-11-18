@@ -347,6 +347,34 @@ package body AdaMutant.Reports is
            ("    + " & One_Line (To_String (M.Mutation.Replacement)));
       end Put_Mutant;
 
+      function Unreached (M : Mutant) return Boolean is
+         --  GNATprove's --proof-warnings say that the line of M is never
+         --  reached.
+         Path : constant String := To_String (R.Files (M.File).Path);
+         Name : Natural := Path'First;
+      begin
+         for K in Path'Range loop
+            if Path (K) in '/' | '\' then
+               Name := K + 1;
+            end if;
+         end loop;
+         for W of R.Proof_Warnings loop
+            declare
+               Place : constant String :=
+                 Path (Name .. Path'Last) & ":" & Image (M.Start_Pos.Line)
+                 & ":";
+            begin
+               if W'Length > Place'Length
+                 and then W (W'First .. W'First + Place'Length - 1) = Place
+                 and then Ada.Strings.Fixed.Index (W, "unreachable") > 0
+               then
+                  return True;
+               end if;
+            end;
+         end loop;
+         return False;
+      end Unreached;
+
       function Checks (M : Mutant) return String is
          S : Unbounded_String;
       begin
@@ -429,6 +457,7 @@ package body AdaMutant.Reports is
             if M.Status = Survived then
                Put_Mutant
                  (M, (if Proof_Timed_Out (M) then "the proof timed out"
+                      elsif Unreached (M) then "GNATprove: never reached"
                       else ""));
             end if;
          end loop;
@@ -473,6 +502,18 @@ package body AdaMutant.Reports is
                           & " the mutants"" in the README.)"));
             end if;
          end;
+      end if;
+
+      --  Where the proof of anything succeeds: a contract that is always
+      --  False, or code that is never reached.
+      if not R.Proof_Warnings.Is_Empty then
+         Ada.Text_IO.New_Line;
+         Ada.Text_IO.Put_Line
+           ("The proof of the unmodified project proves anything here"
+            & " (--proof-warnings); mutants there survive the proof:");
+         for W of R.Proof_Warnings loop
+            Ada.Text_IO.Put_Line ("  " & W);
+         end loop;
       end if;
 
       if (for some M of R.Mutants => M.Equivalent) then

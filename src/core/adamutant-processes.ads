@@ -18,11 +18,13 @@ package AdaMutant.Processes is
       Memory_Limit_Mb : Natural := 0;
       Mutant_File : String := "";
       Mutant_Line : Natural := 0;
-      Prove_Cache : String := "") return Run_Result;
+      Prove_Cache : String := "";
+      Prove_Switches : String := "") return Run_Result;
    --  Runs Command with the platform shell (/bin/sh -c, or cmd.exe /c on
    --  Windows) in Directory, with stdout and stderr written to Log_File,
    --  ADAMUTANT_MUTANT_ID set to Mutant_Id, ADAMUTANT_MUTANT_FILE to
-   --  Mutant_File, ADAMUTANT_MUTANT_LINE to Mutant_Line (empty for 0) and
+   --  Mutant_File, ADAMUTANT_MUTANT_LINE to Mutant_Line (empty for 0),
+   --  ADAMUTANT_PROVE_SWITCHES to Prove_Switches and
    --  ADAMUTANT_PROVE_CACHE to Prove_Cache (empty, which cmd.exe treats as
    --  unset, by default).  A Timeout of 0.0 means none.
    --  A Memory_Limit_Mb other than 0 caps the memory of each process; an

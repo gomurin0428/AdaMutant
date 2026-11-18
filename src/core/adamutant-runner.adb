@@ -455,6 +455,47 @@ package body AdaMutant.Runner is
       return Result;
    end Proof_Failures;
 
+   function Proof_Warnings (Log : String) return String_Vectors.Vector is
+      Text   : constant String := One_Line_Messages (Log);
+      Result : String_Vectors.Vector;
+      First  : Positive := Text'First;
+      Last   : Natural;
+   begin
+      while First <= Text'Last loop
+         Last := First;
+         while Last <= Text'Last and then Text (Last) /= ASCII.LF loop
+            Last := Last + 1;
+         end loop;
+         declare
+            D : constant AdaMutant.Schemata.Diagnostic_Vectors.Vector :=
+              AdaMutant.Schemata.Diagnostics (Text (First .. Last - 1));
+         begin
+            if not D.Is_Empty then
+               declare
+                  Line : constant String := To_String (D.First_Element.Text);
+                  Msg  : constant String :=
+                    Line (Line'First + D.First_Element.Name_First - 1
+                          .. Line'Last);
+                  F    : Positive;
+                  Sev  : constant String := Severity_Of (Msg, F);
+               begin
+                  if Sev = "warning"
+                    and then (Ada.Strings.Fixed.Index
+                                (Msg (F .. Msg'Last), "always False") > 0
+                              or else Ada.Strings.Fixed.Index
+                                (Msg (F .. Msg'Last), "unreachable") > 0)
+                    and then not Result.Contains (Msg)
+                  then
+                     Result.Append (Msg);
+                  end if;
+               end;
+            end if;
+         end;
+         First := Last + 1;
+      end loop;
+      return Result;
+   end Proof_Warnings;
+
    function Check_Kind (Message : String) return String is
       First : Positive;
       Sev   : constant String := Severity_Of (Message, First);
@@ -788,7 +829,12 @@ package body AdaMutant.Runner is
                  Run (Command, Slot_Dir (Mine), Log (Mine), 0, Timeout,
                       Memory_Limit_Mb,
                       Prove_Cache =>
-                        (if Name = "prove" then Cache_Dir (Mine) else ""));
+                        (if Name = "prove" then Cache_Dir (Mine) else ""),
+                      --  The proof of the unmodified project also looks for
+                      --  code that it never reaches (see Proof_Warnings).
+                      Prove_Switches =>
+                        (if Name = "prove" then "--proof-warnings=on"
+                         else ""));
             exception
                when E : others =>
                   Errors (Mine) := To_Unbounded_String
@@ -1051,7 +1097,9 @@ package body AdaMutant.Runner is
            (Run (Command, Dir, Log_Base & "-" & Name & ".log", M.Id, Timeout,
                  Mutant_File => Rel, Mutant_Line => M.Start_Pos.Line,
                  Prove_Cache =>
-                   (if Name = "prove" then Cache_Dir (Slot) else "")));
+                   (if Name = "prove" then Cache_Dir (Slot) else ""),
+                 Prove_Switches =>
+                   (if Name = "prove" then "--proof-warnings=off" else "")));
       begin
          Write_Changed (Path, Apply (Original, M.Mutation));
          if not Built then
@@ -2194,6 +2242,8 @@ package body AdaMutant.Runner is
          loop
             Baseline_Failures.Append (Without_Place (F));
          end loop;
+         R.Proof_Warnings :=
+           Proof_Warnings (Read (Join (Logs, "baseline-prove.log")));
       end;
 
       --  The libraries, after the tests too: a test command may build one.
@@ -2221,6 +2271,17 @@ package body AdaMutant.Runner is
             end if;
          end;
       end loop;
+      --  Whether the proof looked for code that it never reaches.
+      if Warn /= null and then Uses_Gnatprove
+        and then Ada.Strings.Fixed.Index
+                   (To_String (S.Prove), "ADAMUTANT_PROVE_SWITCHES") = 0
+      then
+         Warn ("the prove command does not use ADAMUTANT_PROVE_SWITCHES:"
+               & " the proof of the unmodified project does not look for"
+               & " contracts that are always False or code that it never"
+               & " reaches, where the proof of anything succeeds (see"
+               & " the README)");
+      end if;
 
       if Pending_Count > 0 then
          Run_Combined;

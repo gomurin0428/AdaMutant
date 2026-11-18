@@ -485,6 +485,39 @@ procedure Unit_Tests is
               "only contract aspects are mutated", O);
    end Test_Contract_Aspects;
 
+   procedure Test_Proof_Warnings is
+      --  The output of GNATprove 16.1 with --proof-warnings=on, and the one
+      --  line format of earlier versions.
+      Log : constant String :=
+        "Phase 3 of 3: flow analysis and proof ..." & LF
+        & " warning: unreachable code" & LF
+        & "--> v.adb:8:10" & LF
+        & "    8 |             return 200;" & LF
+        & "      |             ^~~~~~~~~~" & LF & LF
+        & " medium: loop invariant might fail in first iteration" & LF
+        & "--> v.adb:15:33" & LF
+        & " warning: pragma Assume is always False" & LF
+        & "--> /home/x/src/v.adb:21:07" & LF
+        & " warning: statement has no effect" & LF
+        & "--> v.adb:30:7" & LF
+        & "v.ads:4:14: warning: precondition is always False" & LF
+        & "v.adb:25:21: warning: unreachable branch" & LF;
+      W : constant AdaMutant.Files.String_Vectors.Vector :=
+        AdaMutant.Runner.Proof_Warnings (Log);
+      All_Of : Unbounded_String;
+   begin
+      for X of W loop
+         Append (All_Of, X & "|");
+      end loop;
+      Check (To_String (All_Of) =
+               "v.adb:8:10: warning: unreachable code"
+               & "|v.adb:21:07: warning: pragma Assume is always False"
+               & "|v.ads:4:14: warning: precondition is always False"
+               & "|v.adb:25:21: warning: unreachable branch|",
+             "proof warnings: always False and unreachable only",
+             To_String (All_Of));
+   end Test_Proof_Warnings;
+
    procedure Test_Assertions_Check is
       use AdaMutant.Files;
       Tmp     : constant String :=
@@ -2224,6 +2257,7 @@ begin
    Test_Comments;
    Test_Assertions_Check;
    Test_Contract_Aspects;
+   Test_Proof_Warnings;
    Test_Attributes;
    Test_Loop_Direction;
    Test_Deletions;

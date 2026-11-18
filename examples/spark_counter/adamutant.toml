@@ -8,9 +8,11 @@
 # proof results that the proof of the unmodified project fills, so that
 # the proof of a mutant proves again only what the mutant changes; with
 # the cache, the provers need a steps limit (--steps, see the README).
+# ADAMUTANT_PROVE_SWITCHES has the proof of the unmodified project look
+# for contracts that are always False and code that is never reached.
 mutate = ["src/**/*.adb"]
 build = "gprbuild -p -q -P counters_tests.gpr"
 test = '"bin/test_counters"'
-prove = 'gnatprove -P counters.gpr --level=1 --steps=2000 --report=fail --checks-as-errors=on --counterexamples=on -j1 "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+prove = 'gnatprove -P counters.gpr --level=1 --steps=2000 --report=fail --checks-as-errors=on --counterexamples=on -j1 $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
 concurrency = 2
 sandbox_exclude = [".git", "obj", "bin"]

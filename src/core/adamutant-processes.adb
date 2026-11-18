@@ -23,7 +23,8 @@ package body AdaMutant.Processes is
       Memory_Limit_Mb : Natural := 0;
       Mutant_File : String := "";
       Mutant_Line : Natural := 0;
-      Prove_Cache : String := "") return Run_Result
+      Prove_Cache : String := "";
+      Prove_Switches : String := "") return Run_Result
    is
       Id_Image : constant String := Mutant_Id'Image;
       Line_Image : constant String := Mutant_Line'Image;
@@ -37,7 +38,8 @@ package body AdaMutant.Processes is
          & "ADAMUTANT_MUTANT_LINE="
          & (if Mutant_Line = 0 then ""
             else Line_Image (Line_Image'First + 1 .. Line_Image'Last))
-         & ASCII.NUL & "ADAMUTANT_PROVE_CACHE=" & Prove_Cache & ASCII.NUL);
+         & ASCII.NUL & "ADAMUTANT_PROVE_CACHE=" & Prove_Cache & ASCII.NUL
+         & "ADAMUTANT_PROVE_SWITCHES=" & Prove_Switches & ASCII.NUL);
       T_Out    : aliased int := 0;
       Elapsed  : aliased int := 0;
       Ms       : constant int :=

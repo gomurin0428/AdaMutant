@@ -45,6 +45,15 @@ package AdaMutant.Runner is
    --  messages of GNATprove 16, which puts the place on the next line
    --  ("--> file:line:col"), are read too, as such lines.
 
+   function Proof_Warnings
+     (Log : String) return AdaMutant.Files.String_Vectors.Vector;
+   --  The warnings of GNATprove's --proof-warnings in the text of a
+   --  GNATprove log that say that something is always False or never
+   --  reached ("precondition is always False", "pragma Assume is always
+   --  False", "unreachable code", "unreachable branch"), as lines
+   --  "file:line:col: warning: text": there the proof of anything
+   --  succeeds.
+
    type Proof_Message is record
       Text    : Ada.Strings.Unbounded.Unbounded_String;
       --  "file:line:col: severity: text", as Proof_Failures gives it.

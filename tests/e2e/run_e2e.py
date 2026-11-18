@@ -878,6 +878,11 @@ def check_proof_log():
             "print('place: [%s] [%s]' % (os.environ.get('ADAMUTANT_MUTANT_LINE', 'unset'),\n"
             "      'cache' if cache and os.path.isdir(cache) else 'no cache'))\n"
             "print('cache:', cache)\n"
+            "print('switches: [%s]' % os.environ.get('ADAMUTANT_PROVE_SWITCHES', 'unset'))\n"
+            "# The unmodified project: code that the proof never reaches.\n"
+            "if n == '0':\n"
+            "    print(' warning: unreachable code')\n"
+            "    print('--> counters.adb:13:10')\n"
             "# The unmodified project has this message too; a mutant moves it.\n"
             "# Both formats: the one line of GNATprove 14, and the place on the\n"
             "# next line (GNATprove 16), for the unmodified project and mutant 3.\n"
@@ -982,13 +987,24 @@ def check_proof_log():
                 errors.append(f"output lacks {line!r}\n{proc.stdout}")
         if "overflow check" in proc.stdout:
             errors.append("a message of the unmodified project is counted")
+        # What the proof of the unmodified project never reaches.  The fake
+        # prover is no GNATprove: no warning about ADAMUTANT_PROVE_SWITCHES.
+        want = ("The proof of the unmodified project proves anything here"
+                " (--proof-warnings); mutants there survive the proof:\n"
+                "  counters.adb:13:10: warning: unreachable code\n")
+        if want not in proc.stdout:
+            errors.append(f"output lacks {want!r}\n{proc.stdout}")
+        if "ADAMUTANT_PROVE_SWITCHES" in proc.stdout:
+            errors.append(f"a warning about ADAMUTANT_PROVE_SWITCHES\n{proc.stdout}")
         # The line of the mutant, and a cache of proof results for each
         # sandbox, which its proof of the unmodified project fills.
         logs = work / ".adamutant" / "logs"
         texts = {}
         for log, want in (("baseline-prove.log", "place: [] [cache]"),
                           ("baseline-prove-2.log", "place: [] [cache]"),
-                          ("mutant-1-prove.log", "place: [5] [cache]")):
+                          ("mutant-1-prove.log", "place: [5] [cache]"),
+                          ("baseline-prove.log", "switches: [--proof-warnings=on]"),
+                          ("mutant-1-prove.log", "switches: [--proof-warnings=off]")):
             texts[log] = (logs / log).read_text() if (logs / log).exists() else ""
             if want not in texts[log]:
                 errors.append(f"{log} lacks {want!r}\n{texts[log]}")
@@ -1056,6 +1072,9 @@ def check_prove_cache():
         if proc.returncode != 0:
             return [f"exit status {proc.returncode}\n{proc.stdout}"]
         errors = []
+        # The prove command uses ADAMUTANT_PROVE_SWITCHES: no warning.
+        if "does not use ADAMUTANT_PROVE_SWITCHES" in proc.stdout:
+            errors.append(f"a warning about ADAMUTANT_PROVE_SWITCHES\n{proc.stdout}")
         # Survivors whose proof finished: no note about time limits.
         if "Survived mutants:" not in proc.stdout or "did not finish in time" in proc.stdout:
             errors.append(f"survivors and a note about time limits\n{proc.stdout}")
@@ -1063,6 +1082,15 @@ def check_prove_cache():
         for slot in ("1", "2"):
             if not (caches / slot).is_dir() or not any((caches / slot).iterdir()):
                 errors.append(f"the proof cache of sandbox {slot} is empty")
+        # GNATprove without ADAMUTANT_PROVE_SWITCHES: a warning.
+        config = work / "adamutant.toml"
+        config.write_text(config.read_text().replace(" $ADAMUTANT_PROVE_SWITCHES", ""))
+        proc = subprocess.run([str(EXE), "run"], cwd=work, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if proc.returncode != 0 \
+                or "the prove command does not use ADAMUTANT_PROVE_SWITCHES" not in proc.stdout:
+            errors.append(f"no warning about ADAMUTANT_PROVE_SWITCHES: exit status"
+                          f" {proc.returncode}\n{proc.stdout}")
         return errors
     finally:
         shutil.rmtree(root, ignore_errors=True)
