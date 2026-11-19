@@ -1134,13 +1134,15 @@ package body AdaMutant.Mutators is
       --  What the chain of "and" or "or" that B belongs to is of.
       type Chain_Type is
         (Standard_Boolean,
-         --  Boolean or a subtype of it.  Also "and then" and "or else"
-         --  whose type name resolution does not tell, and a chain with an
-         --  operand that is plainly of Standard.Boolean.
+         --  Boolean or a subtype of it, or a chain whose type name
+         --  resolution does not tell with an operand that is plainly of
+         --  Standard.Boolean.
          Derived_Boolean,
          --  A type derived from Boolean: its literals and its "=" are not
          --  those of Standard, and may not be visible ("Flags.A and then
-         --  Flags.B" needs no use clause).
+         --  Flags.B" needs no use clause).  Also "and then" and "or else"
+         --  whose type name resolution does not tell otherwise: they may
+         --  be of such a type, as Interfaces.C.C_bool.
          Other);
          --  Modular values, arrays of Booleans ("and" of bits), or "and"
          --  and "or" whose type name resolution does not tell.
@@ -1154,10 +1156,11 @@ package body AdaMutant.Mutators is
             when No =>
                return Other;
             when Unknown =>
-               return (if LC.Ada_Op'(B.F_Op) in Ada_Op_And_Then
-                                              | Ada_Op_Or_Else
-                         or else Plain_Boolean_Operand (B)
-                       then Standard_Boolean else Other);
+               return (if Plain_Boolean_Operand (B) then Standard_Boolean
+                       elsif LC.Ada_Op'(B.F_Op) in Ada_Op_And_Then
+                                                 | Ada_Op_Or_Else
+                       then Derived_Boolean
+                       else Other);
          end case;
       end Type_Of_Chain;
 

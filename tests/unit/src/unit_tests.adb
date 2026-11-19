@@ -101,11 +101,13 @@ procedure Unit_Tests is
       Expect ("package P is X : Integer := 2 ** 3; end P;",
               "NumericLiteral 2->3|ArithmeticOperator **->*|NumericLiteral 3->4",
               "exponent and literals");
-      Expect ("package P is B : Boolean := X and then Y; end P;",
+      Expect ("package P is X, Y : Boolean := F;"
+              & " B : Boolean := X and then Y; end P;",
               "LogicalOperator X and then Y->Y|LogicalOperator X and then Y->X"
               & "|LogicalOperator X and then Y->(X) = (Y)"
               & "|LogicalOperator X and then Y->False", "short circuit");
-      Expect ("package P is B : Boolean := X and then Y and then Z; end P;",
+      Expect ("package P is X, Y, Z : Boolean := F;"
+              & " B : Boolean := X and then Y and then Z; end P;",
               "LogicalOperator X and then Y and then Z->Y and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Y"
@@ -128,12 +130,16 @@ procedure Unit_Tests is
               "membership choices stay in the operand of a logical chain");
       Expect ("package P is C : constant T := "
               & "(X and then Y and then Z | W => 1, others => 0); end P;",
-              "LogicalOperator X and then Y and then Z->Y and then Z"
+              "LogicalOperator X and then Y->(X or else Y)"
+              & "|LogicalOperator X and then Y and then Z->Y and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Y"
-              & "|LogicalOperator X and then Y and then Z->False"
+              & "|LogicalOperator X and then Y and then Z->"
+              & "((X and then Y) or else Z)"
               & "|NumericLiteral 1->0|NumericLiteral 0->1",
-              "other choice bars still end a logical chain");
+              "other choice bars still end a logical chain; of a type not"
+              & " known, a short-circuit chain gets the deletions and the"
+              & " swap");
       Expect ("package P is procedure Q (X : in out Integer) with "
               & "Pre => (X > 0 and then X < 9), "
               & "Post => X > 1 and then (if X = 2 then X'Old = 1); end P;",
@@ -400,8 +406,8 @@ procedure Unit_Tests is
                  & "|EqualityOperator >->>=|EqualityOperator >->/=",
                  "logical operators: relations in chains, contracts", O);
          O.Enabled (Conditional_Expression) := True;
-         Expect ("procedure P is begin while A and then B loop null;"
-                 & " end loop; end P;",
+         Expect ("procedure P is A, B : Boolean := F; begin"
+                 & " while A and then B loop null; end loop; end P;",
                  "ConditionalExpression A and then B->False"
                  & "|LogicalOperator A and then B->B"
                  & "|LogicalOperator A and then B->A"
