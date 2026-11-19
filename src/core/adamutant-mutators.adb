@@ -968,11 +968,11 @@ package body AdaMutant.Mutators is
          Flatten (Top);
       end Chain;
 
-      --  LogicalOperator.  Ada does not allow different logical operators
-      --  side by side without parentheses, so in a chain such as "A and
-      --  then B and then C" the operands around the mutated operator are
-      --  parenthesised: "(A or else B) and then C", "((A and then B) or
-      --  else C)".
+      --  LogicalOperator for "xor": "or".  Ada does not allow different
+      --  logical operators side by side without parentheses, so in a
+      --  chain such as "A xor B xor C" the operands around the mutated
+      --  operator are parenthesised: "(A or B) xor C", "((A xor B) or
+      --  C)".
       procedure Add_Logical (B : LAL.Bin_Op; New_Op : String; C : Context)
       is
          Op                  : constant LAL.Op := B.F_Op;
@@ -1001,11 +1001,13 @@ package body AdaMutant.Mutators is
          end;
       end Add_Logical;
 
-      --  ConjunctDeletion: the chain "A and B and C" (or with "and then")
+      --  The chain "A and B and C" (or with "and then", "or", "or else")
       --  of B, its first operator, without one of its operands, for each
       --  operand: "B and C", "A and C", "A and B".  The line breaks of
       --  what is left out follow the replacement (see Apply).
-      procedure Add_Conjuncts (B : LAL.Bin_Op; C : Context) is
+      procedure Add_Deletions
+        (Kind : Mutator_Kind; B : LAL.Bin_Op; C : Context)
+      is
          Operands, Operators : Node_Vectors.Vector;
       begin
          Chain (B, Operands, Operators);
@@ -1036,21 +1038,22 @@ package body AdaMutant.Mutators is
                         Append (Breaks, Ch);
                      end if;
                   end loop;
-                  Add (Conjunct_Deletion, C, First (T, Operators (1)), L, R,
+                  Add (Kind, C, First (T, Operators (1)), L, R,
                        Source (L .. First_Out - 1)
                        & Source (Last_Out + 1 .. R) & To_String (Breaks));
                end;
             end loop;
          end;
-      end Add_Conjuncts;
+      end Add_Deletions;
 
       type Place is
         (If_Condition, While_Condition, Exit_Condition, Barrier,
-         And_Operand, Elsewhere);
+         And_Operand, Or_Operand, Elsewhere);
 
       --  Where the expression N is: the condition of an if (statement or
       --  expression) or elsif, of a while or of an exit when, an entry
-      --  barrier, an operand of "and" or "and then", or elsewhere.
+      --  barrier, an operand of "and" or "and then", of "or" or "or
+      --  else", or elsewhere.
       function Place_Of (N : LAL.Ada_Node) return Place is
          P : constant LAL.Ada_Node := N.Parent;
       begin
@@ -1088,6 +1091,9 @@ package body AdaMutant.Mutators is
                if LC.Ada_Op'(P.As_Bin_Op.F_Op) in Ada_Op_And | Ada_Op_And_Then
                then
                   return And_Operand;
+               elsif LC.Ada_Op'(P.As_Bin_Op.F_Op) in Ada_Op_Or | Ada_Op_Or_Else
+               then
+                  return Or_Operand;
                end if;
             when others =>
                null;
@@ -1095,15 +1101,38 @@ package body AdaMutant.Mutators is
          return Elsewhere;
       end Place_Of;
 
+      --  LogicalOperator makes the constant of a chain of "and" or "or" in
+      --  the context C, or leaves it out for the same reasons as here (see
+      --  Mutate_Chain).
+      function Makes_Chain_Constants (C : Context) return Boolean is
+        (Options.Enabled (Logical_Operator) and then not Skipped (C));
+
+      --  The operands of a chain of "and" (or of "or") in the context C
+      --  are left out one at a time (see Mutate_Chain).
+      function Deletes_Operands
+        (And_Chain : Boolean; C : Context) return Boolean
+      is ((And_Chain and then Options.Enabled (Conjunct_Deletion)
+           and then Options.Mutate_Contracts and then In_Contract (C))
+          or else (Options.Enabled (Logical_Operator) and then not Skipped (C)));
+
       --  EqualityOperator: the relation B, such as "A < B", replaced as a
       --  whole by Value ("False" or "True").  Not when it is the whole
       --  condition of an if, elsif, while or exit when, also in
       --  parentheses or under "not": ConditionalExpression makes the same
       --  mutant, or the loop would never end ("while True", "exit when
       --  False").  Not "False" for an entry barrier, which would never
-      --  open.  Not "True" for an operand of an "and" in a contract, where
-      --  ConjunctDeletion leaves the operand out.
-      procedure Add_Constant (B : LAL.Bin_Op; Value : String; C : Context)
+      --  open.  For an operand of "and" or "or", not the constant that
+      --  LogicalOperator already makes: "True and A" is "A", the chain
+      --  without the operand (ConjunctDeletion's for "and" in a contract),
+      --  and "False and A" is "False", the constant of the whole chain.
+      --  Kind is the mutator; Anchor, the token that the mutant belongs
+      --  to, by default the operator of B.
+      procedure Add_Constant
+        (B      : LAL.Bin_Op;
+         Value  : String;
+         C      : Context;
+         Kind   : Mutator_Kind := Equality_Operator;
+         Anchor : Natural := 0)
       is
          Whole : LAL.Ada_Node := B.As_Ada_Node;
          --  The relation with the parentheses and "not" around it.
@@ -1146,18 +1175,60 @@ package body AdaMutant.Mutators is
                if not Holds then
                   return;
                end if;
+            --  "True and B" is B, the chain without the operand; "False and
+            --  B" is False, the constant of the whole chain.
             when And_Operand =>
-               if Holds and then Options.Enabled (Conjunct_Deletion)
-                 and then Options.Mutate_Contracts and then In_Contract (C)
+               if (if Holds then Deletes_Operands (And_Chain => True, C => C)
+                   else Makes_Chain_Constants (C))
+               then
+                  return;
+               end if;
+            when Or_Operand =>
+               if (if Holds then Makes_Chain_Constants (C)
+                   else Deletes_Operands (And_Chain => False, C => C))
                then
                   return;
                end if;
             when Elsewhere =>
                null;
          end case;
-         Add (Equality_Operator, C, First (T, LAL.Op'(B.F_Op)),
+         Add (Kind, C,
+              (if Anchor = 0 then First (T, LAL.Op'(B.F_Op)) else Anchor),
               First (T, B), Last (T, B), Value);
       end Add_Constant;
+
+      --  LogicalOperator: the chain "A and B and C" (or with "and then",
+      --  "or", "or else") that B belongs to, at its first operator, without
+      --  one of its operands for each operand, and the constant False
+      --  ("True" for "or").  Each mutant differs from the chain for one
+      --  kind of input only: "B and C" where only A is False, "False"
+      --  where all are True.  So killing them all takes a test of each,
+      --  which also kills the swap of "and" and "or" (the sufficient set
+      --  of Kaminski and Ammann for logical operators).  For "and" in a
+      --  contract, ConjunctDeletion leaves the operands out instead.
+      procedure Mutate_Chain (B : LAL.Bin_Op; C : Context) is
+         Operands, Operators : Node_Vectors.Vector;
+         And_Chain : constant Boolean :=
+           LC.Ada_Op'(B.F_Op) in Ada_Op_And | Ada_Op_And_Then;
+      begin
+         Chain (B, Operands, Operators);
+         if First (T, Operators.First_Element) /= First (T, LAL.Op'(B.F_Op))
+         then
+            return;
+         end if;
+         if And_Chain and then Options.Enabled (Conjunct_Deletion)
+           and then Options.Mutate_Contracts and then In_Contract (C)
+         then
+            Add_Deletions (Conjunct_Deletion, B, C);
+         else
+            Add_Deletions (Logical_Operator, B, C);
+         end if;
+         Add_Constant
+           (Operators.Last_Element.Parent.As_Bin_Op,
+            (if And_Chain then "False" else "True"), C,
+            Kind   => Logical_Operator,
+            Anchor => First (T, Operators.First_Element));
+      end Mutate_Chain;
 
       function Zero (N : LAL.Ada_Node) return Boolean is
         (N.Kind = Ada_Int_Literal and then Squash (Text (T, N)) = "0");
@@ -1677,20 +1748,8 @@ package body AdaMutant.Mutators is
                | Ada_Op_Gt | Ada_Op_Gte
             =>
                Mutate_Relation (B, C);
-            when Ada_Op_And | Ada_Op_And_Then =>
-               if Options.Enabled (Conjunct_Deletion) and then In_Contract (C)
-               then
-                  Add_Conjuncts (B, C);
-               end if;
-               Add_Logical
-                 (B,
-                  Same_Case (Word,
-                             (if Op.Kind = Ada_Op_And then "or" else "or else")),
-                  C);
-            when Ada_Op_Or =>
-               Add_Logical (B, Same_Case (Word, "and"), C);
-            when Ada_Op_Or_Else =>
-               Add_Logical (B, Same_Case (Word, "and then"), C);
+            when Ada_Op_And | Ada_Op_And_Then | Ada_Op_Or | Ada_Op_Or_Else =>
+               Mutate_Chain (B, C);
             when Ada_Op_Xor =>
                Add_Logical (B, Same_Case (Word, "or"), C);
             when others =>

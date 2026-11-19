@@ -12,7 +12,8 @@
 # counterexample).  The mutants of the contracts show which parts the
 # proofs need: Transfer calls Dequeue, so the weaker postconditions of
 # Dequeue are detected; nothing in SPARK calls Transfer, so its own weaker
-# postconditions survive.  Two mutants of the code survive as well: a
+# postconditions survive, and so does its precondition made False, which
+# only a caller would notice.  Two mutants of the code survive as well: a
 # Capacity of 9, which the contracts allow (they are written with
 # Capacity) and the test does not see (it never fills the queue), and a
 # new queue that starts at another place of the buffer, which the model

@@ -102,28 +102,34 @@ procedure Unit_Tests is
               "NumericLiteral 2->3|ArithmeticOperator **->*|NumericLiteral 3->4",
               "exponent and literals");
       Expect ("package P is B : Boolean := X and then Y; end P;",
-              "LogicalOperator and then->or else", "short circuit");
+              "LogicalOperator X and then Y->Y|LogicalOperator X and then Y->X"
+              & "|LogicalOperator X and then Y->False", "short circuit");
       Expect ("package P is B : Boolean := X and then Y and then Z; end P;",
-              "LogicalOperator X and then Y->(X or else Y)"
-              & "|LogicalOperator X and then Y and then Z->"
-              & "((X and then Y) or else Z)",
-              "short circuit chain is parenthesised");
+              "LogicalOperator X and then Y and then Z->Y and then Z"
+              & "|LogicalOperator X and then Y and then Z->X and then Z"
+              & "|LogicalOperator X and then Y and then Z->X and then Y"
+              & "|LogicalOperator X and then Y and then Z->False",
+              "a chain loses each operand in turn");
       Expect ("package body P is procedure Q is begin "
               & "if A or else B or else C not in 1 | 3 then null; end if; "
               & "end Q; end P;",
               "ConditionalExpression A or else B or else C not in 1 | 3->True"
               & "|ConditionalExpression A or else B or else C not in 1 | 3->False"
-              & "|LogicalOperator A or else B->(A and then B)"
               & "|LogicalOperator A or else B or else C not in 1 | 3->"
-              & "((A or else B) and then C not in 1 | 3)"
+              & "B or else C not in 1 | 3"
+              & "|LogicalOperator A or else B or else C not in 1 | 3->"
+              & "A or else C not in 1 | 3"
+              & "|LogicalOperator A or else B or else C not in 1 | 3->"
+              & "A or else B"
               & "|MembershipOperator not in->in|NumericLiteral 1->0"
               & "|NumericLiteral 3->4",
               "membership choices stay in the operand of a logical chain");
       Expect ("package P is C : constant T := "
               & "(X and then Y and then Z | W => 1, others => 0); end P;",
-              "LogicalOperator X and then Y->(X or else Y)"
-              & "|LogicalOperator X and then Y and then Z->"
-              & "((X and then Y) or else Z)"
+              "LogicalOperator X and then Y and then Z->Y and then Z"
+              & "|LogicalOperator X and then Y and then Z->X and then Z"
+              & "|LogicalOperator X and then Y and then Z->X and then Y"
+              & "|LogicalOperator X and then Y and then Z->False"
               & "|NumericLiteral 1->0|NumericLiteral 0->1",
               "other choice bars still end a logical chain");
       Expect ("package P is procedure Q (X : in out Integer) with "
@@ -170,10 +176,14 @@ procedure Unit_Tests is
               & "|NumericLiteral 2->3",
               "body statements after a default are still mutated");
       Expect ("package P is B : Boolean := F (A or B, (C or D) or E); end P;",
-              "LogicalOperator or->and"
-              & "|LogicalOperator or->and"
-              & "|LogicalOperator or->and",
-              "chain only spans operators at the same depth");
+              "LogicalOperator A or B->B|LogicalOperator A or B->A"
+              & "|LogicalOperator A or B->True"
+              & "|LogicalOperator C or D->D|LogicalOperator C or D->C"
+              & "|LogicalOperator (C or D) or E->E"
+              & "|LogicalOperator (C or D) or E->(C or D)"
+              & "|LogicalOperator (C or D) or E->True",
+              "chain only spans operators at the same depth;"
+              & " True for (C or D) is the True of the outer chain");
       Expect ("package P is B : Boolean := X not in 1 .. 3; end P;",
               "MembershipOperator not in->in|NumericLiteral 1->0|NumericLiteral 3->4",
               "not in");
@@ -315,6 +325,47 @@ procedure Unit_Tests is
                  & "|ConjunctDeletion X >= 1 and X <= 9->X >= 1"
                  & "|EqualityOperator <=-><|EqualityOperator <=->=",
                  "relational operators: no True beside ConjunctDeletion", O);
+      end;
+      --  Logical operators and the relations in them.  The operands of a
+      --  chain are left out in turn, and the chain becomes a constant
+      --  once; the relations in it get no constant ("True and B" is B,
+      --  "False and B" is the constant of the chain).  In a contract,
+      --  ConjunctDeletion leaves out the operands of "and"; those of "or"
+      --  are LogicalOperator's.  A while loop gets no constant
+      --  (ConditionalExpression makes it, or the loop would not end).
+      declare
+         O : Scan_Options := (Mutate_Contracts => True, others => <>);
+      begin
+         O.Enabled := [others => False];
+         O.Enabled (Equality_Operator) := True;
+         O.Enabled (Logical_Operator) := True;
+         O.Enabled (Conjunct_Deletion) := True;
+         Expect ("procedure P (X, Y : Integer; B : out Boolean)"
+                 & " with Pre => X > 0 and then Y > 0,"
+                 & " Post => B or else X = Y is"
+                 & " begin B := X > 0 and then Y > 0; end P;",
+                 "EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|ConjunctDeletion X > 0 and then Y > 0->Y > 0"
+                 & "|ConjunctDeletion X > 0 and then Y > 0->X > 0"
+                 & "|LogicalOperator X > 0 and then Y > 0->False"
+                 & "|EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|LogicalOperator B or else X = Y->X = Y"
+                 & "|LogicalOperator B or else X = Y->B"
+                 & "|LogicalOperator B or else X = Y->True"
+                 & "|EqualityOperator =-><=|EqualityOperator =->>="
+                 & "|EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|LogicalOperator X > 0 and then Y > 0->Y > 0"
+                 & "|LogicalOperator X > 0 and then Y > 0->X > 0"
+                 & "|LogicalOperator X > 0 and then Y > 0->False"
+                 & "|EqualityOperator >->>=|EqualityOperator >->/=",
+                 "logical operators: relations in chains, contracts", O);
+         O.Enabled (Conditional_Expression) := True;
+         Expect ("procedure P is begin while A and then B loop null;"
+                 & " end loop; end P;",
+                 "ConditionalExpression A and then B->False"
+                 & "|LogicalOperator A and then B->B"
+                 & "|LogicalOperator A and then B->A",
+                 "logical operators: no constant for a while", O);
       end;
       Expect ("procedure P is begin exit when Done; end P;",
               "ConditionalExpression Done->True",
