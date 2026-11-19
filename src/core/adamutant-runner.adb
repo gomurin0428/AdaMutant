@@ -54,6 +54,37 @@ package body AdaMutant.Runner is
       Next  : Positive := 1;
       Changes : AdaMutant.Changes.Change_Maps.Map;
 
+      --  The files of the project: those under the root, except in the
+      --  directories that are not copied to the sandboxes (sandbox_exclude)
+      --  and in that of AdaMutant (.adamutant).
+      function Project_Listing return String_Vectors.Vector is
+         Skip : String_Vectors.Vector := Settings.Sandbox_Exclude;
+      begin
+         if not Skip.Contains (".adamutant") then
+            Skip.Append (".adamutant");
+         end if;
+         return Find_Files (Root, Skip);
+      end Project_Listing;
+
+      Listing : constant String_Vectors.Vector := Project_Listing;
+
+      --  The Ada sources among them, over which Find resolves names.
+      function Ada_Sources return Name_Sets.Set is
+         Sources : Name_Sets.Set;
+      begin
+         for Path of Listing loop
+            if Path'Length > 4
+              and then Ada.Characters.Handling.To_Lower
+                         (Path (Path'Last - 3 .. Path'Last)) in ".ads" | ".adb"
+            then
+               Sources.Include (Join (Root, Path));
+            end if;
+         end loop;
+         return Sources;
+      end Ada_Sources;
+
+      Project_Files : constant Name_Sets.Set := Ada_Sources;
+
       function Matches_Any (List : String_Vectors.Vector; Path : String)
         return Boolean is
       begin
@@ -75,7 +106,7 @@ package body AdaMutant.Runner is
                Fail ("--since: " & Ada.Exceptions.Exception_Message (E));
          end;
       end if;
-      for Path of Find_Files (Root, Settings.Sandbox_Exclude) loop
+      for Path of Listing loop
          if Matches_Any (Settings.Mutate, Path)
            and then not Matches_Any (Settings.Exclude, Path)
            and then (Only.Is_Empty or else Matches_Any (Only, Path))
@@ -94,6 +125,7 @@ package body AdaMutant.Runner is
             begin
                --  A file is a compilation unit, never a fragment.
                Options.Whole_Units := True;
+               Options.Project_Files := Project_Files;
                begin
                   --  Also when contracts are mutated: the mutations in
                   --  ghost code are known as such.
