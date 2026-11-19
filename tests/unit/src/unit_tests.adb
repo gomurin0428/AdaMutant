@@ -371,6 +371,17 @@ procedure Unit_Tests is
               & "|EqualityOperator =-><=|EqualityOperator 0 = N->False"
               & "|EqualityOperator /=->>|EqualityOperator 0 /= M->True",
               "operand types: values that are never negative", O);
+      --  An "abs" or a "+" that the program declares may give a negative
+      --  value: "abs I = 0" gets "<=" and "N + N > 0" gets "/=".
+      Expect ("procedure P (I : Integer; N : Natural; B : out Boolean) is"
+              & " function ""abs"" (X : Integer) return Integer is (-1);"
+              & " function ""+"" (L, R : Integer) return Integer is (L - R);"
+              & " begin B := abs I = 0; B := N + N > 0; end P;",
+              "EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator abs I = 0->False"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator N + N > 0->False",
+              "operand types: declared abs and +", O);
       --  An enumeration and a Float are scalars ("F > 0.0" gets "/=" as
       --  before: 0.0 is not the integer 0).  Records, arrays, access
       --  values, an "=" that the program declares (and the "/=" that comes

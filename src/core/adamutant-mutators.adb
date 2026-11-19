@@ -761,19 +761,23 @@ package body AdaMutant.Mutators is
       return (if Universal (Left) then Right else Left);
    end Operand_Type;
 
+   --  The operator Op is predefined: it has no declaration, or one in
+   --  Standard for the universal types.  "/=" has one next to an "=" that
+   --  the program declares.  Raises the errors of Libadalang.
+   function Predefined (Op : LAL.Op) return Boolean is
+      Ref : constant LAL.Basic_Decl := Op.P_Referenced_Decl;
+   begin
+      return Ref.Is_Null or else Ref.Unit = Op.P_Standard_Unit;
+   end Predefined;
+
    function Operands (B : LAL.Bin_Op) return Operand_Kind is
-      T   : LAL.Base_Type_Decl;
-      Ref : LAL.Basic_Decl;
+      T : LAL.Base_Type_Decl;
    begin
       T := Operand_Type (B);
       if T.Is_Null then
          return Unknown;
       end if;
-      --  A predefined operator has no declaration, or one in Standard for
-      --  the universal types.  "/=" has one next to an "=" that the
-      --  program declares.
-      Ref := B.F_Op.P_Referenced_Decl;
-      if not Ref.Is_Null and then Ref.Unit /= B.P_Standard_Unit then
+      if not Predefined (B.F_Op) then
          return Not_Scalar;
       end if;
       --  Where the type is private, its operations are those of a
@@ -1203,8 +1207,20 @@ package body AdaMutant.Mutators is
       --  Length, Size, Count, Alignment or Component_Size, "abs", a value of
       --  a subtype whose lower bound is 0 or more (Natural, Positive) or of
       --  a modular type; and the sum, product, quotient, power, "mod" and
-      --  "rem" of such values (in "A + B", Naturals give an Integer).
+      --  "rem" of such values (in "A + B", Naturals give an Integer).  An
+      --  "abs" or an operator that the program declares only gives the
+      --  subtype of its result.
       function Never_Negative (E : LAL.Expr) return Boolean is
+
+         function Predefined_Op (Op : LAL.Op) return Boolean is
+         begin
+            return Predefined (Op);
+         exception
+            --  Any error of Libadalang (Property_Error and the like).
+            when others =>
+               return False;
+         end Predefined_Op;
+
       begin
          case E.Kind is
             when Ada_Paren_Expr =>
@@ -1219,10 +1235,15 @@ package body AdaMutant.Mutators is
                   return True;
                end if;
             when Ada_Un_Op =>
-               if E.As_Un_Op.F_Op.Kind = Ada_Op_Abs then
+               if E.As_Un_Op.F_Op.Kind = Ada_Op_Abs
+                 and then Predefined_Op (E.As_Un_Op.F_Op)
+               then
                   return True;
                end if;
             when Ada_Bin_Op =>
+               if not Predefined_Op (E.As_Bin_Op.F_Op) then
+                  return Lower_Bound (E) = Not_Negative;
+               end if;
                declare
                   Left  : constant LAL.Expr := E.As_Bin_Op.F_Left;
                   Right : constant LAL.Expr := E.As_Bin_Op.F_Right;
