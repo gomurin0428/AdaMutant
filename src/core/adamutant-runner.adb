@@ -1592,44 +1592,78 @@ package body AdaMutant.Runner is
             end loop;
          end Write_Sources;
 
-         function Drop_Compile_Errors return Natural is
-            --  Mutants whose own lines the compiler complained about do
-            --  not compile; they leave the combined build.  So do the
-            --  places that are only watched, without a verdict on their
-            --  mutants.
+         --  Drop_At (D): the mutants and the watched places whose line has
+         --  the compiler message D (in every file of that name) leave the
+         --  combined build; how many, not counting those already left out.
+         function Drop_At
+           (D : AdaMutant.Schemata.Diagnostic) return Natural
+         is
             Dropped : Natural := 0;
          begin
-            for D of AdaMutant.Schemata.Diagnostics (Read (Log)) loop
-               for F in Schemas'Range loop
-                  if Base_Name (Rel (F)) = To_String (D.File)
-                    and then D.Line <= Natural (Schemas (F).Owners.Length)
-                    and then Schemas (F).Owners (D.Line) /= 0
-                  then
-                     declare
-                        M : Mutant renames
-                          Work_Items (Schemas (F).Owners (D.Line));
-                        Done : Natural;
-                     begin
-                        if M.Mutation.Kind = Statement_Deletion then
-                           if not Unwatched (M.Id) then
-                              Unwatched (M.Id) := True;
-                              Dropped := Dropped + 1;
-                           end if;
-                        elsif M.Status = Pending then
-                           M.Status := Compile_Error;
-                           M.Status_Reason := To_Unbounded_String
-                             ("build failed: " & To_String (D.Text));
+            for F in Schemas'Range loop
+               if Base_Name (Rel (F)) = To_String (D.File)
+                 and then D.Line <= Natural (Schemas (F).Owners.Length)
+                 and then Schemas (F).Owners (D.Line) /= 0
+               then
+                  declare
+                     M : Mutant renames
+                       Work_Items (Schemas (F).Owners (D.Line));
+                     Done : Natural;
+                  begin
+                     if M.Mutation.Kind = Statement_Deletion then
+                        if not Unwatched (M.Id) then
+                           Unwatched (M.Id) := True;
                            Dropped := Dropped + 1;
-                           Queue.Finished (Done);
-                           if Progress /= null then
-                              Progress (Done, Pending_Count, M, Rel (F));
-                           end if;
                         end if;
-                     end;
-                  end if;
-               end loop;
+                     elsif M.Status = Pending then
+                        M.Status := Compile_Error;
+                        M.Status_Reason := To_Unbounded_String
+                          ("build failed: " & To_String (D.Text));
+                        Dropped := Dropped + 1;
+                        Queue.Finished (Done);
+                        if Progress /= null then
+                           Progress (Done, Pending_Count, M, Rel (F));
+                        end if;
+                     end if;
+                  end;
+               end if;
             end loop;
             return Dropped;
+         end Drop_At;
+
+         function Drop_Compile_Errors return Natural is
+            --  Mutants whose own lines have a compile error do not compile;
+            --  they leave the combined build.  So do the places that are
+            --  only watched, without a verdict on their mutants.  A warning
+            --  does not stop the build: a mutant with one compiles, unless
+            --  warnings are errors (-gnatwe).  So the lines of warnings
+            --  only count when no line of a mutant has an error.  A note
+            --  never stops it (see AdaMutant.Schemata.Kind).
+            Messages : constant AdaMutant.Schemata.Diagnostic_Vectors.Vector
+              := AdaMutant.Schemata.Diagnostics (Read (Log));
+
+            function Drop (With_Warnings : Boolean) return Natural;
+
+            function Drop (With_Warnings : Boolean) return Natural is
+               use type AdaMutant.Schemata.Message_Kind;
+               Dropped : Natural := 0;
+            begin
+               for D of Messages loop
+                  if AdaMutant.Schemata.Kind (D) = AdaMutant.Schemata.Error
+                    or else (With_Warnings
+                             and then AdaMutant.Schemata.Kind (D)
+                                      = AdaMutant.Schemata.Warning)
+                  then
+                     Dropped := Dropped + Drop_At (D);
+                  end if;
+               end loop;
+               return Dropped;
+            end Drop;
+
+            Dropped : constant Natural := Drop (With_Warnings => False);
+         begin
+            return (if Dropped > 0 then Dropped
+                    else Drop (With_Warnings => True));
          end Drop_Compile_Errors;
 
          --  Hit (T, P): test T executed place P.  Recorded (T): a program of
