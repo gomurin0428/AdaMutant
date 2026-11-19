@@ -483,6 +483,25 @@ procedure Unit_Tests is
               & "|EqualityOperator >->>=|EqualityOperator >->/="
               & "|EqualityOperator N + N > 0->False",
               "operand types: declared abs and +", O);
+      --  UnaryOperator: "abs X" -> "X" is equivalent when X is never
+      --  negative, and is not made then; it is for an Integer, for N - 1
+      --  and for an "abs" that the program declares.
+      declare
+         U : Scan_Options;
+      begin
+         U.Enabled := [others => False];
+         U.Enabled (Unary_Operator) := True;
+         Expect ("procedure P (I : Integer; N : Natural; B : out Integer) is"
+                 & " type Byte is mod 256; M : Byte := 1;"
+                 & " type Temp is new Integer;"
+                 & " function ""abs"" (X : Temp) return Temp is (0 - X);"
+                 & " T : Temp range 0 .. 10 := 5; C : Temp; begin"
+                 & " B := abs N; B := abs I; B := abs (N - 1);"
+                 & " B := Integer (abs M); B := abs 3; C := abs T; end P;",
+                 "UnaryOperator abs->|UnaryOperator abs->"
+                 & "|UnaryOperator abs->",
+                 "unary operators: abs of values that are never negative", U);
+      end;
       --  "X = X" (a test for a NaN) and "X /= X": "<=" and ">=" would be
       --  the relation itself, so they get the negation.
       Expect ("procedure P (X : Float; I : Integer; B : out Boolean) is"
