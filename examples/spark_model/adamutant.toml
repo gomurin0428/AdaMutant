@@ -2,7 +2,8 @@
 # queue only through Model (Q), the sequence of its elements (a functional
 # vector of SPARKlib), and Length: Enqueue adds an element at the end of
 # the model, Dequeue removes the first one.  The ring buffer and its
-# wrap-around arithmetic appear in no contract.  The test, built with
+# wrap-around arithmetic appear in no contract of the spec (only in the
+# refined postcondition of Model, in the body).  The test, built with
 # -gnata so that the contracts and the model are checked as it runs, puts
 # three elements in and takes one out: the buffer never wraps around.  The
 # mutants of the wrap-around arithmetic are then detected only by the
@@ -21,7 +22,11 @@
 # extends sparklib_internal.gpr, which is in the directory lib/gnat of
 # GNATprove.  GNATprove finds it by itself; the build command gives that
 # directory to gprbuild (-aP), from the gnatprove found on the PATH (in a
-# POSIX shell).  So the example needs nothing but GNATprove on the PATH.
+# POSIX shell).  So the example needs nothing but GNATprove on the PATH,
+# and a GNAT of the same release, which compiles SPARKlib for the test.
+# When the gnatprove on the PATH is a symbolic link to another directory,
+# or for a build by hand, put the directory lib/gnat of GNATprove in
+# GPR_PROJECT_PATH instead.
 #
 # The prove command is that of examples/spark_counter: a cache of proof
 # results (ADAMUTANT_PROVE_CACHE) with a steps limit for the provers (the
