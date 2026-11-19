@@ -450,10 +450,10 @@ procedure Unit_Tests is
               & "|EqualityOperator C > Character'First->False",
               "operand types: characters", O);
       --  Values that Ada does not check against the subtype that Libadalang
-      --  gives them: a renaming has the subtype of the renamed object, a
-      --  generic formal function that of the actual, an inherited function
-      --  returns a value of its parent type, converted.  Each "= 0" gets
-      --  "<=".
+      --  gives them: a renaming has the subtype of the renamed object or
+      --  function, a generic formal function that of the actual, an
+      --  inherited function returns a value of its parent type, converted.
+      --  Each "= 0" gets "<=".
       Expect ("procedure P (Y : in out Integer; B : out Boolean) is"
               & " Z : Natural renames Y;"
               & " generic with function Count return Natural;"
@@ -464,14 +464,18 @@ procedure Unit_Tests is
               & " type D is new Parent range 0 .. 10; end Q;"
               & " package body Q is function F (X : Parent) return Parent"
               & " is (X); end Q;"
-              & " E : Q.D := 0; begin"
-              & " B := Z = 0; B := Q.F (E) = 0; end P;",
+              & " E : Q.D := 0;"
+              & " function Raw return Integer is (-1);"
+              & " function Count return Natural renames Raw; begin"
+              & " B := Z = 0; B := Q.F (E) = 0; B := Count = 0; end P;",
               "EqualityOperator =-><=|EqualityOperator =->>="
               & "|EqualityOperator Count = 0->False"
               & "|EqualityOperator =-><=|EqualityOperator =->>="
               & "|EqualityOperator Z = 0->False"
               & "|EqualityOperator =-><=|EqualityOperator =->>="
-              & "|EqualityOperator Q.F (E) = 0->False",
+              & "|EqualityOperator Q.F (E) = 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator Count = 0->False",
               "operand types: values in another subtype", O);
       --  An enumeration and a Float are scalars ("F > 0.0" gets "/=" as
       --  before: 0.0 is not the integer 0).  Records, arrays, access

@@ -1345,7 +1345,8 @@ package body AdaMutant.Mutators is
       --  - an object renaming and a generic formal object "in out", which
       --    have the subtype of the renamed object or of the actual;
       --  - the result of a generic formal function, which has the subtype
-      --    of the actual;
+      --    of the actual, and of a renaming of a function, which has the
+      --    subtype of the renamed one;
       --  - the result of an inherited function ("type D is new P range 0
       --    .. 10" and a function of P), which is converted to D without a
       --    check of its range.
@@ -1366,7 +1367,7 @@ package body AdaMutant.Mutators is
                   | LC.Ada_Base_Type_Decl
                =>
                   return True;
-               when LC.Ada_Formal_Subp_Decl =>
+               when LC.Ada_Formal_Subp_Decl | Ada_Subp_Renaming_Decl =>
                   return False;
                when others =>
                   declare
