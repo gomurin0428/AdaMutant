@@ -321,6 +321,293 @@ procedure Unit_Tests is
               "exit when only becomes True (False would hang the loop)");
    end Test_Conditions;
 
+   --  "=" and "/=" by the types of their operands, which name resolution
+   --  gives, and "/=" for "X > 0" by the values that X may have.
+   procedure Test_Operand_Types is
+      use AdaMutant.Files;
+      O : Scan_Options;
+   begin
+      O.Enabled := [others => False];
+      O.Enabled (Equality_Operator) := True;
+      --  Scalars: "<=", ">=" (or "<", ">") and the constant, which differ
+      --  from the relation in one of A < B, A = B and A > B each.  An
+      --  Integer may be negative: "X > 0" and "0 < X" get "/=".
+      Expect ("procedure P (I, J : Integer; B : out Boolean) is begin"
+              & " B := I = J; B := I /= J; B := I > 0; B := 0 < I; end P;",
+              "EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator I = J->False"
+              & "|EqualityOperator /=-><|EqualityOperator /=->>"
+              & "|EqualityOperator I /= J->True"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator I > 0->False"
+              & "|EqualityOperator <-><=|EqualityOperator <->/="
+              & "|EqualityOperator 0 < I->False",
+              "operand types: Integer", O);
+      --  A Natural, a subtype from 0, a modular type, Length and a sum of
+      --  such values are never negative: no "/=" against 0, nor "<=" for
+      --  "N = 0" (">=" for "0 = N"), ">" for "M /= 0" ("<" for "0 /= M"),
+      --  which would be the relation itself.  ">=" for "N > 0" and "N = 0"
+      --  always holds: it becomes True ("<" for "M /= 0", False).  N - 1,
+      --  an Integer, may be negative.  Two values of universal types
+      --  (S'Length and 0) tell nothing: "=" and "/=" are as for unknown
+      --  types.
+      Expect ("procedure P (N : Natural; S : String; B : out Boolean) is"
+              & " type Byte is mod 256; subtype Digit is Integer range 0 .. 9;"
+              & " M : Byte := 1; D : Digit := 1; begin"
+              & " B := N > 0; B := 0 < N; B := M > 0; B := D > 0;"
+              & " B := S'Length > 0; B := N + D * 2 > 0; B := N - 1 > 0;"
+              & " B := N = 0; B := M /= 0; B := S'Length = 0;"
+              & " B := 0 = N; B := 0 /= M; end P;",
+              "EqualityOperator N > 0->True|EqualityOperator N > 0->False"
+              & "|EqualityOperator 0 < N->True|EqualityOperator 0 < N->False"
+              & "|EqualityOperator M > 0->True|EqualityOperator M > 0->False"
+              & "|EqualityOperator D > 0->True|EqualityOperator D > 0->False"
+              & "|EqualityOperator >->>=|EqualityOperator S'Length > 0->False"
+              & "|EqualityOperator N + D * 2 > 0->True"
+              & "|EqualityOperator N + D * 2 > 0->False"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator N - 1 > 0->False"
+              & "|EqualityOperator N = 0->True|EqualityOperator N = 0->False"
+              & "|EqualityOperator M /= 0->False|EqualityOperator M /= 0->True"
+              & "|EqualityOperator =->/=|EqualityOperator S'Length = 0->False"
+              & "|EqualityOperator 0 = N->True|EqualityOperator 0 = N->False"
+              & "|EqualityOperator 0 /= M->False"
+              & "|EqualityOperator 0 /= M->True",
+              "operand types: values that are never negative", O);
+      --  An "abs" or a "+" that the program declares may give a negative
+      --  value: "abs I = 0" gets "<=" and "N + N > 0" gets "/=".
+      Expect ("procedure P (I : Integer; N : Natural; B : out Boolean) is"
+              & " function ""abs"" (X : Integer) return Integer is (-1);"
+              & " function ""+"" (L, R : Integer) return Integer is (L - R);"
+              & " begin B := abs I = 0; B := N + N > 0; end P;",
+              "EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator abs I = 0->False"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator N + N > 0->False",
+              "operand types: declared abs and +", O);
+      --  "X = X" (a test for a NaN) and "X /= X": "<=" and ">=" would be
+      --  the relation itself, so they get the negation.
+      Expect ("procedure P (X : Float; I : Integer; B : out Boolean) is"
+              & " begin B := not (X = x); B := I /= I; end P;",
+              "EqualityOperator =->/=|EqualityOperator X = x->False"
+              & "|EqualityOperator /=->=|EqualityOperator I /= I->True",
+              "operand types: the same operands", O);
+      --  Other bounds than 0: the first and last values of Boolean, of an
+      --  enumeration, of Positive, Natural'Last.  A mutant that differs
+      --  from the relation only beyond them is left out; one that always
+      --  holds there (or never does) becomes the constant.  Green, in the
+      --  middle, gets the three mutants.  "N <= 0" is "N = 0": no "=".
+      Expect ("procedure P (D : Boolean; P : Positive; N : Natural;"
+              & " B : out Boolean) is type Color is (Red, Green, Blue);"
+              & " C : Color := Red; begin"
+              & " B := D = True; B := D /= True; B := P = 1;"
+              & " B := N = Natural'Last; B := C = Red; B := C = Green;"
+              & " B := N <= 0; B := 0 >= N; end P;",
+              "EqualityOperator D = True->True|EqualityOperator D = True->False"
+              & "|EqualityOperator D /= True->False"
+              & "|EqualityOperator D /= True->True"
+              & "|EqualityOperator P = 1->True|EqualityOperator P = 1->False"
+              & "|EqualityOperator N = Natural'Last->True"
+              & "|EqualityOperator N = Natural'Last->False"
+              & "|EqualityOperator C = Red->True"
+              & "|EqualityOperator C = Red->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator C = Green->False"
+              & "|EqualityOperator N <= 0->False"
+              & "|EqualityOperator N <= 0->True"
+              & "|EqualityOperator 0 >= N->False"
+              & "|EqualityOperator 0 >= N->True",
+              "operand types: bounds of subtypes", O);
+      --  The result of a predefined operator on a type from 0 is of its
+      --  base type, which goes below 0: "K - 1" and "-K" may be negative.
+      --  A conversion is checked against its subtype.
+      Expect ("procedure P (B : out Boolean) is"
+              & " type Cnt is range 0 .. 100; K : Cnt := 1; begin"
+              & " B := K - 1 > 0; B := -K > 0; B := K - 1 = 0;"
+              & " B := Cnt (K - 1) > 0; end P;",
+              "EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator K - 1 > 0->False"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator -K > 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator K - 1 = 0->False"
+              & "|EqualityOperator Cnt (K - 1) > 0->True"
+              & "|EqualityOperator Cnt (K - 1) > 0->False",
+              "operand types: operations in the base type", O);
+      --  Characters: the codes from 0 to 255 (Libadalang's Standard has
+      --  one literal only).  "C = 'x'" gets the three mutants; a Digit is
+      --  never below '0'.
+      Expect ("procedure P (C : Character; B : out Boolean) is"
+              & " subtype Digit is Character range '0' .. '9';"
+              & " D : Digit := '1'; begin"
+              & " B := C = 'x'; B := D = '0'; B := C > Character'First;"
+              & " end P;",
+              "EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator C = 'x'->False"
+              & "|EqualityOperator D = '0'->True"
+              & "|EqualityOperator D = '0'->False"
+              & "|EqualityOperator C > Character'First->True"
+              & "|EqualityOperator C > Character'First->False",
+              "operand types: characters", O);
+      --  Values that Ada does not check against the subtype that Libadalang
+      --  gives them: a renaming has the subtype of the renamed object or
+      --  function, a generic formal function that of the actual, an
+      --  inherited function returns a value of its parent type, converted.
+      --  Each "= 0" gets "<=".
+      Expect ("procedure P (Y : in out Integer; B : out Boolean) is"
+              & " Z : Natural renames Y;"
+              & " generic with function Count return Natural;"
+              & " function G return Boolean;"
+              & " function G return Boolean is (Count = 0);"
+              & " package Q is type Parent is range -100 .. 100;"
+              & " function F (X : Parent) return Parent;"
+              & " type D is new Parent range 0 .. 10; end Q;"
+              & " package body Q is function F (X : Parent) return Parent"
+              & " is (X); end Q;"
+              & " E : Q.D := 0;"
+              & " function Raw return Integer is (-1);"
+              & " function Count return Natural renames Raw; begin"
+              & " B := Z = 0; B := Q.F (E) = 0; B := Count = 0; end P;",
+              "EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator Count = 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator Z = 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator Q.F (E) = 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator Count = 0->False",
+              "operand types: values in another subtype", O);
+      --  An enumeration and a Float are scalars ("F > 0.0" gets "/=" as
+      --  before: 0.0 is not the integer 0).  Records, arrays, access
+      --  values, an "=" that the program declares (and the "/=" that comes
+      --  with it) and names that do not resolve: as before.
+      Expect ("package P is type Color is (Red, Green, Blue);"
+              & " type Rec is record X : Integer; end record;"
+              & " type Arr is array (1 .. 2) of Integer;"
+              & " type Ptr is access Integer; type Temp is new Integer;"
+              & " function ""="" (L, R : Temp) return Boolean;"
+              & " C : Color := Red; R1, R2 : Rec; A1, A2 : Arr; P1 : Ptr;"
+              & " T1, T2 : Temp; F : Float := 1.0;"
+              & " B1 : Boolean := C = Red; B2 : Boolean := C /= Blue;"
+              & " B3 : Boolean := R1 = R2; B4 : Boolean := A1 /= A2;"
+              & " B5 : Boolean := P1 = null; B6 : Boolean := T1 = T2;"
+              & " B7 : Boolean := T1 /= T2; B8 : Boolean := F = 1.0;"
+              & " B9 : Boolean := F > 0.0; B10 : Boolean := C = Unknown;"
+              & " end P;",
+              "EqualityOperator C = Red->True|EqualityOperator C = Red->False"
+              & "|EqualityOperator C /= Blue->False"
+              & "|EqualityOperator C /= Blue->True"
+              & "|EqualityOperator =->/=|EqualityOperator R1 = R2->False"
+              & "|EqualityOperator /=->=|EqualityOperator A1 /= A2->True"
+              & "|EqualityOperator =->/=|EqualityOperator P1 = null->False"
+              & "|EqualityOperator =->/=|EqualityOperator T1 = T2->False"
+              & "|EqualityOperator /=->=|EqualityOperator T1 /= T2->True"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator F = 1.0->False"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator F > 0.0->False"
+              & "|EqualityOperator =->/=|EqualityOperator C = Unknown->False",
+              "operand types: enumeration, float, record, array, access,"
+              & " declared operators, unknown names", O);
+      --  A private type: where only its private view is visible, and for
+      --  a formal private type, as before; in the body of its package,
+      --  where its full view (an Integer) is, a scalar.
+      Expect ("procedure P is package Q is type T is private;"
+              & " function Is_Zero (X : T) return Boolean; private"
+              & " type T is new Integer; end Q;"
+              & " package body Q is function Is_Zero (X : T) return Boolean"
+              & " is (X = 0); end Q;"
+              & " generic type G is private;"
+              & " function Same (A, B : G) return Boolean;"
+              & " function Same (A, B : G) return Boolean is (A = B);"
+              & " A, B : Q.T; V : Boolean := A = B; begin null; end P;",
+              "EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator X = 0->False"
+              & "|EqualityOperator =->/=|EqualityOperator A = B->False"
+              & "|EqualityOperator =->/=|EqualityOperator A = B->False",
+              "operand types: private types", O);
+      --  The types of a body are in its spec, another file: they are known
+      --  through the files of the project only.
+      declare
+         Tmp  : constant String :=
+           Ada.Directories.Current_Directory & "/obj/types";
+         Body_Text : constant String :=
+           "package body Units is" & LF
+           & "   function Check (T : Celsius; N : Count; P, Q : Pair)" & LF
+           & "     return Boolean" & LF
+           & "   is (T > 0 and then N > 0 and then T /= 20 and then P = Q);"
+           & LF & "end Units;" & LF;
+         With_Files : Scan_Options := O;
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp);
+         Write (Tmp & "/units.ads",
+                "package Units is" & LF
+                & "   type Celsius is range -273 .. 1000;" & LF
+                & "   subtype Count is Integer range 0 .. 100;" & LF
+                & "   type Pair is record" & LF
+                & "      A, B : Integer;" & LF
+                & "   end record;" & LF
+                & "   function Check (T : Celsius; N : Count; P, Q : Pair)"
+                & LF & "     return Boolean;" & LF
+                & "end Units;" & LF);
+         Write (Tmp & "/units.adb", Body_Text);
+         Expect (Body_Text,
+                 "EqualityOperator >->>=|EqualityOperator T > 0->False"
+                 & "|EqualityOperator >->>=|EqualityOperator N > 0->False"
+                 & "|EqualityOperator /=->=|EqualityOperator T /= 20->True"
+                 & "|EqualityOperator =->/=|EqualityOperator P = Q->False",
+                 "operand types: a spec in another file, without the files",
+                 O);
+         With_Files.Project_Files.Include (Tmp & "/units.ads");
+         With_Files.Project_Files.Include (Tmp & "/units.adb");
+         Expect (Read (Tmp & "/units.adb"),
+                 "EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|EqualityOperator T > 0->False"
+                 & "|EqualityOperator N > 0->True|EqualityOperator N > 0->False"
+                 & "|EqualityOperator /=-><|EqualityOperator /=->>"
+                 & "|EqualityOperator T /= 20->True"
+                 & "|EqualityOperator =->/=|EqualityOperator P = Q->False",
+                 "operand types: a spec in another file, with the files",
+                 With_Files);
+      end;
+      --  In a child unit, a subtype and a derived type of a private type
+      --  of the parent have no "<" either.
+      declare
+         Tmp : constant String :=
+           Ada.Directories.Current_Directory & "/obj/child";
+         Kid : constant String :=
+           "package Pkg.Kid is" & LF
+           & "   subtype S is T;" & LF
+           & "   type D is new T;" & LF
+           & "   function Same (A, B : S; X, Y : D) return Boolean is" & LF
+           & "     (A /= B or else X = Y);" & LF
+           & "end Pkg.Kid;" & LF;
+         With_Files : Scan_Options := O;
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp);
+         Write (Tmp & "/pkg.ads",
+                "package Pkg is" & LF
+                & "   type T is private;" & LF
+                & "private" & LF
+                & "   type T is new Integer;" & LF
+                & "end Pkg;" & LF);
+         Write (Tmp & "/pkg-kid.ads", Kid);
+         With_Files.Project_Files.Include (Tmp & "/pkg.ads");
+         With_Files.Project_Files.Include (Tmp & "/pkg-kid.ads");
+         Expect (Kid,
+                 "EqualityOperator /=->=|EqualityOperator A /= B->True"
+                 & "|EqualityOperator =->/=|EqualityOperator X = Y->False",
+                 "operand types: private types in a child unit",
+                 With_Files);
+      end;
+   end Test_Operand_Types;
+
    procedure Test_Skipped is
    begin
       Expect ("with Ada.Text_IO; use Ada.Text_IO;" & LF
@@ -333,10 +620,11 @@ procedure Unit_Tests is
       Expect ("package P is function F (X : Integer) return Integer"
               & " with Pre => X > 0; end P;",
               "", "aspects are not mutated by default");
+      --  X is an Integer, which may be negative: "X > 0" gets "/=".
       Expect ("package P is function F (X : Integer) return Integer"
               & " with Pre => X > 0; end P;",
-              "EqualityOperator >->>=|EqualityOperator X > 0->False"
-              & "|NumericLiteral 0->1",
+              "EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator X > 0->False|NumericLiteral 0->1",
               "aspects with mutate_contracts",
               (Mutate_Contracts => True, others => <>));
       Expect ("package body P is "
@@ -2669,6 +2957,7 @@ begin
    Test_Lexer;
    Test_Operators;
    Test_Conditions;
+   Test_Operand_Types;
    Test_Skipped;
    Test_Comments;
    Test_Syntax_Tree;

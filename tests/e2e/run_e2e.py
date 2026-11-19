@@ -553,9 +553,15 @@ EXAMPLES.update({
     },
     # An equivalence_build command that compiles something, but not the
     # mutated files: the object files never change.  That must not make
-    # every survivor an equivalent mutant.
+    # every survivor an equivalent mutant.  The test, which it compiles,
+    # depends on calculator.ads: the survivor of Is_Even "True" (for "N
+    # mod 2 >= 0", which always holds) leaves its object as it was, since
+    # it only calls Is_Even (4), and is taken for an equivalent mutant.
+    # (It is not one: Calculator, where Is_Even (3) would differ, is never
+    # compiled by this command.  "N mod 2 <= 0", which is, is not made: N
+    # mod 2 is never negative.)
     "equivalence_other": {
-        "exit": 0, "example": "calculator", "equivalent": 0,
+        "exit": 0, "example": "calculator", "equivalent": 1,
         "config": "equivalence_build = 'gprbuild -p -q -c -u -P calculator_tests.gpr"
                   " test_calculator.adb -cargs -O2 -g0'\n",
         "output": "warning: the equivalence_build command does not compile every unit"

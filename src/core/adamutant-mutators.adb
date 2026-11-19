@@ -1,25 +1,30 @@
 with Ada.Characters.Handling; use Ada.Characters.Handling;
 with Ada.Exceptions;
+with Ada.Numerics.Big_Numbers.Big_Integers;
 with Ada.Strings.Fixed;
 with Ada.Strings.Wide_Wide_Unbounded;
+with GNATCOLL.GMP.Integers;
+with GNATCOLL.VFS;
 with Langkit_Support.Diagnostics;
 with Langkit_Support.Slocs;
 with Langkit_Support.Text;
 with Langkit_Support.Errors;
 with Langkit_Support.Generic_API.Analysis;
 with Libadalang.Analysis;
+with Libadalang.Auto_Provider;
 with Libadalang.Common;
 with Libadalang.Generic_API;
 with AdaMutant.Lexer; use AdaMutant.Lexer;
 
 package body AdaMutant.Mutators is
 
-   --  Find works on the syntax tree of Libadalang, without name
-   --  resolution.
+   --  Find works on the syntax tree of Libadalang.  It asks for name
+   --  resolution only for the types of the operands of relations.
 
    package LAL renames Libadalang.Analysis;
    package LC renames Libadalang.Common;
    use all type LC.Ada_Node_Kind_Type;
+   use type LAL.Analysis_Unit;
    use type LC.Token_Kind;
    use type LC.Token_Reference;
    use type LC.Grammar_Rule;
@@ -216,8 +221,9 @@ package body AdaMutant.Mutators is
 
    type Line_Starts is array (Positive range <>) of Positive;
 
-   --  Source text parsed by Libadalang: the syntax tree only, without
-   --  name resolution.  Libadalang places a token by its line and column.
+   --  Source text parsed by Libadalang, in a context that resolves names
+   --  over the files of the project (see Provider).  Libadalang places a
+   --  token by its line and column.
    --  Decoded as Latin-1, every byte is one character and a tab is one
    --  column, so the byte offset of a token is the start of its line plus
    --  its column.  UTF-8 text with letters beyond ASCII in an identifier
@@ -346,17 +352,67 @@ package body AdaMutant.Mutators is
       return Found;
    end First_Incomplete;
 
+   --  The unit providers of the files that Find was last given, one for
+   --  each charset (by UTF_8).  Making one parses all the files, and Find
+   --  gets the same files for each file of a project.
+   Provider_Files : Name_Sets.Set;
+   Providers      : array (Boolean) of LAL.Unit_Provider_Reference;
+   Provided       : array (Boolean) of Boolean := [others => False];
+
+   --  The unit provider of an analysis context that resolves names over
+   --  Files, decoded as UTF-8 or as Latin-1.  Over no files, rather than the
+   --  default provider of Libadalang, which would look for the units in
+   --  the current directory: then only Standard and the declarations of
+   --  the parsed source itself are known.
+   function Provider
+     (Files : Name_Sets.Set; UTF_8 : Boolean)
+      return LAL.Unit_Provider_Reference
+   is
+      Charset : constant String := (if UTF_8 then "utf-8" else "iso-8859-1");
+   begin
+      if not Name_Sets."=" (Files, Provider_Files) then
+         Provider_Files := Files;
+         Provided := [others => False];
+      end if;
+      if not Provided (UTF_8) then
+         declare
+            Paths : GNATCOLL.VFS.File_Array (1 .. Natural (Files.Length));
+            Last  : Natural := 0;
+         begin
+            for Path of Files loop
+               Last := Last + 1;
+               Paths (Last) := GNATCOLL.VFS.Create (GNATCOLL.VFS."+" (Path));
+            end loop;
+            Providers (UTF_8) :=
+              Libadalang.Auto_Provider.Create_Auto_Provider_Reference
+                (Paths, Charset);
+         exception
+            --  A file that Libadalang cannot read: names are then resolved
+            --  as without the project.
+            when others =>
+               Providers (UTF_8) :=
+                 Libadalang.Auto_Provider.Create_Auto_Provider_Reference
+                   (GNATCOLL.VFS.Empty_File_Array, Charset);
+         end;
+         Provided (UTF_8) := True;
+      end if;
+      return Providers (UTF_8);
+   end Provider;
+
    --  Source parsed with the first of Rules that gives a complete tree
    --  without diagnostics (with Whole_Units, the compilation rule only), as
    --  Latin-1 and then, when that fails, as UTF-8; then the same with the
    --  brackets of Bracket_Strings, when the source has '["'.  When nothing
    --  parses, raises Lexical_Error with the first error of the compilation
    --  rule, or with Tolerant, gives the tree that Libadalang recovered from
-   --  the errors.
+   --  the errors.  With Resolve, the tree resolves names over Files (see
+   --  Provider).
    function Parse_Tree
      (Source      : String;
       Tolerant    : Boolean;
-      Whole_Units : Boolean := False) return Syntax_Tree
+      Whole_Units : Boolean := False;
+      Resolve     : Boolean := False;
+      Files       : Name_Sets.Set := Name_Sets.Empty_Set) return Syntax_Tree
    is
       BOM   : constant String :=
         Character'Val (16#EF#) & Character'Val (16#BB#)
@@ -376,7 +432,12 @@ package body AdaMutant.Mutators is
                  (if UTF_8 then "utf-8" else "iso-8859-1");
             begin
                T.Context :=
-                 LAL.Create_Context (Charset => Charset, Tab_Stop => 1);
+                 LAL.Create_Context
+                   (Charset       => Charset,
+                    Unit_Provider =>
+                      (if Resolve then Provider (Files, UTF_8)
+                       else LAL.No_Unit_Provider_Reference),
+                    Tab_Stop      => 1);
                for Rule of Rules loop
                   exit when Whole_Units and then Rule /= LC.Compilation_Rule;
                   declare
@@ -667,6 +728,83 @@ package body AdaMutant.Mutators is
       return Types;
    end Type_Names;
 
+   --  What the operands of a relation are, after name resolution.
+   type Operand_Kind is
+     (Scalar,
+      --  Of a discrete or a real type, compared by a predefined operator.
+      Not_Scalar,
+      --  Of a record, array, access, private, task or protected type...,
+      --  or compared by an operator that the program declares.
+      Unknown);
+      --  A name that does not resolve, two values of universal types, a
+      --  private view whose full view is not known, or anything else that
+      --  Libadalang cannot tell.
+
+   function Universal (T : LAL.Base_Type_Decl) return Boolean is
+     (Same (T, T.P_Universal_Int_Type)
+      or else Same (T, T.P_Universal_Real_Type));
+   --  The type of a numeric literal or a named number.
+
+   --  The type of the operands of the relation B: of the one that is not
+   --  of a universal type (as a literal is).  No node when a name does not
+   --  resolve, or when both are of a universal type (literals, named
+   --  numbers, attributes such as Length), which tells nothing of what
+   --  they stand for.
+   function Operand_Type (B : LAL.Bin_Op) return LAL.Base_Type_Decl is
+      Left  : constant LAL.Base_Type_Decl := B.F_Left.P_Expression_Type;
+      Right : constant LAL.Base_Type_Decl := B.F_Right.P_Expression_Type;
+   begin
+      if Left.Is_Null or else Right.Is_Null
+        or else (Universal (Left) and then Universal (Right))
+      then
+         return LAL.No_Base_Type_Decl;
+      end if;
+      return (if Universal (Left) then Right else Left);
+   end Operand_Type;
+
+   --  The operator Op is predefined: it has no declaration, or one in
+   --  Standard for the universal types.  "/=" has one next to an "=" that
+   --  the program declares.  Raises the errors of Libadalang.
+   function Predefined (Op : LAL.Op) return Boolean is
+      Ref : constant LAL.Basic_Decl := Op.P_Referenced_Decl;
+   begin
+      return Ref.Is_Null or else Ref.Unit = Op.P_Standard_Unit;
+   end Predefined;
+
+   function Operands (B : LAL.Bin_Op) return Operand_Kind is
+      T : LAL.Base_Type_Decl;
+   begin
+      T := Operand_Type (B);
+      if T.Is_Null then
+         return Unknown;
+      end if;
+      if not Predefined (B.F_Op) then
+         return Not_Scalar;
+      end if;
+      --  Where the type is private, its operations are those of a
+      --  private type, whatever its full view.  A subtype of a private
+      --  type is its own full view.
+      if T.P_Is_Private then
+         declare
+            Base : constant LAL.Base_Type_Decl := T.P_Base_Subtype;
+            Full : constant LAL.Base_Type_Decl := Base.P_Full_View;
+         begin
+            return (if Full.Is_Null or else Same (Full, Base) then Unknown
+                    else Not_Scalar);
+         end;
+      end if;
+      --  Seen from B: in a child unit, a subtype or a derived type of a
+      --  private type of the parent is not a scalar.
+      return (if T.P_Is_Discrete_Type (Origin => B)
+                 or else T.P_Is_Real_Type (Origin => B)
+              then Scalar
+              else Not_Scalar);
+   exception
+      --  Any error of Libadalang (Property_Error and the like).
+      when others =>
+         return Unknown;
+   end Operands;
+
    function Same_Node (Left, Right : LAL.Ada_Node) return Boolean is
      (Same (Left, Right));
 
@@ -678,7 +816,9 @@ package body AdaMutant.Mutators is
    is
       T : constant Syntax_Tree :=
         Parse_Tree (Source, Tolerant => False,
-                    Whole_Units => Options.Whole_Units);
+                    Whole_Units => Options.Whole_Units,
+                    Resolve     => Options.Enabled (Equality_Operator),
+                    Files       => Options.Project_Files);
 
       --  The ghost names of the spec and of Source.
       Ghosts : Name_Sets.Set := Options.Ghost_Names;
@@ -1023,7 +1163,484 @@ package body AdaMutant.Mutators is
         (N.Kind = Ada_Int_Literal and then Squash (Text (T, N)) = "0");
       --  The integer literal 0.  In "X > 0" and "0 < X", the mutant "/="
       --  differs from the relation only when X < 0, which a count, a
-      --  length or a Natural never is: it would mostly be equivalent.
+      --  length or a Natural never is: it would be equivalent.
+
+      --  The operands of B are the same tokens, case aside ("X = X"): the
+      --  relation does not split its inputs in three.  "X <= X" and "X >=
+      --  X" are "X = X", also for a NaN, where all three are False, so
+      --  such a relation gets the negation as for other types.
+      function Same_Operands (B : LAL.Bin_Op) return Boolean is
+         Left  : constant LAL.Expr := B.F_Left;
+         Right : constant LAL.Expr := B.F_Right;
+         L     : LC.Token_Reference := Left.Token_Start;
+         R     : LC.Token_Reference := Right.Token_Start;
+      begin
+         loop
+            declare
+               Left_Text  : constant String := Text (T, L);
+               Right_Text : constant String := Text (T, R);
+            begin
+               --  The case of a character or string literal counts.
+               if (if Left_Text (Left_Text'First) in ''' | '"'
+                   then Left_Text /= Right_Text
+                   else Lower (Left_Text) /= Lower (Right_Text))
+               then
+                  return False;
+               end if;
+            end;
+            exit when L = Left.Token_End or else R = Right.Token_End;
+            L := Next (L);
+            R := Next (R);
+         end loop;
+         return L = Left.Token_End and then R = Right.Token_End;
+      end Same_Operands;
+
+      package Big renames Ada.Numerics.Big_Numbers.Big_Integers;
+      use type Big.Big_Integer;
+
+      --  What the subtypes tell of the values of an operand: they lie in
+      --  Low .. High, where known.  For an enumeration type, the positions
+      --  of its literals, which is how Libadalang evaluates them.
+      type Value_Range is record
+         Has_Low, Has_High : Boolean := False;
+         Low, High         : Big.Big_Integer;
+      end record;
+
+      Unknown_Range : constant Value_Range := (others => <>);
+
+      --  The value of E, when it is static: an integer, or the position of
+      --  an enumeration literal (not a real value).
+      function Static_Value
+        (E : LAL.Expr; Value : out Big.Big_Integer) return Boolean is
+      begin
+         if E.Is_Null or else not E.P_Is_Static_Expr then
+            return False;
+         end if;
+         Value := Big.From_String
+           (GNATCOLL.GMP.Integers.Image (E.P_Eval_As_Int));
+         return True;
+      exception
+         --  Any error of Libadalang (Property_Error and the like).
+         when others =>
+            return False;
+      end Static_Value;
+
+      --  The values of the type of S, whatever computes them: the positions
+      --  of the literals of an enumeration type, 0 .. modulus - 1 for a
+      --  modular type.  Nothing for a signed integer type: its operations
+      --  give values of its base type, beyond its range ("C - 1" for C of
+      --  "range 0 .. 100" may be -1).
+      function Type_Range (S : LAL.Base_Type_Decl) return Value_Range is
+         R : Value_Range;
+      begin
+         if S.Is_Null then
+            return R;
+         end if;
+         declare
+            Root : constant LAL.Base_Type_Decl := S.P_Root_Type;
+         begin
+            if Root.Kind in Ada_Concrete_Type_Decl | Ada_Formal_Type_Decl then
+               declare
+                  Def : constant LAL.Type_Def := Root.As_Type_Decl.F_Type_Def;
+               begin
+                  if Has_Kind (Def, Ada_Mod_Int_Type_Def) then
+                     R.Has_Low := True;
+                     R.Low := 0;
+                     if Static_Value (Def.As_Mod_Int_Type_Def.F_Expr, R.High)
+                     then
+                        R.High := R.High - 1;
+                        R.Has_High := True;
+                     end if;
+                  elsif Has_Kind (Def, Ada_Enum_Type_Def) then
+                     R.Has_Low := True;
+                     R.Low := 0;
+                     --  The Standard of Libadalang declares the character
+                     --  types with one literal only.
+                     if Root.Unit /= Root.P_Standard_Unit then
+                        R.Has_High := True;
+                        R.High := Big.To_Big_Integer
+                          (Def.As_Enum_Type_Def.F_Enum_Literals
+                             .Children_Count - 1);
+                     else
+                        declare
+                           Name : constant String := To_Lower
+                             (Langkit_Support.Text.To_UTF8
+                                (Root.P_Defining_Name.Text));
+                        begin
+                           R.Has_High := True;
+                           if Name = "boolean" then
+                              R.High := 1;
+                           elsif Name = "character" then
+                              R.High := 2**8 - 1;
+                           elsif Name = "wide_character" then
+                              R.High := 2**16 - 1;
+                           elsif Name = "wide_wide_character" then
+                              R.High := 2**31 - 1;
+                           else
+                              R.Has_High := False;
+                           end if;
+                        end;
+                     end if;
+                  end if;
+               end;
+            end if;
+         end;
+         return R;
+      exception
+         when others =>
+            return Unknown_Range;
+      end Type_Range;
+
+      --  The values of the subtype S: its static bounds, within those of
+      --  its type.  The range of a modular type has its modulus for upper
+      --  bound and no lower bound, which Type_Range gives.
+      function Subtype_Range (S : LAL.Base_Type_Decl) return Value_Range is
+         R : Value_Range := Type_Range (S);
+         V : Big.Big_Integer;
+      begin
+         if S.Is_Null or else Universal (S) or else not S.P_Is_Discrete_Type
+         then
+            return Unknown_Range;
+         end if;
+         declare
+            Bounds : constant LAL.Discrete_Range := S.P_Discrete_Range;
+            Low    : constant LAL.Expr := LAL.Low_Bound (Bounds).As_Expr;
+            High   : constant LAL.Expr := LAL.High_Bound (Bounds).As_Expr;
+         begin
+            if Static_Value (Low, V) then
+               if not R.Has_Low or else V > R.Low then
+                  R.Has_Low := True;
+                  R.Low := V;
+               end if;
+               if Static_Value (High, V)
+                 and then (not R.Has_High or else V < R.High)
+               then
+                  R.Has_High := True;
+                  R.High := V;
+               end if;
+            end if;
+         end;
+         return R;
+      exception
+         when others =>
+            return Unknown_Range;
+      end Subtype_Range;
+
+      --  The operator Op is predefined (see Predefined), or not known.
+      function Predefined_Op (Op : LAL.Op) return Boolean is
+      begin
+         return Predefined (Op);
+      exception
+         when others =>
+            return False;
+      end Predefined_Op;
+
+      --  The value of E is in the subtype that Libadalang gives it
+      --  (P_Expression_Type), which Ada checks: a constant, a variable, a
+      --  parameter, a component, a loop parameter, the result of a function
+      --  that the program declares (an operator among them), a conversion,
+      --  a qualified expression.  Not:
+      --  - the result of a predefined operator or of an attribute (such as
+      --    Pred), which is of the base type;
+      --  - an object renaming and a generic formal object "in out", which
+      --    have the subtype of the renamed object or of the actual;
+      --  - the result of a generic formal function, which has the subtype
+      --    of the actual, and of a renaming of a function, which has the
+      --    subtype of the renamed one;
+      --  - the result of an inherited function ("type D is new P range 0
+      --    .. 10" and a function of P), which is converted to D without a
+      --    check of its range.
+      function Checked (E : LAL.Expr) return Boolean is
+
+         function Checked_Decl (Decl : LAL.Basic_Decl) return Boolean is
+         begin
+            if Decl.Is_Null then
+               return False;
+            end if;
+            case Decl.Kind is
+               when Ada_Object_Decl =>
+                  return Decl.As_Object_Decl.F_Renaming_Clause.Is_Null
+                    and then not Has_Kind (Decl.As_Object_Decl.F_Mode,
+                                           Ada_Mode_In_Out);
+               when Ada_Param_Spec | Ada_Component_Decl
+                  | Ada_Discriminant_Spec | Ada_For_Loop_Var_Decl
+                  | LC.Ada_Base_Type_Decl
+               =>
+                  return True;
+               when LC.Ada_Formal_Subp_Decl | Ada_Subp_Renaming_Decl =>
+                  return False;
+               when others =>
+                  declare
+                     Spec : constant LAL.Base_Subp_Spec :=
+                       Decl.P_Subp_Spec_Or_Null;
+                  begin
+                     return not Spec.Is_Null
+                       and then not Spec.P_Returns.Is_Null
+                       and then Same (Spec.P_Returns.P_Designated_Type_Decl,
+                                      E.P_Expression_Type);
+                  end;
+            end case;
+         end Checked_Decl;
+
+      begin
+         case E.Kind is
+            when Ada_Identifier | Ada_Dotted_Name =>
+               return Checked_Decl (E.As_Name.P_Referenced_Decl);
+            when Ada_Call_Expr =>
+               return E.As_Call_Expr.F_Name.Kind /= Ada_Attribute_Ref
+                 and then Checked_Decl
+                   (E.As_Call_Expr.F_Name.P_Referenced_Decl);
+            when Ada_Qual_Expr | Ada_Explicit_Deref =>
+               return True;
+            when Ada_Un_Op =>
+               return not Predefined (E.As_Un_Op.F_Op)
+                 and then Checked_Decl (E.As_Un_Op.F_Op.P_Referenced_Decl);
+            when Ada_Bin_Op =>
+               return not Predefined (E.As_Bin_Op.F_Op)
+                 and then Checked_Decl (E.As_Bin_Op.F_Op.P_Referenced_Decl);
+            when others =>
+               return False;
+         end case;
+      exception
+         --  Any error of Libadalang (Property_Error and the like).
+         when others =>
+            return False;
+      end Checked;
+
+      function Unparen (E : LAL.Expr) return LAL.Expr is
+        (if E.Kind = Ada_Paren_Expr then Unparen (E.As_Paren_Expr.F_Expr)
+         else E);
+
+      --  The values of E: its static value, the range of its subtype when
+      --  E is Checked, else the range of its type.
+      function Base_Range (E : LAL.Expr) return Value_Range is
+         X : constant LAL.Expr := Unparen (E);
+         V : Big.Big_Integer;
+      begin
+         if Static_Value (X, V) then
+            return (True, True, V, V);
+         end if;
+         declare
+            S : constant LAL.Base_Type_Decl := X.P_Expression_Type;
+         begin
+            if S.Is_Null or else Universal (S) then
+               return Unknown_Range;
+            end if;
+            return (if Checked (X) then Subtype_Range (S) else Type_Range (S));
+         end;
+      exception
+         when others =>
+            return Unknown_Range;
+      end Base_Range;
+
+      --  The value of E is never negative: a numeric literal, the attribute
+      --  Length, Size, Count, Alignment or Component_Size, "abs", a value
+      --  whose range (Base_Range) starts at 0 or more (a Natural, a Positive,
+      --  a modular type); and the sum, product, quotient, power, "mod" and
+      --  "rem" of such values (in "A + B", Naturals give an Integer).  An
+      --  "abs" or an operator that the program declares only gives the
+      --  subtype of its result.
+      function Never_Negative (E : LAL.Expr) return Boolean is
+      begin
+         case E.Kind is
+            when Ada_Paren_Expr =>
+               return Never_Negative (E.As_Paren_Expr.F_Expr);
+            when Ada_Int_Literal | Ada_Real_Literal =>
+               return True;
+            when Ada_Attribute_Ref =>
+               if Lower_Text (T, E.As_Attribute_Ref.F_Attribute) in
+                    "length" | "size" | "count" | "alignment"
+                    | "component_size"
+               then
+                  return True;
+               end if;
+            when Ada_Un_Op =>
+               if E.As_Un_Op.F_Op.Kind = Ada_Op_Abs
+                 and then Predefined_Op (E.As_Un_Op.F_Op)
+               then
+                  return True;
+               end if;
+            when Ada_Bin_Op =>
+               if Predefined_Op (E.As_Bin_Op.F_Op) then
+                  declare
+                     Left  : constant LAL.Expr := E.As_Bin_Op.F_Left;
+                     Right : constant LAL.Expr := E.As_Bin_Op.F_Right;
+                  begin
+                     case E.As_Bin_Op.F_Op.Kind is
+                        when Ada_Op_Plus | Ada_Op_Mult | Ada_Op_Div =>
+                           if Never_Negative (Left)
+                             and then Never_Negative (Right)
+                           then
+                              return True;
+                           end if;
+                        when Ada_Op_Pow | Ada_Op_Rem =>
+                           if Never_Negative (Left) then
+                              return True;
+                           end if;
+                        when Ada_Op_Mod =>
+                           if Never_Negative (Right) then
+                              return True;
+                           end if;
+                        when others =>
+                           null;
+                     end case;
+                  end;
+               end if;
+            when others =>
+               null;
+         end case;
+         declare
+            R : constant Value_Range := Base_Range (E);
+         begin
+            return R.Has_Low and then R.Low >= 0;
+         end;
+      end Never_Negative;
+
+      --  The values of the operand E of a relation: Base_Range, from 0 when
+      --  E is never negative.
+      function Operand_Range (E : LAL.Expr) return Value_Range is
+         R : Value_Range := Base_Range (E);
+      begin
+         if (not R.Has_Low or else R.Low < 0) and then Never_Negative (E) then
+            R.Has_Low := True;
+            R.Low := 0;
+         end if;
+         return R;
+      end Operand_Range;
+
+      --  X, a scalar compared with 0 ("X > 0" or "0 < X"), may be
+      --  negative: its range starts below 0 (an Integer, not a Natural), or
+      --  it is the result of an operation in a signed type that is not
+      --  known to be never negative ("N - 1").  Not when name resolution
+      --  does not tell (see Operands).
+      function May_Be_Negative (X : LAL.Expr) return Boolean is
+      begin
+         if Never_Negative (X) then
+            return False;
+         end if;
+         declare
+            R : constant Value_Range := Base_Range (X);
+         begin
+            return (if R.Has_Low then R.Low < 0 else not Checked (Unparen (X)));
+         end;
+      end May_Be_Negative;
+
+      function Mutable (C : Context) return Boolean is
+        (Options.Enabled (Equality_Operator) and then not Skipped (C));
+      --  EqualityOperator may change a relation in the context C: name
+      --  resolution, which takes time, is not needed otherwise.
+
+      --  The mutants of the relation B.
+      procedure Mutate_Relation (B : LAL.Bin_Op; C : Context) is
+         Op       : constant LAL.Op := B.F_Op;
+         Relation : constant LC.Ada_Op := B.F_Op;
+         Equality : constant Boolean := Relation in Ada_Op_Eq | Ada_Op_Neq;
+         Scalars  : constant Boolean :=
+           Mutable (C)
+           and then not (Equality and then Same_Operands (B))
+           and then Operands (B) = Scalar;
+
+         type Order is (Less, Equal, Greater);
+         --  Where the left operand is to the right one.
+
+         --  The operands, scalars, are never in that region: Less when the
+         --  left one is never below the right one (its lower bound is at
+         --  least the upper bound of the other), Greater the other way.
+         --  Equal is never ruled out.
+         Never : array (Order) of Boolean := [others => False];
+
+         --  The mutant that makes the relation Replacement, which differs
+         --  from B in the region Differs only.  None when the operands
+         --  are never there: it would be equivalent ("N <= 0" for "N = 0"
+         --  with a Natural N).  The constant that Replacement gives when
+         --  it always holds, or never does ("N >= 0"): GNAT warns of such
+         --  a condition, and ConditionalExpression may make it already.
+         procedure Replace_By (Replacement : String; Differs : Order) is
+         begin
+            if Never (Differs) then
+               return;
+            elsif (Replacement = "<=" and then Never (Greater))
+              or else (Replacement = ">=" and then Never (Less))
+            then
+               Add_Constant (B, "True", C);
+            elsif (Replacement = "<" and then Never (Less))
+              or else (Replacement = ">" and then Never (Greater))
+            then
+               Add_Constant (B, "False", C);
+            else
+               Replace (Equality_Operator, C, Op, Replacement);
+            end if;
+         end Replace_By;
+
+         --  The constant Value for B, which differs from it in the region
+         --  Differs only.
+         procedure Replace_By_Constant (Value : String; Differs : Order) is
+         begin
+            if not Never (Differs) then
+               Add_Constant (B, Value, C);
+            end if;
+         end Replace_By_Constant;
+
+      begin
+         if Scalars then
+            declare
+               L : constant Value_Range := Operand_Range (B.F_Left);
+               R : constant Value_Range := Operand_Range (B.F_Right);
+            begin
+               Never (Less) :=
+                 L.Has_Low and then R.Has_High and then L.Low >= R.High;
+               Never (Greater) :=
+                 L.Has_High and then R.Has_Low and then L.High <= R.Low;
+            end;
+         end if;
+         case Relation is
+            when Ada_Op_Eq =>
+               if Scalars then
+                  Replace_By ("<=", Less);
+                  Replace_By (">=", Greater);
+               else
+                  Replace (Equality_Operator, C, Op, "/=");
+               end if;
+               Replace_By_Constant ("False", Equal);
+            when Ada_Op_Neq =>
+               if Scalars then
+                  Replace_By ("<", Greater);
+                  Replace_By (">", Less);
+               else
+                  Replace (Equality_Operator, C, Op, "=");
+               end if;
+               Replace_By_Constant ("True", Equal);
+            --  Against 0, "/=" differs from "X > 0" when X < 0 only, which
+            --  a count or a length never is: without the type, there is
+            --  none.
+            when Ada_Op_Lt =>
+               Replace_By ("<=", Equal);
+               if not Zero (B.F_Left.As_Ada_Node)
+                 or else (Scalars and then May_Be_Negative (B.F_Right))
+               then
+                  Replace_By ("/=", Greater);
+               end if;
+               Replace_By_Constant ("False", Less);
+            when Ada_Op_Lte =>
+               Replace_By ("<", Equal);
+               Replace_By ("=", Less);
+               Replace_By_Constant ("True", Greater);
+            when Ada_Op_Gt =>
+               Replace_By (">=", Equal);
+               if not Zero (B.F_Right.As_Ada_Node)
+                 or else (Scalars and then May_Be_Negative (B.F_Left))
+               then
+                  Replace_By ("/=", Less);
+               end if;
+               Replace_By_Constant ("False", Greater);
+            when Ada_Op_Gte =>
+               Replace_By (">", Equal);
+               Replace_By ("=", Greater);
+               Replace_By_Constant ("True", Less);
+            when others =>
+               null;
+         end case;
+      end Mutate_Relation;
 
       procedure Mutate_Binary (B : LAL.Bin_Op; C : Context) is
          Op   : constant LAL.Op := B.F_Op;
@@ -1052,33 +1669,14 @@ package body AdaMutant.Mutators is
             --  killing all three takes a test that checks the result in
             --  each (the sufficient set of Kaminski, Ammann and Offutt,
             --  2011).  "=" and "/=" may compare records, which have no
-            --  "<".
-            when Ada_Op_Eq =>
-               Swap (Equality_Operator, "/=");
-               Add_Constant (B, "False", C);
-            when Ada_Op_Neq =>
-               Swap (Equality_Operator, "=");
-               Add_Constant (B, "True", C);
-            when Ada_Op_Lt =>
-               Swap (Equality_Operator, "<=");
-               if not Zero (B.F_Left.As_Ada_Node) then
-                  Swap (Equality_Operator, "/=");
-               end if;
-               Add_Constant (B, "False", C);
-            when Ada_Op_Lte =>
-               Swap (Equality_Operator, "<");
-               Swap (Equality_Operator, "=");
-               Add_Constant (B, "True", C);
-            when Ada_Op_Gt =>
-               Swap (Equality_Operator, ">=");
-               if not Zero (B.F_Right.As_Ada_Node) then
-                  Swap (Equality_Operator, "/=");
-               end if;
-               Add_Constant (B, "False", C);
-            when Ada_Op_Gte =>
-               Swap (Equality_Operator, ">");
-               Swap (Equality_Operator, "=");
-               Add_Constant (B, "True", C);
+            --  "<": they are only changed so when name resolution tells
+            --  that the operands are scalars.  Their negation, which
+            --  differs from them in two regions, is subsumed then.  "X =
+            --  X" has one region only (see Same_Operands).
+            when Ada_Op_Eq | Ada_Op_Neq | Ada_Op_Lt | Ada_Op_Lte
+               | Ada_Op_Gt | Ada_Op_Gte
+            =>
+               Mutate_Relation (B, C);
             when Ada_Op_And | Ada_Op_And_Then =>
                if Options.Enabled (Conjunct_Deletion) and then In_Contract (C)
                then

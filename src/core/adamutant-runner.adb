@@ -54,6 +54,59 @@ package body AdaMutant.Runner is
       Next  : Positive := 1;
       Changes : AdaMutant.Changes.Change_Maps.Map;
 
+      --  The files of the project: those under the root, except in the
+      --  directories that are not copied to the sandboxes (sandbox_exclude)
+      --  and in that of AdaMutant (.adamutant).
+      function Project_Listing return String_Vectors.Vector is
+         Skip : String_Vectors.Vector := Settings.Sandbox_Exclude;
+      begin
+         if not Skip.Contains (".adamutant") then
+            Skip.Append (".adamutant");
+         end if;
+         return Find_Files (Root, Skip);
+      end Project_Listing;
+
+      Listing : constant String_Vectors.Vector := Project_Listing;
+
+      --  The Ada sources among them, over which Find resolves names.  Not
+      --  those of the binder (b__*.adb), nor a file name that appears in
+      --  more than one directory (a test double, a copy for another
+      --  target): Libadalang would take the first for the unit, which may
+      --  not be the one that the project builds.  The units of such files
+      --  stay unknown.
+      function Ada_Sources return Name_Sets.Set is
+         function Name (Path : String) return String is
+           (Ada.Characters.Handling.To_Lower
+              (Ada.Directories.Simple_Name (Path)));
+         Sources, Seen, Twice : Name_Sets.Set;
+      begin
+         for Path of Listing loop
+            if Path'Length > 4
+              and then Ada.Characters.Handling.To_Lower
+                         (Path (Path'Last - 3 .. Path'Last)) in ".ads" | ".adb"
+            then
+               if Seen.Contains (Name (Path)) then
+                  Twice.Include (Name (Path));
+               end if;
+               Seen.Include (Name (Path));
+            end if;
+         end loop;
+         for Path of Listing loop
+            if Path'Length > 4
+              and then Ada.Characters.Handling.To_Lower
+                         (Path (Path'Last - 3 .. Path'Last)) in ".ads" | ".adb"
+              and then not Twice.Contains (Name (Path))
+              and then Ada.Strings.Fixed.Head (Name (Path), 3) /= "b__"
+              and then Ada.Strings.Fixed.Head (Name (Path), 2) /= "b~"
+            then
+               Sources.Include (Join (Root, Path));
+            end if;
+         end loop;
+         return Sources;
+      end Ada_Sources;
+
+      Project_Files : constant Name_Sets.Set := Ada_Sources;
+
       function Matches_Any (List : String_Vectors.Vector; Path : String)
         return Boolean is
       begin
@@ -75,7 +128,7 @@ package body AdaMutant.Runner is
                Fail ("--since: " & Ada.Exceptions.Exception_Message (E));
          end;
       end if;
-      for Path of Find_Files (Root, Settings.Sandbox_Exclude) loop
+      for Path of Listing loop
          if Matches_Any (Settings.Mutate, Path)
            and then not Matches_Any (Settings.Exclude, Path)
            and then (Only.Is_Empty or else Matches_Any (Only, Path))
@@ -94,6 +147,7 @@ package body AdaMutant.Runner is
             begin
                --  A file is a compilation unit, never a fragment.
                Options.Whole_Units := True;
+               Options.Project_Files := Project_Files;
                begin
                   --  Also when contracts are mutated: the mutations in
                   --  ghost code are known as such.
