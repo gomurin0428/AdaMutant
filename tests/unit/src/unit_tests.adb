@@ -103,9 +103,8 @@ procedure Unit_Tests is
               "exponent and literals");
       Expect ("package P is B : Boolean := X and then Y; end P;",
               "LogicalOperator X and then Y->Y|LogicalOperator X and then Y->X"
-              & "|LogicalOperator X and then Y->not ((X) xor (Y))"
-              & "|LogicalOperator X and then Y->False",
-              "short circuit (types not known: xor)");
+              & "|LogicalOperator X and then Y->(X) = (Y)"
+              & "|LogicalOperator X and then Y->False", "short circuit");
       Expect ("package P is B : Boolean := X and then Y and then Z; end P;",
               "LogicalOperator X and then Y and then Z->Y and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Z"
@@ -202,26 +201,27 @@ procedure Unit_Tests is
               & "|LogicalOperator and->or"
               & "|BooleanLiteral True->False|LogicalOperator or->and",
               "logical operators on bits and arrays are swapped");
-      --  The "=" of a type derived from Boolean gives Standard.Boolean:
-      --  "not ((A) xor (B))" keeps the type.  Two operands only.
+      --  A type derived from Boolean: its literals and its "=" are not
+      --  those of Standard (and may not be visible), so its chains get
+      --  the deletions and the swap, without a constant or "=".
       Expect ("package P is type My_Bool is new Boolean;"
               & " A, B, C : My_Bool := My_Bool'First;"
               & " X : My_Bool := A or B; Y : Boolean := X > A and C = A;"
               & " Z : My_Bool := A and B and C; end P;",
               "AttributeSwap First->Last"
+              & "|LogicalOperator or->and"
               & "|LogicalOperator A or B->B|LogicalOperator A or B->A"
-              & "|LogicalOperator A or B->(A) xor (B)"
-              & "|LogicalOperator A or B->True"
               & "|EqualityOperator >->>=|EqualityOperator >->/="
               & "|LogicalOperator X > A and C = A->C = A"
               & "|LogicalOperator X > A and C = A->X > A"
               & "|LogicalOperator X > A and C = A->(X > A) = (C = A)"
               & "|LogicalOperator X > A and C = A->False"
               & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|LogicalOperator A and B->(A or B)"
               & "|LogicalOperator A and B and C->B and C"
               & "|LogicalOperator A and B and C->A and C"
               & "|LogicalOperator A and B and C->A and B"
-              & "|LogicalOperator A and B and C->False",
+              & "|LogicalOperator A and B and C->((A and B) or C)",
               "logical operators: a type derived from Boolean");
       Expect ("package P is B : Boolean := X not in 1 .. 3; end P;",
               "MembershipOperator not in->in|NumericLiteral 1->0|NumericLiteral 3->4",
@@ -405,7 +405,7 @@ procedure Unit_Tests is
                  "ConditionalExpression A and then B->False"
                  & "|LogicalOperator A and then B->B"
                  & "|LogicalOperator A and then B->A"
-                 & "|LogicalOperator A and then B->not ((A) xor (B))",
+                 & "|LogicalOperator A and then B->(A) = (B)",
                  "logical operators: no constant for a while", O);
       end;
       Expect ("procedure P is begin exit when Done; end P;",

@@ -1102,12 +1102,6 @@ package body AdaMutant.Mutators is
          return Elsewhere;
       end Place_Of;
 
-      --  The chain of "and" or "or" that B belongs to is of Booleans.
-      --  "and then" and "or else" always are; "and" and "or" also apply to
-      --  modular types and to arrays of Booleans, where a constant does
-      --  not compile.  Name resolution tells (a type derived from Boolean
-      --  too); where it does not, an operand that is a relation, a
-      --  membership test or a quantified expression.
       --  Of_Boolean (B, Standard_Only): the type of the chain of B, as name
       --  resolution gives it, is Boolean or derived from it (only Boolean
       --  or a subtype of it with Standard_Only): Yes or No; Unknown when
@@ -1137,17 +1131,35 @@ package body AdaMutant.Mutators is
       --  An operand of the chain of B is plainly of Standard.Boolean.
       function Plain_Boolean_Operand (B : LAL.Bin_Op) return Boolean;
 
-      function Boolean_Chain (B : LAL.Bin_Op) return Boolean is
+      --  What the chain of "and" or "or" that B belongs to is of.
+      type Chain_Type is
+        (Standard_Boolean,
+         --  Boolean or a subtype of it.  Also "and then" and "or else"
+         --  whose type name resolution does not tell, and a chain with an
+         --  operand that is plainly of Standard.Boolean.
+         Derived_Boolean,
+         --  A type derived from Boolean: its literals and its "=" are not
+         --  those of Standard, and may not be visible ("Flags.A and then
+         --  Flags.B" needs no use clause).
+         Other);
+         --  Modular values, arrays of Booleans ("and" of bits), or "and"
+         --  and "or" whose type name resolution does not tell.
+
+      function Type_Of_Chain (B : LAL.Bin_Op) return Chain_Type is
       begin
-         if LC.Ada_Op'(B.F_Op) in Ada_Op_And_Then | Ada_Op_Or_Else then
-            return True;
-         end if;
          case Of_Boolean (B, Standard_Only => False) is
-            when Yes     => return True;
-            when No      => return False;
-            when Unknown => return Plain_Boolean_Operand (B);
+            when Yes =>
+               return (if Of_Boolean (B, Standard_Only => True) = Yes
+                       then Standard_Boolean else Derived_Boolean);
+            when No =>
+               return Other;
+            when Unknown =>
+               return (if LC.Ada_Op'(B.F_Op) in Ada_Op_And_Then
+                                              | Ada_Op_Or_Else
+                         or else Plain_Boolean_Operand (B)
+                       then Standard_Boolean else Other);
          end case;
-      end Boolean_Chain;
+      end Type_Of_Chain;
 
       function Plain_Boolean_Operand (B : LAL.Bin_Op) return Boolean is
          Operands, Operators : Node_Vectors.Vector;
@@ -1170,13 +1182,13 @@ package body AdaMutant.Mutators is
          return False;
       end Plain_Boolean_Operand;
 
-      --  LogicalOperator makes the constant of the chain of Booleans that
-      --  Link belongs to, in the context C, or leaves it out for the same
-      --  reasons as here (see Mutate_Chain).
+      --  LogicalOperator makes the constant of the chain of Standard
+      --  Booleans that Link belongs to, in the context C, or leaves it out
+      --  for the same reasons as here (see Mutate_Chain).
       function Makes_Chain_Constants
         (Link : LAL.Bin_Op; C : Context) return Boolean
       is (Options.Enabled (Logical_Operator) and then not Skipped (C)
-          and then Boolean_Chain (Link));
+          and then Type_Of_Chain (Link) = Standard_Boolean);
 
       --  The operands of the chain of Booleans that Link belongs to, in the
       --  context C, are left out one at a time (see Mutate_Chain).  In a
@@ -1188,7 +1200,7 @@ package body AdaMutant.Mutators is
           then Options.Enabled (Conjunct_Deletion)
                and then Options.Mutate_Contracts
           else Options.Enabled (Logical_Operator) and then not Skipped (C)
-               and then Boolean_Chain (Link));
+               and then Type_Of_Chain (Link) /= Other);
 
       --  EqualityOperator: the relation B, such as "A < B", replaced as a
       --  whole by Value ("False" or "True").  Not when it is the whole
@@ -1284,26 +1296,37 @@ package body AdaMutant.Mutators is
       --  "False" where both are True), so killing them takes a test of
       --  each, which also kills the swap of "and" and "or" and the
       --  negations.  For "and" in a contract, ConjunctDeletion leaves the
-      --  operands out instead, on any type.  On modular values and arrays
-      --  of Booleans, and where the type is not known, "and" and "or" are
-      --  swapped as before.
+      --  operands out instead, on any type.  On a type derived from
+      --  Boolean, the operands are left out and "and" and "or" swapped; on
+      --  modular values and arrays of Booleans, and where the type is not
+      --  known, "and" and "or" are swapped as before (see Chain_Type).
       procedure Mutate_Chain (B : LAL.Bin_Op; C : Context) is
          Operands, Operators : Node_Vectors.Vector;
          And_Chain : constant Boolean :=
            LC.Ada_Op'(B.F_Op) in Ada_Op_And | Ada_Op_And_Then;
+         Of_Chain  : Chain_Type;
       begin
          --  ConjunctDeletion, on any type (leaving an operand out always
          --  compiles), also when name resolution does not tell the type.
          if And_Chain and then In_Contract (C) then
             Add_Deletions (Conjunct_Deletion, B, C);
          end if;
-         if not Boolean_Chain (B) then
+         --  Not on Standard.Boolean: the swap of "and" and "or", at each
+         --  operator, as before.
+         Of_Chain := Type_Of_Chain (B);
+         if Of_Chain /= Standard_Boolean then
             Add_Logical
               (B,
                Same_Case (Text (T, LAL.Op'(B.F_Op).Token_Start),
-                          (if And_Chain then "or" else "and")),
+                          (case LC.Ada_Op'(B.F_Op) is
+                              when Ada_Op_And      => "or",
+                              when Ada_Op_And_Then => "or else",
+                              when Ada_Op_Or       => "and",
+                              when others          => "and then")),
                C);
-            return;
+            if Of_Chain = Other then
+               return;
+            end if;
          end if;
          Chain (B, Operands, Operators);
          if First (T, Operators.First_Element) /= First (T, LAL.Op'(B.F_Op))
@@ -1313,11 +1336,13 @@ package body AdaMutant.Mutators is
          if not (And_Chain and then In_Contract (C)) then
             Add_Deletions (Logical_Operator, B, C);
          end if;
+         --  A type derived from Boolean: no constant, no "=" (see
+         --  Chain_Type).
+         if Of_Chain = Derived_Boolean then
+            return;
+         end if;
          --  "(A) = (B)", for two operands outside a contract (where it would
-         --  cost a proof, and a static predicate would not take it).  The
-         --  "=" of a type derived from Boolean gives Standard.Boolean: such
-         --  a chain, or one whose type is not known, gets "not ((A) xor
-         --  (B))" ("(A) xor (B)" for "/=").
+         --  cost a proof, and a static predicate would not take it).
          if Natural (Operands.Length) = 2 and then not In_Contract (C) then
             declare
                L         : constant Positive := First (T, Operands (1));
@@ -1326,11 +1351,6 @@ package body AdaMutant.Mutators is
                  Source (L .. Last (T, Operands (1)));
                Right     : constant String :=
                  Source (First (T, Operands (2)) .. R);
-               Standard_Boolean : constant Boolean :=
-                 (case Of_Boolean (B, Standard_Only => True) is
-                     when Yes     => True,
-                     when No      => False,
-                     when Unknown => Plain_Boolean_Operand (B));
                Breaks    : Unbounded_String;
             begin
                --  The line breaks around the operator stay (see Apply).
@@ -1342,14 +1362,8 @@ package body AdaMutant.Mutators is
                   end if;
                end loop;
                Add (Logical_Operator, C, First (T, Operators (1)), L, R,
-                    (if Standard_Boolean then
-                       "(" & Left & (if And_Chain then ") = (" else ") /= (")
-                       & Right & ")"
-                     else
-                       (if And_Chain then "not (" else "")
-                       & "(" & Left & ") xor (" & Right & ")"
-                       & (if And_Chain then ")" else ""))
-                    & To_String (Breaks));
+                    "(" & Left & (if And_Chain then ") = (" else ") /= (")
+                    & Right & ")" & To_String (Breaks));
             end;
          end if;
          Add_Constant
