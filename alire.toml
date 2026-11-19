@@ -7,8 +7,8 @@ Stryker.NET. It makes small changes (mutants) to the sources, checks whether
 the tests and the GNATprove proofs detect each change, and reports the
 mutation score.
 
-It has its own lexer for Ada up to Ada 2022 and does not depend on
-libadalang. Each mutant goes to the tests first, and the mutants that the
+It finds the places to mutate on the syntax tree of Libadalang, for Ada
+up to Ada 2022. Each mutant goes to the tests first, and the mutants that the
 tests do not detect go to the proof; those that only the proof detects are
 listed as candidates for a missing test. Where it can, AdaMutant builds
 all the mutants once (mutant schemata) and switches the active mutant with
@@ -35,7 +35,10 @@ executables = ["adamutant"]
 project-files = ["adamutant.gpr"]
 
 [[depends-on]]
-gnat = ">=14"
+# Libadalang 26 builds with GNAT 15 (libgpr needs 15 or later, libgpr2
+# a GNAT before 16).
+gnat = ">=15"
+libadalang = "^26"
 
 # The project files stop at any warning by default, which suits development.
 # A build from the index must not fail because a newer compiler has a new

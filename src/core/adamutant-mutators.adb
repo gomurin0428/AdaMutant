@@ -1,8 +1,28 @@
-with Ada.Strings.Fixed;
 with Ada.Characters.Handling; use Ada.Characters.Handling;
+with Ada.Exceptions;
+with Ada.Strings.Fixed;
+with Ada.Strings.Wide_Wide_Unbounded;
+with Langkit_Support.Diagnostics;
+with Langkit_Support.Slocs;
+with Langkit_Support.Text;
+with Langkit_Support.Errors;
+with Langkit_Support.Generic_API.Analysis;
+with Libadalang.Analysis;
+with Libadalang.Common;
+with Libadalang.Generic_API;
 with AdaMutant.Lexer; use AdaMutant.Lexer;
 
 package body AdaMutant.Mutators is
+
+   --  Find works on the syntax tree of Libadalang, without name
+   --  resolution.
+
+   package LAL renames Libadalang.Analysis;
+   package LC renames Libadalang.Common;
+   use all type LC.Ada_Node_Kind_Type;
+   use type LC.Token_Kind;
+   use type LC.Token_Reference;
+   use type LC.Grammar_Rule;
 
    function Name (Kind : Mutator_Kind) return String is
      (case Kind is
@@ -179,1400 +199,1448 @@ package body AdaMutant.Mutators is
       new String'("short_integer"), new String'("short_short_integer"),
       new String'("long_integer"), new String'("long_long_integer")];
 
-   type Byte_Range is record
-      First, Last : Natural := 0;
+   function Same_Case (Model, Word : String) return String is
+     (if Model = To_Upper (Model) then To_Upper (Word)
+      elsif Model = To_Lower (Model) then To_Lower (Word)
+      else Word);
+   --  Word in the case of Model: all upper case, all lower case, or as
+   --  given.
+
+   function Same (Left, Right : LAL.Ada_Node'Class) return Boolean
+     renames LAL."=";
+
+   function Has_Kind
+     (N : LAL.Ada_Node'Class; Kind : LC.Ada_Node_Kind_Type) return Boolean
+   is (not N.Is_Null and then N.Kind = Kind);
+   --  N is a node (not null) of that kind.
+
+   type Line_Starts is array (Positive range <>) of Positive;
+
+   --  Source text parsed by Libadalang: the syntax tree only, without
+   --  name resolution.  Libadalang places a token by its line and column.
+   --  Decoded as Latin-1, every byte is one character and a tab is one
+   --  column, so the byte offset of a token is the start of its line plus
+   --  its column.  UTF-8 text with letters beyond ASCII in an identifier
+   --  or a character literal does not parse as Latin-1, and is decoded as
+   --  UTF-8: a column is then a character of one to four bytes.
+   type Syntax_Tree (First : Positive; Last : Natural; Lines : Positive)
+   is record
+      Context : LAL.Analysis_Context;
+      Root    : LAL.Ada_Node;
+      UTF_8   : Boolean := False;
+      Text    : String (First .. Last);
+      --  The text that Libadalang parsed: the source with a byte order
+      --  mark replaced by blanks (see also Bracket_Strings).
+      Starts  : Line_Starts (1 .. Lines);
+      --  The offset of the first byte of each line (lines end at LF).
    end record;
 
-   package Range_Vectors is new Ada.Containers.Vectors (Positive, Byte_Range);
+   function Sequence_Length (C : Character) return Positive is
+     (case Character'Pos (C) is
+         when 16#C0# .. 16#DF# => 2,
+         when 16#E0# .. 16#EF# => 3,
+         when 16#F0# .. 16#F7# => 4,
+         when others           => 1);
+   --  The number of bytes of the UTF-8 character that starts with C.
 
-   --  Finds the declarations of Source that carry the Ghost aspect: adds
-   --  their names to Names and their extents (from the declaration start
-   --  to its ";") to Ranges.
-   procedure Scan_Ghost
-     (Source : String;
-      Names  : in out Name_Sets.Set;
-      Ranges : in out Range_Vectors.Vector)
-   is
-      All_Tokens : constant Token_Vectors.Vector := Tokenize (Source);
-      type Token_Array is array (Positive range <>) of Token;
-      S : Token_Array (1 .. Natural (All_Tokens.Length));
-      N : Natural := 0;
+   --  S has characters beyond ASCII, and all of them are well-formed
+   --  UTF-8.
+   function Is_UTF_8 (S : String) return Boolean is
+      I      : Positive := S'First;
+      Beyond : Boolean := False;
    begin
-      for T of All_Tokens loop
-         if T.Kind /= Comment then
-            N := N + 1;
-            S (N) := T;
+      while I <= S'Last loop
+         declare
+            Length : constant Positive := Sequence_Length (S (I));
+         begin
+            if Length > 1 then
+               if I > S'Last - Length + 1 then
+                  return False;
+               end if;
+               for J in I + 1 .. I + Length - 1 loop
+                  if Character'Pos (S (J)) not in 16#80# .. 16#BF# then
+                     return False;
+                  end if;
+               end loop;
+               Beyond := True;
+            elsif Character'Pos (S (I)) >= 16#80# then
+               return False;
+            end if;
+            I := I + Length;
+         end;
+      end loop;
+      return Beyond;
+   end Is_UTF_8;
+
+   --  Libadalang reads '["' as the start of a character in the brackets
+   --  notation of GNAT ("["03C0"]"), so a bracket aggregate that starts
+   --  with a string literal (["a", "b"]) does not parse.  Text gets such
+   --  brackets as parentheses, which give the same mutations.
+   procedure Bracket_Strings (Text : in out String) is
+   begin
+      if Ada.Strings.Fixed.Index (Text, "[""") = 0 then
+         return;
+      end if;
+      declare
+         Tokens : constant Token_Vectors.Vector := Tokenize (Text);
+         Opened : array (1 .. Natural (Tokens.Length)) of Natural;
+         --  The offsets of the open brackets, or 0 for one that stays.
+         Depth  : Natural := 0;
+      begin
+         for I in 1 .. Natural (Tokens.Length) loop
+            declare
+               Token : constant AdaMutant.Lexer.Token := Tokens (I);
+            begin
+               if Token.Kind = Delimiter and then Image (Text, Token) = "["
+               then
+                  Depth := Depth + 1;
+                  Opened (Depth) :=
+                    (if I < Natural (Tokens.Length)
+                       and then Tokens (I + 1).Kind = String_Literal
+                       and then Tokens (I + 1).First = Token.Last + 1
+                     then Token.First else 0);
+               elsif Token.Kind = Delimiter and then Image (Text, Token) = "]"
+                 and then Depth > 0
+               then
+                  if Opened (Depth) /= 0 then
+                     Text (Opened (Depth)) := '(';
+                     Text (Token.First) := ')';
+                  end if;
+                  Depth := Depth - 1;
+               end if;
+            end;
+         end loop;
+      end;
+   exception
+      when Lexical_Error =>
+         null;
+   end Bracket_Strings;
+
+   Rules : constant array (Positive range <>) of LC.Grammar_Rule :=
+     [LC.Compilation_Rule, LC.Stmts_Rule, LC.Basic_Decls_Rule,
+      LC.Expr_Rule];
+   --  A file is a compilation.  The other rules take fragments, such as
+   --  the statements or the declarations that the unit tests pass.
+
+   --  The first node of the tree under Root that Libadalang could not
+   --  complete, or No_Ada_Node.  After some syntax errors ("X := (1 + ;")
+   --  Libadalang gives no diagnostic, only incomplete nodes.
+   function First_Incomplete (Root : LAL.Ada_Node) return LAL.Ada_Node is
+      Found : LAL.Ada_Node := LAL.No_Ada_Node;
+
+      function Visit (N : LAL.Ada_Node'Class) return LC.Visit_Status is
+      begin
+         if Langkit_Support.Generic_API.Analysis.Is_Incomplete
+              (Libadalang.Generic_API.To_Generic_Node (N))
+         then
+            Found := N.As_Ada_Node;
+            return LC.Stop;
+         end if;
+         return LC.Into;
+      end Visit;
+
+   begin
+      if not Root.Is_Null then
+         Root.Traverse (Visit'Access);
+      end if;
+      return Found;
+   end First_Incomplete;
+
+   --  Source parsed with the first of Rules that gives a complete tree
+   --  without diagnostics (with Whole_Units, the compilation rule only), as
+   --  Latin-1 and then, when that fails, as UTF-8; then the same with the
+   --  brackets of Bracket_Strings, when the source has '["'.  When nothing
+   --  parses, raises Lexical_Error with the first error of the compilation
+   --  rule, or with Tolerant, gives the tree that Libadalang recovered from
+   --  the errors.
+   function Parse_Tree
+     (Source      : String;
+      Tolerant    : Boolean;
+      Whole_Units : Boolean := False) return Syntax_Tree
+   is
+      BOM   : constant String :=
+        Character'Val (16#EF#) & Character'Val (16#BB#)
+        & Character'Val (16#BF#);
+      Lines : Positive := 1;
+      Line  : Positive := 1;
+      Plain : String := Source;
+
+      --  T gets the tree of Text when one of the rules parses it.
+      function Parsed (T : in out Syntax_Tree; Text : String) return Boolean
+      is
+      begin
+         for UTF_8 in Boolean loop
+            exit when UTF_8 and then not Is_UTF_8 (Source);
+            declare
+               Charset : constant String :=
+                 (if UTF_8 then "utf-8" else "iso-8859-1");
+            begin
+               T.Context :=
+                 LAL.Create_Context (Charset => Charset, Tab_Stop => 1);
+               for Rule of Rules loop
+                  exit when Whole_Units and then Rule /= LC.Compilation_Rule;
+                  declare
+                     Unit : constant LAL.Analysis_Unit :=
+                       T.Context.Get_From_Buffer
+                         (Filename => Rule'Image & ".adb",
+                          Charset  => Charset,
+                          Buffer   => Text,
+                          Rule     => Rule);
+                  begin
+                     if not Unit.Has_Diagnostics
+                       and then First_Incomplete (Unit.Root).Is_Null
+                     then
+                        T.Root := Unit.Root;
+                        T.UTF_8 := UTF_8;
+                        T.Text := Text;
+                        return True;
+                     end if;
+                  end;
+               end loop;
+            end;
+         end loop;
+         return False;
+      end Parsed;
+   begin
+      for C of Source loop
+         if C = ASCII.LF then
+            Lines := Lines + 1;
          end if;
       end loop;
-      declare
-         Depth : array (1 .. N) of Natural := [others => 0];
-         D     : Natural := 0;
-
-         function Txt (K : Positive) return String is
-           (Source (S (K).First .. S (K).Last));
-
-         function Is_Kw (K : Integer; W : String) return Boolean is
-           (K in 1 .. N and then S (K).Kind = Reserved_Word
-            and then Lower (Txt (K)) = W);
-
-         function Is_Del (K : Integer; W : String) return Boolean is
-           (K in 1 .. N and then S (K).Kind = Delimiter and then Txt (K) = W);
-
-         function At_Top (K : Integer; W : String) return Boolean is
-           (K in 1 .. N and then Depth (K) = 0
-            and then (Is_Kw (K, W) or else Is_Del (K, W)));
-
-         function Type_Is (J : Positive) return Boolean;
-         --  The "is" at J belongs to the declaration of a type or subtype
-         --  (not of a task or protected type, whose "is" opens
-         --  declarations).
-
-         function Type_Is (J : Positive) return Boolean is
-            I : Natural := J - 1;
-         begin
-            while I >= 1 and then not At_Top (I, ";")
-              and then not At_Top (I, "is") and then not At_Top (I, "begin")
-              and then not At_Top (I, "private")
-            loop
-               if At_Top (I, "type") or else At_Top (I, "subtype") then
-                  return not (Is_Kw (I - 1, "task")
-                              or else Is_Kw (I - 1, "protected"));
-               end if;
-               I := I - 1;
-            end loop;
-            return False;
-         end Type_Is;
-      begin
-         for K in 1 .. N loop
-            Depth (K) := D;
-            if Is_Del (K, "(") or else Is_Del (K, "[") then
-               D := D + 1;
-            elsif Is_Del (K, ")") or else Is_Del (K, "]") then
-               D := (if D > 0 then D - 1 else 0);
+      if Source'Length >= 3
+        and then Source (Source'First .. Source'First + 2) = BOM
+      then
+         Plain (Source'First .. Source'First + 2) := "   ";
+      end if;
+      return T : Syntax_Tree (Source'First, Source'Last, Lines) do
+         T.Text := Plain;
+         T.Starts (1) := Source'First;
+         for I in Source'Range loop
+            if Source (I) = ASCII.LF then
+               Line := Line + 1;
+               T.Starts (Line) := I + 1;
             end if;
          end loop;
-         for K in 1 .. N loop
-            if S (K).Kind = Identifier and then Lower (Txt (K)) = "ghost"
-              and then Depth (K) = 0
-              and then (Is_Kw (K - 1, "with") or else Is_Del (K - 1, ","))
-              and then not (Is_Del (K + 1, "=>") and then K + 2 <= N
-                            and then Lower (Txt (K + 2)) = "false")
-            then
+         if Parsed (T, Plain) then
+            return;
+         end if;
+         --  Only when the source does not parse as it is: GNAT's brackets
+         --  notation in an identifier (["03C0"]) does.
+         if Ada.Strings.Fixed.Index (Plain, "[""") > 0 then
+            declare
+               Bracketed : String := Plain;
+            begin
+               Bracket_Strings (Bracketed);
+               if Parsed (T, Bracketed) then
+                  return;
+               end if;
+            end;
+         end if;
+         T.Text := Plain;
+         T.Context :=
+           LAL.Create_Context (Charset => "iso-8859-1", Tab_Stop => 1);
+         declare
+            Unit : constant LAL.Analysis_Unit :=
+              T.Context.Get_From_Buffer
+                (Filename => "source.adb",
+                 Charset  => "iso-8859-1",
+                 Buffer   => T.Text,
+                 Rule     => LC.Compilation_Rule);
+         begin
+            if not Tolerant then
+               if Unit.Has_Diagnostics then
+                  declare
+                     D : constant Langkit_Support.Diagnostics.Diagnostic :=
+                       Unit.Diagnostics (Unit.Diagnostics'First);
+                  begin
+                     raise Lexical_Error with
+                       "line" & Positive (D.Sloc_Range.Start_Line)'Image
+                       & ": "
+                       & Langkit_Support.Text.To_UTF8
+                           (Ada.Strings.Wide_Wide_Unbounded
+                              .To_Wide_Wide_String (D.Message));
+                  end;
+               end if;
                declare
-                  W       : Natural := K - 1;
-                  J       : Natural;
-                  First   : Natural := 0;
-                  Last    : Positive := K;
+                  N : constant LAL.Ada_Node := First_Incomplete (Unit.Root);
                begin
-                  while W >= 1 and then not At_Top (W, "with")
-                    and then not At_Top (W, ";")
-                  loop
-                     W := W - 1;
-                  end loop;
-                  if W >= 1 and then Is_Kw (W, "with") then
-                     J := W - 1;
-                     while J >= 1 loop
-                        --  A record type: from "end record" to the
-                        --  "record" that opens it (records do not nest).
-                        if At_Top (J, "record") and then Is_Kw (J - 1, "end")
-                        then
-                           J := J - 2;
-                           while J > 1 and then not (At_Top (J, "record")
-                                                     and then not Is_Kw (J - 1, "end"))
-                           loop
-                              J := J - 1;
-                           end loop;
-                           exit when J < 1;
-                        end if;
-                        exit when At_Top (J, ";") or else At_Top (J, "begin")
-                          or else At_Top (J, "declare")
-                          --  Not the "private" of a private type ("is
-                          --  private with Ghost").
-                          or else (At_Top (J, "private") and then J + 1 /= W)
-                          or else At_Top (J, "generic")
-                          or else At_Top (J, "package")
-                          or else
-                            --  Not the "is" of an expression function, of
-                            --  a null procedure or of an abstract
-                            --  subprogram, whose aspects come after it,
-                            --  nor that of a type or subtype.
-                            (At_Top (J, "is")
-                             and then not Is_Del (J + 1, "(")
-                             and then not Is_Kw (J + 1, "null")
-                             and then not Is_Kw (J + 1, "abstract")
-                             and then not Type_Is (J));
-                        if At_Top (J, "procedure") or else At_Top (J, "function")
-                          or else At_Top (J, "type")
-                          or else At_Top (J, "subtype")
-                        then
-                           First := J;
-                           exit;
-                        end if;
-                        J := J - 1;
-                     end loop;
-                     if First = 0 and then not At_Top (J, "package") then
-                        First := J + 1;
-                     end if;
-                     while Last < N and then not At_Top (Last, ";") loop
-                        Last := Last + 1;
-                     end loop;
-                     declare
-                        Name_At : constant Positive :=
-                          (if Is_Kw (First, "procedure")
-                             or else Is_Kw (First, "function")
-                             or else Is_Kw (First, "type")
-                             or else Is_Kw (First, "subtype")
-                           then First + 1 else First);
-                     begin
-                        if First > 0 and then Name_At < K
-                          and then S (Name_At).Kind in Identifier
-                                                     | String_Literal
-                        then
-                           --  Not the name of a type: no statement calls or
-                           --  assigns it, and a component or subprogram of
-                           --  the same name elsewhere would be taken for
-                           --  ghost code.  The declaration itself is ghost.
-                           if not (Is_Kw (First, "type")
-                                   or else Is_Kw (First, "subtype"))
-                           then
-                              Names.Include (Lower (Txt (Name_At)));
-                           end if;
-                           if Name_At = First then
-                              --  "A, B : T with Ghost" declares every name.
-                              declare
-                                 I : Positive := First + 2;
-                              begin
-                                 while I < K and then Is_Del (I - 1, ",") loop
-                                    Names.Include (Lower (Txt (I)));
-                                    I := I + 2;
-                                 end loop;
-                              end;
-                           end if;
-                           Ranges.Append
-                             (Byte_Range'(S (First).First, S (Last).Last));
-                        end if;
-                     end;
-                  end if;
+                  raise Lexical_Error with
+                    "line"
+                    & (if N.Is_Null then " 1"
+                       else Positive (N.Sloc_Range.Start_Line)'Image)
+                    & ": the syntax is incomplete";
                end;
+            end if;
+            T.Root := Unit.Root;
+         end;
+      end return;
+   end Parse_Tree;
+
+   function Offset (T : Syntax_Tree; Line, Column : Positive) return Positive
+   is
+      I : Positive := T.Starts (Line);
+   begin
+      if not T.UTF_8 then
+         return I + Column - 1;
+      end if;
+      for C in 2 .. Column loop
+         I := I + Sequence_Length (T.Text (I));
+      end loop;
+      return I;
+   end Offset;
+
+   function First
+     (T : Syntax_Tree; R : Langkit_Support.Slocs.Source_Location_Range)
+      return Positive
+   is (Offset (T, Positive (R.Start_Line), Positive (R.Start_Column)));
+
+   function Last
+     (T : Syntax_Tree; R : Langkit_Support.Slocs.Source_Location_Range)
+      return Natural
+   is (Offset (T, Positive (R.End_Line), Positive (R.End_Column)) - 1);
+   --  The end of a range is the place after its last character.
+
+   function First (T : Syntax_Tree; N : LAL.Ada_Node'Class) return Positive is
+     (First (T, N.Sloc_Range));
+
+   function Last (T : Syntax_Tree; N : LAL.Ada_Node'Class) return Natural is
+     (Last (T, N.Sloc_Range));
+
+   function First
+     (T : Syntax_Tree; Token : LC.Token_Reference) return Positive
+   is (First (T, LC.Sloc_Range (LC.Data (Token))));
+
+   function Last (T : Syntax_Tree; Token : LC.Token_Reference) return Natural
+   is (Last (T, LC.Sloc_Range (LC.Data (Token))));
+
+   function Text (T : Syntax_Tree; N : LAL.Ada_Node'Class) return String is
+     (T.Text (First (T, N) .. Last (T, N)));
+
+   function Text (T : Syntax_Tree; Token : LC.Token_Reference) return String
+   is (T.Text (First (T, Token) .. Last (T, Token)));
+
+   function Lower_Text (T : Syntax_Tree; N : LAL.Ada_Node'Class) return String
+   is (if N.Is_Null then "" else Lower (Text (T, N)));
+
+   function Simple_Name (T : Syntax_Tree; N : LAL.Ada_Node'Class) return String
+   is (if N.Is_Null then ""
+       elsif N.Kind = Ada_Defining_Name
+       then Simple_Name (T, N.As_Defining_Name.F_Name)
+       elsif N.Kind = Ada_Dotted_Name
+       then Simple_Name (T, N.As_Dotted_Name.F_Suffix)
+       else Lower_Text (T, N));
+   --  The lower-case name of an entity without its prefix: "q" for "P.Q".
+
+   --  The name that the declaration or the body of a subprogram N
+   --  defines, or no node.
+   function Subprogram_Name (N : LAL.Ada_Node'Class) return LAL.Ada_Node is
+      Spec : LAL.Subp_Spec;
+   begin
+      case N.Kind is
+         when Ada_Abstract_Subp_Decl | Ada_Subp_Decl =>
+            Spec := N.As_Classic_Subp_Decl.F_Subp_Spec;
+         when Ada_Expr_Function | Ada_Null_Subp_Decl | Ada_Subp_Body
+            | Ada_Subp_Renaming_Decl =>
+            Spec := N.As_Base_Subp_Body.F_Subp_Spec;
+         when Ada_Subp_Body_Stub =>
+            Spec := N.As_Subp_Body_Stub.F_Subp_Spec;
+         when Ada_Generic_Subp_Internal =>
+            Spec := N.As_Generic_Subp_Internal.F_Subp_Spec;
+         when Ada_Generic_Subp_Instantiation =>
+            return N.As_Generic_Subp_Instantiation.F_Subp_Name.As_Ada_Node;
+         when others =>
+            return LAL.No_Ada_Node;
+      end case;
+      return (if Spec.Is_Null then LAL.No_Ada_Node
+              else Spec.F_Subp_Name.As_Ada_Node);
+   end Subprogram_Name;
+
+   --  N is a declaration with the aspect Ghost (and not "Ghost => False"):
+   --  of a subprogram, an object, a type or a subtype.
+   function Has_Ghost_Aspect
+     (T : Syntax_Tree; N : LAL.Ada_Node'Class) return Boolean
+   is
+      Aspects : LAL.Aspect_Spec;
+   begin
+      if N.Kind not in Ada_Abstract_Subp_Decl | Ada_Subp_Decl
+        | Ada_Expr_Function | Ada_Null_Subp_Decl | Ada_Subp_Body
+        | Ada_Subp_Renaming_Decl | Ada_Generic_Subp_Internal
+        | Ada_Object_Decl | Ada_Concrete_Type_Decl | Ada_Subtype_Decl
+      then
+         return False;
+      end if;
+      Aspects := N.As_Basic_Decl.F_Aspects;
+      if Aspects.Is_Null then
+         return False;
+      end if;
+      declare
+         Assocs : constant LAL.Aspect_Assoc_List := Aspects.F_Aspect_Assocs;
+      begin
+         for I in 1 .. Assocs.Children_Count loop
+            if Has_Kind (Assocs.Child (I), Ada_Aspect_Assoc)
+              and then Lower_Text
+                (T, Assocs.Child (I).As_Aspect_Assoc.F_Id) = "ghost"
+              and then Lower_Text
+                (T, Assocs.Child (I).As_Aspect_Assoc.F_Expr) /= "false"
+            then
+               return True;
             end if;
          end loop;
       end;
-   end Scan_Ghost;
+      return False;
+   end Has_Ghost_Aspect;
+
+   --  Adds to Ghosts the names of the subprograms and objects that the
+   --  tree declares with the aspect Ghost, and to Types the names of its
+   --  types and subtypes.  Not the name of a ghost type: no statement
+   --  calls or assigns it, and a component or subprogram of the same name
+   --  elsewhere would be taken for ghost code.  The declaration itself is
+   --  ghost (see Find).
+   procedure Scan_Declarations
+     (T : Syntax_Tree; Ghosts, Types : in out Name_Sets.Set)
+   is
+      procedure Include (Names : in out Name_Sets.Set; Name : String) is
+      begin
+         if Name /= "" then
+            Names.Include (Name);
+         end if;
+      end Include;
+
+      procedure Walk (N : LAL.Ada_Node) is
+      begin
+         if not Has_Ghost_Aspect (T, N) then
+            null;
+         elsif N.Kind = Ada_Object_Decl then
+            --  "A, B : T with Ghost" declares every name.
+            declare
+               Ids : constant LAL.Defining_Name_List :=
+                 N.As_Object_Decl.F_Ids;
+            begin
+               for I in 1 .. (if Ids.Is_Null then 0 else Ids.Children_Count)
+               loop
+                  Include (Ghosts, Simple_Name (T, Ids.Child (I)));
+               end loop;
+            end;
+         elsif N.Kind not in Ada_Concrete_Type_Decl | Ada_Subtype_Decl then
+            Include (Ghosts, Simple_Name (T, Subprogram_Name (N)));
+         end if;
+         if N.Kind in Ada_Concrete_Type_Decl | Ada_Formal_Type_Decl
+           | Ada_Subtype_Decl | Ada_Incomplete_Type_Decl
+           | Ada_Incomplete_Formal_Type_Decl | Ada_Incomplete_Tagged_Type_Decl
+           | Ada_Protected_Type_Decl | Ada_Task_Type_Decl
+         then
+            Include (Types, Simple_Name (T, N.As_Base_Type_Decl.F_Name));
+         end if;
+         for I in 1 .. N.Children_Count loop
+            declare
+               Child : constant LAL.Ada_Node := N.Child (I);
+            begin
+               if not Child.Is_Null then
+                  Walk (Child);
+               end if;
+            end;
+         end loop;
+      end Walk;
+   begin
+      if not T.Root.Is_Null then
+         Walk (T.Root);
+      end if;
+   end Scan_Declarations;
+
+   --  Ghost_Names and Type_Names read the spec of the scanned unit, which
+   --  may not parse (it is not the file being mutated): they take what
+   --  Libadalang recovered from its errors.
 
    function Ghost_Names (Source : String) return Name_Sets.Set is
-      Names  : Name_Sets.Set;
-      Ranges : Range_Vectors.Vector;
+      T             : constant Syntax_Tree := Parse_Tree (Source, True);
+      Ghosts, Types : Name_Sets.Set;
    begin
-      Scan_Ghost (Source, Names, Ranges);
-      return Names;
+      Scan_Declarations (T, Ghosts, Types);
+      return Ghosts;
    end Ghost_Names;
 
    function Type_Names (Source : String) return Name_Sets.Set is
-      Names   : Name_Sets.Set;
-      After_Type : Boolean := False;
+      T             : constant Syntax_Tree := Parse_Tree (Source, True);
+      Ghosts, Types : Name_Sets.Set;
    begin
-      for T of Tokenize (Source) loop
-         if T.Kind /= Comment then
-            declare
-               W : constant String := Lower (Source (T.First .. T.Last));
-            begin
-               if After_Type and then T.Kind = Identifier then
-                  Names.Include (W);
-               end if;
-               After_Type := T.Kind = Reserved_Word and then W in "type" | "subtype";
-            end;
-         end if;
-      end loop;
-      return Names;
+      Scan_Declarations (T, Ghosts, Types);
+      return Types;
    end Type_Names;
+
+   function Same_Node (Left, Right : LAL.Ada_Node) return Boolean is
+     (Same (Left, Right));
+
+   package Node_Vectors is new Ada.Containers.Vectors
+     (Positive, LAL.Ada_Node, Same_Node);
 
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector
    is
-      All_Tokens : constant Token_Vectors.Vector := Tokenize (Source);
-      Result     : Mutation_Vectors.Vector;
+      T : constant Syntax_Tree :=
+        Parse_Tree (Source, Tolerant => False,
+                    Whole_Units => Options.Whole_Units);
 
-      --  Significant (non-comment) tokens.
-      N : Natural := 0;
-      type Token_Array is array (Positive range <>) of Token;
-      S : Token_Array (1 .. Natural (All_Tokens.Length));
-   begin
-      for T of All_Tokens loop
-         if T.Kind /= Comment then
-            N := N + 1;
-            S (N) := T;
-         end if;
-      end loop;
+      --  The ghost names of the spec and of Source.
+      Ghosts : Name_Sets.Set := Options.Ghost_Names;
 
-      declare
-         function Txt (K : Positive) return String is
-           (Source (S (K).First .. S (K).Last));
+      --  The types and subtypes that a loop can run over backwards when
+      --  it names one of them alone ("for I in Index loop"): those of
+      --  the spec, of Source and the discrete ones of Standard.  Any
+      --  other name may be a container or an iterator, which need not
+      --  go backwards.
+      Types : Name_Sets.Set := Options.Type_Names;
 
-         function Is_Kw (K : Integer; W : String) return Boolean is
-           (K in 1 .. N and then S (K).Kind = Reserved_Word
-            and then Lower (Txt (K)) = W);
+      --  A mutation, the offset of the token that it belongs to (an
+      --  operator, the keyword of a condition, the first token of a
+      --  statement...) and its number among the mutations found.  The
+      --  result lists the mutations in the order of their tokens and,
+      --  for one token, in the order they were found.
+      type Found_Mutation is record
+         Key, Number : Positive;
+         Change      : Mutation;
+      end record;
 
-         function Is_Del (K : Integer; D : String) return Boolean is
-           (K in 1 .. N and then S (K).Kind = Delimiter and then Txt (K) = D);
+      function Before (A, B : Found_Mutation) return Boolean is
+        (A.Key < B.Key or else (A.Key = B.Key and then A.Number < B.Number));
 
-         function Is_Operand_End (K : Integer) return Boolean is
-           (K in 1 .. N
-            and then (S (K).Kind in Identifier | Numeric_Literal
-                        | Character_Literal | String_Literal
-                      or else Is_Del (K, ")") or else Is_Del (K, "]")
-                      or else Is_Kw (K, "all")));
+      package Found_Vectors is new Ada.Containers.Vectors
+        (Positive, Found_Mutation);
+      package Sorting is new Found_Vectors.Generic_Sorting (Before);
 
-         Depth      : array (1 .. N) of Natural := [others => 0];
-         Seg_Start  : array (1 .. N) of Positive := [others => 1];
-         In_Aspect  : array (1 .. N) of Boolean := [others => False];
-         Not_Contract : array (1 .. N) of Boolean := [others => False];
-         --  In an aspect that is no contract (Size, Inline, Import,
-         --  External_Name, Global, Annotate...), which is never mutated,
-         --  like a representation clause.
-         Seg_Skip   : array (1 .. N) of Boolean := [others => False];
-         Seg_Pragma : array (1 .. N) of Boolean := [others => False];
-         In_Assertion : array (1 .. N) of Boolean := [others => False];
-         --  In the arguments of an assertion pragma (Assert,
-         --  Assert_And_Cut, Assume, Loop_Invariant, Loop_Variant), which is
-         --  a contract: only ConjunctDeletion changes it, and
-         --  AssertionDeletion deletes the pragma.
-         In_Default : array (1 .. N) of Boolean := [others => False];
-         In_Ghost   : array (1 .. N) of Boolean := [others => False];
+      Found : Found_Vectors.Vector;
 
-         --  The types and subtypes that a loop can run over backwards when
-         --  it names one of them alone ("for I in Index loop"): those of
-         --  the spec, of Source and the discrete ones of Standard.  Any
-         --  other name may be a container or an iterator, which need not
-         --  go backwards.
-         Types : Name_Sets.Set := Options.Type_Names;
-
-         function Skipped (K : Positive) return Boolean is
-           (Seg_Skip (Seg_Start (K)) or else Seg_Pragma (Seg_Start (K))
-            or else In_Default (K) or else Not_Contract (K)
-            or else (not Options.Mutate_Contracts
-                     and then (In_Aspect (K) or else In_Ghost (K))));
-
-         function In_Declared_Subtype (K : Positive) return Boolean;
-         --  K is in the subtype of an object, component, type or subtype
+      --  Where a node is.
+      type Context is record
+         Skip      : Boolean := False;
+         --  Never mutated: a context clause, a representation clause, a
+         --  pragma, an aspect that is no contract (Size, Inline, Import,
+         --  Global, Annotate...), the default expression of a formal
+         --  parameter, digits or delta.
+         Aspect    : Boolean := False;
+         --  In a contract aspect.
+         Assertion : Boolean := False;
+         --  In an assertion pragma (Assert, Assert_And_Cut, Assume,
+         --  Loop_Invariant, Loop_Variant), which is a contract: only
+         --  ConjunctDeletion changes it, and AssertionDeletion deletes
+         --  the pragma.
+         Ghost     : Boolean := False;
+         --  In ghost code: the declaration or the body of a ghost entity,
+         --  or a statement that calls or assigns one.  It only exists for
+         --  proof and in builds with assertions, so like contracts it is
+         --  marked (Contract) and mutated only with Mutate_Contracts.
+         Declared  : Boolean := False;
+         --  In the subtype of an object, component, type or subtype
          --  declaration ("X : String (1 .. 6)", "subtype S is Integer
          --  range 1 .. 4"), not in its initial value nor in its aspects
-         --  (a predicate is a contract, see Skipped).
+         --  (a predicate is a contract).
+      end record;
 
-         function Is_Declared_Bound (K : Positive) return Boolean is
-           ((Is_Del (K - 1, "..") or else Is_Del (K + 1, ".."))
-            and then In_Declared_Subtype (K));
-         --  K is a bound of a range in such a subtype.  Changing it either
-         --  leaves values out of the subtype (a compile error) or only
-         --  widens it (an equivalent mutant).
+      function Skipped (C : Context) return Boolean is
+        (C.Skip
+         or else (not Options.Mutate_Contracts
+                  and then (C.Aspect or else C.Ghost)));
 
-         function In_Declared_Subtype (K : Positive) return Boolean is
-            First : constant Positive := Seg_Start (K);
-            Colon : Boolean := False;
-         begin
-            if In_Aspect (K) then
-               return False;
-            end if;
-            for J in First .. K - 1 loop
-               if Is_Del (J, ":=") or else Is_Kw (J, "renames") then
-                  return False;
-               elsif Is_Del (J, ":") and then Depth (J) = 0
-                 and then not (Is_Kw (J + 1, "for") or else Is_Kw (J + 1, "while")
-                               or else Is_Kw (J + 1, "loop")
-                               or else Is_Kw (J + 1, "declare")
-                               or else Is_Kw (J + 1, "begin"))
-               then
-                  Colon := True;
-               end if;
-            end loop;
-            return Colon
-              or else (First > 2 and then Is_Kw (First - 1, "is")
-                       and then (Is_Kw (Seg_Start (First - 1), "type")
-                                 or else Is_Kw (Seg_Start (First - 1),
-                                                "subtype")));
-         end In_Declared_Subtype;
+      function In_Contract (C : Context) return Boolean is
+        (C.Assertion
+         or else ((C.Aspect or else C.Ghost) and then not Skipped (C)));
+      --  In a contract that may be mutated: a contract aspect, ghost code
+      --  or an assertion pragma.
 
-         function In_Contract (K : Positive) return Boolean is
-           (In_Assertion (K)
-            or else ((In_Aspect (K) or else In_Ghost (K))
-                     and then not Skipped (K)));
-         --  K is in a contract that may be mutated: a contract aspect, ghost
-         --  code or an assertion pragma.
-
-         procedure Add
-           (Kind        : Mutator_Kind;
-            From, To    : Positive;
-            Replacement : String;
-            Anchor      : Natural := 0)
-         is
-            A : constant Positive := (if Anchor = 0 then From else Anchor);
-         begin
-            if not Options.Enabled (Kind) then
-               return;
-            elsif Kind in Conjunct_Deletion | Assertion_Deletion then
-               if not Options.Mutate_Contracts or else not In_Contract (A) then
-                  return;
-               end if;
-            elsif Skipped (A) then
+      --  Source (First .. Last) replaced by Replacement, at the token at
+      --  Key.
+      procedure Add
+        (Kind        : Mutator_Kind;
+         C           : Context;
+         Key, First  : Positive;
+         Last        : Natural;
+         Replacement : String) is
+      begin
+         if not Options.Enabled (Kind) then
+            return;
+         elsif Kind in Conjunct_Deletion | Assertion_Deletion then
+            if not Options.Mutate_Contracts or else not In_Contract (C) then
                return;
             end if;
-            Result.Append
-              (Mutation'(Kind        => Kind,
-                First       => S (From).First,
-                Last        => S (To).Last,
-                Replacement => To_Unbounded_String (Replacement),
-                Contract    => In_Aspect (A) or else In_Ghost (A)
-                                 or else In_Assertion (A)));
-         end Add;
+         elsif Skipped (C) then
+            return;
+         end if;
+         Found.Append
+           (Found_Mutation'
+              (Key    => Key,
+               Number => Natural (Found.Length) + 1,
+               Change =>
+                 (Kind        => Kind,
+                  First       => First,
+                  Last        => Last,
+                  Replacement => To_Unbounded_String (Replacement),
+                  Contract    =>
+                    C.Aspect or else C.Ghost or else C.Assertion)));
+      end Add;
 
-         function Same_Case (Model, Word : String) return String is
-           (if Model = To_Upper (Model) then To_Upper (Word)
-            elsif Model = To_Lower (Model) then To_Lower (Word)
-            else Word);
+      --  N replaced as a whole, at its first token.
+      procedure Replace
+        (Kind : Mutator_Kind; C : Context; N : LAL.Ada_Node'Class;
+         Replacement : String) is
+      begin
+         Add (Kind, C, First (T, N), First (T, N), Last (T, N), Replacement);
+      end Replace;
 
-         --  Tokens that end an expression at their own nesting depth.
-         function Is_Boundary (J : Positive) return Boolean is
-           (Is_Del (J, ",") or else Is_Del (J, ";") or else Is_Del (J, "=>")
-            or else Is_Del (J, ":=") or else Is_Del (J, "|")
-            or else Is_Del (J, ")") or else Is_Del (J, "]")
-            or else Is_Del (J, "<<") or else Is_Del (J, ">>")
-            or else (S (J).Kind = Reserved_Word
-                     and then not
-                       (Is_Kw (J, "and") or else Is_Kw (J, "or")
-                        or else Is_Kw (J, "xor") or else Is_Kw (J, "not")
-                        or else Is_Kw (J, "in") or else Is_Kw (J, "mod")
-                        or else Is_Kw (J, "rem") or else Is_Kw (J, "abs")
-                        or else Is_Kw (J, "null") or else Is_Kw (J, "new")
-                        or else Is_Kw (J, "all")
-                        or else (Is_Kw (J, "then") and then Is_Kw (J - 1, "and"))
-                        or else (Is_Kw (J, "else") and then Is_Kw (J - 1, "or")))));
+      function Next (Token : LC.Token_Reference) return LC.Token_Reference
+      is (LC.Next (Token, Exclude_Trivia => True));
 
-         function Op_Width (J : Positive) return Natural is
-           (if (Is_Kw (J, "and") and then Is_Kw (J + 1, "then"))
-              or else (Is_Kw (J, "or") and then Is_Kw (J + 1, "else"))
-            then 2
-            elsif Is_Kw (J, "and") or else Is_Kw (J, "or")
-              or else Is_Kw (J, "xor")
-            then 1
-            else 0);
-         --  The number of tokens of the logical operator at J, or 0.
+      function Previous
+        (Token : LC.Token_Reference) return LC.Token_Reference
+      is (LC.Previous (Token, Exclude_Trivia => True));
 
-         procedure Chain (K : Positive; Width : Positive; L, R : out Positive);
-         --  L .. R is the chain of operands and logical operators around
-         --  the logical operator at K (of Width tokens), at its depth.
+      function Is_Kind
+        (Token : LC.Token_Reference; Kind : LC.Token_Kind) return Boolean
+      is (Token /= LC.No_Token and then LC.Kind (LC.Data (Token)) = Kind);
 
-         procedure Chain (K : Positive; Width : Positive; L, R : out Positive)
-         is
-            D : constant Natural := Depth (K);
+      --  The operands and the operators of the chain of one logical
+      --  operator that the operator of B belongs to: "A and B and C" is
+      --  "(A and B) and C" in the tree.
+      procedure Chain
+        (B : LAL.Bin_Op; Operands, Operators : in out Node_Vectors.Vector)
+      is
+         Kind : constant LC.Ada_Op := B.F_Op;
+         Top  : LAL.Ada_Node := B.As_Ada_Node;
 
-            function Membership_Bar (J : Positive) return Boolean;
-            --  J is a "|" between the choices of a membership test
-            --  ("X in 1 | 3"), which belongs to the operand.
+         function Is_Link (N : LAL.Ada_Node) return Boolean is
+           (Has_Kind (N, Ada_Bin_Op)
+            and then LC.Ada_Op'(N.As_Bin_Op.F_Op) = Kind);
 
-            function Membership_Bar (J : Positive) return Boolean is
-               I : Natural := J - 1;
-            begin
-               if not Is_Del (J, "|") then
-                  return False;
-               end if;
-               while I >= 1
-                 and then (Depth (I) > D
-                           or else (Depth (I) = D and then Op_Width (I) = 0
-                                    and then (Is_Del (I, "|")
-                                              or else not Is_Boundary (I))))
-               loop
-                  if Depth (I) = D and then Is_Kw (I, "in") then
-                     return True;
-                  end if;
-                  I := I - 1;
-               end loop;
-               return False;
-            end Membership_Bar;
-
-            function Inside (J : Positive) return Boolean is
-              (Depth (J) > D
-               or else (Depth (J) = D
-                        and then (not Is_Boundary (J)
-                                  or else Membership_Bar (J))));
+         procedure Flatten (N : LAL.Ada_Node) is
          begin
-            L := K;
-            R := K + Width - 1;
-            while L > 1 and then Inside (L - 1) loop
-               L := L - 1;
-            end loop;
-            while R < N and then Inside (R + 1) loop
-               R := R + 1;
-            end loop;
-         end Chain;
+            if Is_Link (N) then
+               Flatten (N.As_Bin_Op.F_Left.As_Ada_Node);
+               Operators.Append (LAL.Op'(N.As_Bin_Op.F_Op).As_Ada_Node);
+               Flatten (N.As_Bin_Op.F_Right.As_Ada_Node);
+            else
+               Operands.Append (N);
+            end if;
+         end Flatten;
+      begin
+         while Is_Link (Top.Parent) loop
+            Top := Top.Parent;
+         end loop;
+         Operands.Clear;
+         Operators.Clear;
+         Flatten (Top);
+      end Chain;
 
-         --  Ada does not allow different logical operators side by side
-         --  without parentheses, so in a chain such as "A and then B and then
-         --  C" the operands around the mutated operator are parenthesised:
-         --  "(A or else B) and then C", "((A and then B) or else C)".
-         procedure Add_Logical
-           (K : Positive; Width : Positive; New_Op : String)
-         is
-            D : constant Natural := Depth (K);
-            L, R          : Positive;
-            Before, After : Natural := 0;
-            Next          : Natural;
+      --  LogicalOperator.  Ada does not allow different logical operators
+      --  side by side without parentheses, so in a chain such as "A and
+      --  then B and then C" the operands around the mutated operator are
+      --  parenthesised: "(A or else B) and then C", "((A and then B) or
+      --  else C)".
+      procedure Add_Logical (B : LAL.Bin_Op; New_Op : String; C : Context)
+      is
+         Op                  : constant LAL.Op := B.F_Op;
+         Operands, Operators : Node_Vectors.Vector;
+         I                   : Positive := 1;
+      begin
+         Chain (B, Operands, Operators);
+         while First (T, Operators (I)) /= First (T, Op) loop
+            I := I + 1;
+         end loop;
+         if Natural (Operators.Length) = 1 then
+            Add (Logical_Operator, C,
+                 First (T, Op), First (T, Op), Last (T, Op), New_Op);
+            return;
+         end if;
+         declare
+            L     : constant Positive := First (T, Operands (1));
+            R     : constant Natural := Last (T, Operands (I + 1));
+            Left  : constant String := Source (L .. Last (T, Operands (I)));
+            Right : constant String :=
+              Source (First (T, Operands (I + 1)) .. R);
          begin
-            Chain (K, Width, L, R);
-            declare
-               J : Positive := L;
-            begin
-               while J <= R loop
-                  if Depth (J) = D and then Op_Width (J) > 0 then
-                     if J < K then
-                        Before := Before + 1;
-                     elsif J > K and then After = 0 then
-                        After := J;
+            Add (Logical_Operator, C, First (T, Op), L, R,
+                 "(" & (if I > 1 then "(" & Left & ")" else Left)
+                 & " " & New_Op & " " & Right & ")");
+         end;
+      end Add_Logical;
+
+      --  ConjunctDeletion: the chain "A and B and C" (or with "and then")
+      --  of B, its first operator, without one of its operands, for each
+      --  operand: "B and C", "A and C", "A and B".  The line breaks of
+      --  what is left out follow the replacement (see Apply).
+      procedure Add_Conjuncts (B : LAL.Bin_Op; C : Context) is
+         Operands, Operators : Node_Vectors.Vector;
+      begin
+         Chain (B, Operands, Operators);
+         if First (T, Operators.First_Element) /= First (T, LAL.Op'(B.F_Op))
+         then
+            return;
+         end if;
+         declare
+            Count : constant Positive := Natural (Operators.Length);
+            L     : constant Positive := First (T, Operands (1));
+            R     : constant Natural := Last (T, Operands (Count + 1));
+         begin
+            for I in 1 .. Count + 1 loop
+               declare
+                  First_Out : constant Positive :=
+                    (if I = Count + 1 then Last (T, Operands (Count)) + 1
+                     else First (T, Operands (I)));
+                  --  What is left out: the operand and the operator
+                  --  after it, or for the last operand, the operator
+                  --  before it.
+                  Last_Out  : constant Natural :=
+                    (if I = Count + 1 then R
+                     else First (T, Operands (I + 1)) - 1);
+                  Breaks    : Unbounded_String;
+               begin
+                  for Ch of Source (First_Out .. Last_Out) loop
+                     if Ch in ASCII.CR | ASCII.LF then
+                        Append (Breaks, Ch);
                      end if;
-                     J := J + Op_Width (J);
-                  else
-                     J := J + 1;
-                  end if;
-               end loop;
-            end;
-            Next := (if After = 0 then R + 1 else After);
-            if (Before = 0 and then After = 0) or else L >= K
-              or else Next <= K + Width
-            then
-               Add (Logical_Operator, K, K + Width - 1, New_Op);
-               return;
-            end if;
-            declare
-               Left  : constant String :=
-                 Source (S (L).First .. S (K - 1).Last);
-               Right : constant String :=
-                 Source (S (K + Width).First .. S (Next - 1).Last);
-            begin
-               Add (Logical_Operator, L, Next - 1,
-                    "(" & (if Before > 0 then "(" & Left & ")" else Left)
-                    & " " & New_Op & " " & Right & ")",
-                    Anchor => K);
-            end;
-         end Add_Logical;
-
-         function Is_Relational (J : Positive) return Boolean is
-           (Is_Del (J, "=") or else Is_Del (J, "/=") or else Is_Del (J, "<")
-            or else Is_Del (J, "<=") or else Is_Del (J, ">")
-            or else Is_Del (J, ">="));
-
-         procedure Relation (K : Positive; L, R : out Positive);
-         --  L .. R is the relation whose operator is at K, such as "A < B".
-
-         procedure Relation (K : Positive; L, R : out Positive) is
-            D : constant Natural := Depth (K);
-
-            --  J ends the relation: a boundary, a logical operator (with
-            --  its "then" or "else"), another relational operator or "in".
-            function Inside (J : Positive) return Boolean is
-              (Depth (J) > D
-               or else (Depth (J) = D
-                        and then not Is_Boundary (J)
-                        and then Op_Width (J) = 0
-                        and then not (Is_Kw (J, "then") and then Is_Kw (J - 1, "and"))
-                        and then not (Is_Kw (J, "else") and then Is_Kw (J - 1, "or"))
-                        and then not Is_Relational (J)
-                        and then not Is_Kw (J, "in")));
-         begin
-            L := K;
-            R := K;
-            while L > 1 and then Inside (L - 1) loop
-               L := L - 1;
+                  end loop;
+                  Add (Conjunct_Deletion, C, First (T, Operators (1)), L, R,
+                       Source (L .. First_Out - 1)
+                       & Source (Last_Out + 1 .. R) & To_String (Breaks));
+               end;
             end loop;
-            while R < N and then Inside (R + 1) loop
-               R := R + 1;
-            end loop;
-         end Relation;
+         end;
+      end Add_Conjuncts;
 
-         function Zero (J : Positive) return Boolean is
-           (S (J).Kind = Numeric_Literal and then Squash (Txt (J)) = "0");
-         --  The integer literal 0.  In "X > 0" and "0 < X", the mutant "/="
-         --  differs from the relation only when X < 0, which a count, a
-         --  length or a Natural never is: it would mostly be equivalent.
+      type Place is
+        (If_Condition, While_Condition, Exit_Condition, Barrier,
+         And_Operand, Elsewhere);
 
-         --  EqualityOperator: the relation at K (its operator), such as "A
-         --  < B", replaced as a whole by Value ("False" or "True").  Not
-         --  when it is the whole condition of an if, elsif, while or exit
-         --  when, also in parentheses or under "not": ConditionalExpression
-         --  makes the same mutant, or the loop would never end ("while
-         --  True", "exit when False").  Not "False" for an entry barrier,
-         --  which would never open.  Not "True" for an operand of an "and"
-         --  in a contract, where ConjunctDeletion leaves the operand out.
-         procedure Add_Constant (K : Positive; Value : String) is
-            L, R   : Positive;
-            Lc, Rc : Positive;
-            --  The relation with the parentheses and "not" around it.
-            Holds  : Boolean := Value = "True";
-            --  What the mutant makes of Lc .. Rc.
-
-            function Exit_When (J : Integer) return Boolean is
-              (J > 2 and then Is_Kw (J, "when")
-               and then (Is_Kw (J - 1, "exit")
-                         or else (S (J - 1).Kind = Identifier
-                                  and then Is_Kw (J - 2, "exit"))));
-         begin
-            Relation (K, L, R);
-            if L = K or else R = K then
-               return;
-            end if;
-            Lc := L;
-            Rc := R;
-            loop
-               if Lc > 1 and then Rc < N and then Is_Del (Lc - 1, "(")
-                 and then Is_Del (Rc + 1, ")")
-                 and then Depth (Rc + 1) = Depth (Lc - 1) + 1
+      --  Where the expression N is: the condition of an if (statement or
+      --  expression) or elsif, of a while or of an exit when, an entry
+      --  barrier, an operand of "and" or "and then", or elsewhere.
+      function Place_Of (N : LAL.Ada_Node) return Place is
+         P : constant LAL.Ada_Node := N.Parent;
+      begin
+         if P.Is_Null then
+            return Elsewhere;
+         end if;
+         case P.Kind is
+            when Ada_If_Stmt =>
+               if Same (N, P.As_If_Stmt.F_Cond_Expr) then
+                  return If_Condition;
+               end if;
+            when Ada_Elsif_Stmt_Part =>
+               if Same (N, P.As_Elsif_Stmt_Part.F_Cond_Expr) then
+                  return If_Condition;
+               end if;
+            when Ada_If_Expr =>
+               if Same (N, P.As_If_Expr.F_Cond_Expr) then
+                  return If_Condition;
+               end if;
+            when Ada_Elsif_Expr_Part =>
+               if Same (N, P.As_Elsif_Expr_Part.F_Cond_Expr) then
+                  return If_Condition;
+               end if;
+            when Ada_While_Loop_Spec =>
+               return While_Condition;
+            when Ada_Exit_Stmt =>
+               if Same (N, P.As_Exit_Stmt.F_Cond_Expr) then
+                  return Exit_Condition;
+               end if;
+            when Ada_Entry_Body =>
+               if Same (N, P.As_Entry_Body.F_Barrier) then
+                  return Barrier;
+               end if;
+            when Ada_Bin_Op =>
+               if LC.Ada_Op'(P.As_Bin_Op.F_Op) in Ada_Op_And | Ada_Op_And_Then
                then
-                  Lc := Lc - 1;
-                  Rc := Rc + 1;
-               elsif Lc > 1 and then Is_Kw (Lc - 1, "not") then
-                  Lc := Lc - 1;
+                  return And_Operand;
+               end if;
+            when others =>
+               null;
+         end case;
+         return Elsewhere;
+      end Place_Of;
+
+      --  EqualityOperator: the relation B, such as "A < B", replaced as a
+      --  whole by Value ("False" or "True").  Not when it is the whole
+      --  condition of an if, elsif, while or exit when, also in
+      --  parentheses or under "not": ConditionalExpression makes the same
+      --  mutant, or the loop would never end ("while True", "exit when
+      --  False").  Not "False" for an entry barrier, which would never
+      --  open.  Not "True" for an operand of an "and" in a contract, where
+      --  ConjunctDeletion leaves the operand out.
+      procedure Add_Constant (B : LAL.Bin_Op; Value : String; C : Context)
+      is
+         Whole : LAL.Ada_Node := B.As_Ada_Node;
+         --  The relation with the parentheses and "not" around it.
+         Holds : Boolean := Value = "True";
+         --  What the mutant makes of Whole.
+         CE    : constant Boolean :=
+           Options.Enabled (Conditional_Expression);
+      begin
+         loop
+            declare
+               P : constant LAL.Ada_Node := Whole.Parent;
+            begin
+               exit when P.Is_Null;
+               if P.Kind = Ada_Paren_Expr then
+                  Whole := P;
+               elsif P.Kind = Ada_Un_Op
+                 and then LC.Ada_Op'(P.As_Un_Op.F_Op) = Ada_Op_Not
+               then
+                  Whole := P;
                   Holds := not Holds;
                else
                   exit;
                end if;
-            end loop;
-            declare
-               If_Cond    : constant Boolean :=
-                 ((Is_Kw (Lc - 1, "if") and then not Is_Kw (Lc - 2, "end"))
-                  or else Is_Kw (Lc - 1, "elsif"))
-                 and then Is_Kw (Rc + 1, "then");
-               While_Cond : constant Boolean :=
-                 Is_Kw (Lc - 1, "while") and then Is_Kw (Rc + 1, "loop");
-               Exit_Cond  : constant Boolean :=
-                 Exit_When (Lc - 1) and then Is_Del (Rc + 1, ";");
-               Barrier    : constant Boolean :=
-                 Is_Kw (Lc - 1, "when") and then Is_Kw (Rc + 1, "is");
-               In_And     : constant Boolean :=
-                 Is_Kw (Lc - 1, "and")
-                 or else (Is_Kw (Lc - 1, "then") and then Is_Kw (Lc - 2, "and"))
-                 or else Is_Kw (Rc + 1, "and");
-               CE         : constant Boolean :=
-                 Options.Enabled (Conditional_Expression);
-            begin
-               if (While_Cond and then (Holds or else CE))
-                 or else (Exit_Cond and then (not Holds or else CE))
-                 or else (If_Cond and then CE)
-                 or else (Barrier and then not Holds)
-                 or else (Holds and then In_And
-                          and then Options.Enabled (Conjunct_Deletion)
-                          and then Options.Mutate_Contracts
-                          and then In_Contract (K))
+            end;
+         end loop;
+         case Place_Of (Whole) is
+            when While_Condition =>
+               if Holds or else CE then
+                  return;
+               end if;
+            when Exit_Condition =>
+               if not Holds or else CE then
+                  return;
+               end if;
+            when If_Condition =>
+               if CE then
+                  return;
+               end if;
+            when Barrier =>
+               if not Holds then
+                  return;
+               end if;
+            when And_Operand =>
+               if Holds and then Options.Enabled (Conjunct_Deletion)
+                 and then Options.Mutate_Contracts and then In_Contract (C)
                then
                   return;
                end if;
-            end;
-            Add (Equality_Operator, L, R, Value, Anchor => K);
-         end Add_Constant;
+            when Elsewhere =>
+               null;
+         end case;
+         Add (Equality_Operator, C, First (T, LAL.Op'(B.F_Op)),
+              First (T, B), Last (T, B), Value);
+      end Add_Constant;
 
-         --  ConjunctDeletion: the chain "A and B and C" (or with "and
-         --  then") at K, its first operator, without one of its operands,
-         --  for each operand: "B and C", "A and C", "A and B".  The line
-         --  breaks of what is left out follow the replacement (see Apply).
-         procedure Add_Conjuncts (K : Positive) is
-            D    : constant Natural := Depth (K);
-            L, R : Positive;
+      function Zero (N : LAL.Ada_Node) return Boolean is
+        (N.Kind = Ada_Int_Literal and then Squash (Text (T, N)) = "0");
+      --  The integer literal 0.  In "X > 0" and "0 < X", the mutant "/="
+      --  differs from the relation only when X < 0, which a count, a
+      --  length or a Natural never is: it would mostly be equivalent.
+
+      procedure Mutate_Binary (B : LAL.Bin_Op; C : Context) is
+         Op   : constant LAL.Op := B.F_Op;
+         Word : constant String := Text (T, Op.Token_Start);
+
+         procedure Swap (Kind : Mutator_Kind; Replacement : String) is
          begin
-            Chain (K, Op_Width (K), L, R);
-            declare
-               --  Ops (I) is the first token of the I-th operator; the
-               --  operands are L .. Ops (1) - 1, Ops (1) + width .. Ops (2)
-               --  - 1, and so on.
-               Ops   : array (1 .. R - L + 1) of Positive;
-               Count : Natural := 0;
-               J     : Positive := L;
-            begin
-               while J <= R loop
-                  if Depth (J) = D and then Op_Width (J) > 0 then
-                     if not Is_Kw (J, "and") then
-                        return;
-                     end if;
-                     Count := Count + 1;
-                     Ops (Count) := J;
-                     J := J + Op_Width (J);
-                  else
-                     J := J + 1;
-                  end if;
-               end loop;
-               if Count = 0 or else Ops (1) /= K or else L = K then
-                  return;
-               end if;
-               for I in 1 .. Count + 1 loop
-                  declare
-                     First_Out : constant Positive :=
-                       (if I = Count + 1 then S (Ops (Count) - 1).Last + 1
-                        elsif I = 1 then S (L).First
-                        else S (Ops (I - 1) + Op_Width (Ops (I - 1))).First);
-                     --  What is left out: the operand and the operator
-                     --  after it, or for the last operand, the operator
-                     --  before it.
-                     Last_Out  : constant Natural :=
-                       (if I = Count + 1 then S (R).Last
-                        else S (Ops (I) + Op_Width (Ops (I))).First - 1);
-                     Breaks    : Unbounded_String;
-                  begin
-                     for C of Source (First_Out .. Last_Out) loop
-                        if C in ASCII.CR | ASCII.LF then
-                           Append (Breaks, C);
-                        end if;
-                     end loop;
-                     Add (Conjunct_Deletion, L, R,
-                          Source (S (L).First .. First_Out - 1)
-                          & Source (Last_Out + 1 .. S (R).Last)
-                          & To_String (Breaks),
-                          Anchor => K);
-                  end;
-               end loop;
-            end;
-         end Add_Conjuncts;
+            Replace (Kind, C, Op, Replacement);
+         end Swap;
       begin
-         --  Pass 1: nesting depth, segments (statements, declarations,
-         --  alternatives) and aspect specifications.
-         declare
-            D      : Natural := 0;
-            Start  : Positive := 1;
-            Aspect : Boolean := False;
-            Contract_Aspect : Boolean := False;
-            --  The aspect that the specification is in is a contract.
-         begin
-            for K in 1 .. N loop
-               Depth (K) := D;
-               Seg_Start (K) := Start;
-               In_Aspect (K) := Aspect;
-               --  The name of an aspect, after "with" or a comma.
-               if Aspect and then D = 0 and then S (K).Kind = Identifier
-                 and then (Is_Kw (K - 1, "with") or else Is_Del (K - 1, ","))
+         case LC.Ada_Op'(B.F_Op) is
+            when Ada_Op_Plus =>
+               Swap (Arithmetic_Operator, "-");
+            when Ada_Op_Minus =>
+               Swap (Arithmetic_Operator, "+");
+            when Ada_Op_Mult =>
+               Swap (Arithmetic_Operator, "/");
+            when Ada_Op_Div | Ada_Op_Pow =>
+               Swap (Arithmetic_Operator, "*");
+            --  mod and rem differ only for operands of opposite signs, so
+            --  swapping them is nearly always equivalent.
+            when Ada_Op_Mod | Ada_Op_Rem =>
+               Swap (Arithmetic_Operator, "*");
+            --  A relation splits its inputs in three: A < B, A = B and A
+            --  > B.  Each mutant differs from it in one of them only, so
+            --  killing all three takes a test that checks the result in
+            --  each (the sufficient set of Kaminski, Ammann and Offutt,
+            --  2011).  "=" and "/=" may compare records, which have no
+            --  "<".
+            when Ada_Op_Eq =>
+               Swap (Equality_Operator, "/=");
+               Add_Constant (B, "False", C);
+            when Ada_Op_Neq =>
+               Swap (Equality_Operator, "=");
+               Add_Constant (B, "True", C);
+            when Ada_Op_Lt =>
+               Swap (Equality_Operator, "<=");
+               if not Zero (B.F_Left.As_Ada_Node) then
+                  Swap (Equality_Operator, "/=");
+               end if;
+               Add_Constant (B, "False", C);
+            when Ada_Op_Lte =>
+               Swap (Equality_Operator, "<");
+               Swap (Equality_Operator, "=");
+               Add_Constant (B, "True", C);
+            when Ada_Op_Gt =>
+               Swap (Equality_Operator, ">=");
+               if not Zero (B.F_Right.As_Ada_Node) then
+                  Swap (Equality_Operator, "/=");
+               end if;
+               Add_Constant (B, "False", C);
+            when Ada_Op_Gte =>
+               Swap (Equality_Operator, ">");
+               Swap (Equality_Operator, "=");
+               Add_Constant (B, "True", C);
+            when Ada_Op_And | Ada_Op_And_Then =>
+               if Options.Enabled (Conjunct_Deletion) and then In_Contract (C)
                then
-                  Contract_Aspect := Lower (Txt (K)) in
-                    "pre" | "post" | "contract_cases" | "type_invariant"
-                    | "invariant" | "static_predicate" | "dynamic_predicate"
-                    | "predicate" | "ghost_predicate"
-                    | "default_initial_condition" | "initial_condition"
-                    | "subprogram_variant" | "refined_post"
-                    | "exceptional_cases" | "exit_cases" | "program_exit"
-                    | "always_terminates";
+                  Add_Conjuncts (B, C);
                end if;
-               Not_Contract (K) := Aspect and then not Contract_Aspect;
-               if Is_Del (K, "(") or else Is_Del (K, "[") then
-                  D := D + 1;
-               elsif Is_Del (K, ")") or else Is_Del (K, "]") then
-                  D := (if D > 0 then D - 1 else 0);
-               elsif D = 0 then
-                  if Aspect then
-                     --  "do" ends the aspects of an extended return
-                     --  statement ("return R : T with ... do").
-                     if Is_Del (K, ";") or else Is_Kw (K, "is")
-                       or else Is_Kw (K, "do")
-                     then
-                        Aspect := False;
-                        Start := K + 1;
-                     end if;
-                  elsif Is_Kw (K, "with")
-                    and then (K /= Start
-                              --  "end record with", "null record with",
-                              --  and a private type ("is private with",
-                              --  "limited private with", "with private
-                              --  with"), where "record" and "private" end
-                              --  the segment.
-                              or else (Is_Kw (K - 1, "record")
-                                       and then (Is_Kw (K - 2, "end")
-                                                 or else Is_Kw (K - 2, "null")))
-                              or else (Is_Kw (K - 1, "private")
-                                       and then (Is_Kw (K - 2, "is")
-                                                 or else Is_Kw (K - 2, "limited")
-                                                 or else Is_Kw (K - 2, "tagged")
-                                                 or else Is_Kw (K - 2, "with"))))
-                    and then not (Is_Kw (K + 1, "record")
-                                  or else Is_Kw (K + 1, "null")
-                                  or else Is_Kw (K + 1, "private"))
-                  then
-                     Aspect := True;
-                     In_Aspect (K) := True;
-                  elsif Is_Del (K, ";") or else Is_Del (K, "=>")
-                    or else Is_Del (K, ">>")
-                    or else Is_Kw (K, "is") or else Is_Kw (K, "begin")
-                    or else (Is_Kw (K, "then") and then not Is_Kw (K - 1, "and"))
-                    or else (Is_Kw (K, "else") and then not Is_Kw (K - 1, "or"))
-                    or else Is_Kw (K, "loop") or else Is_Kw (K, "do")
-                    or else Is_Kw (K, "declare") or else Is_Kw (K, "private")
-                    or else Is_Kw (K, "generic") or else Is_Kw (K, "record")
-                    or else Is_Kw (K, "select") or else Is_Kw (K, "exception")
-                    or else (Is_Kw (K, "or") and then Is_Del (K - 1, ";"))
-                  then
-                     Start := K + 1;
-                  end if;
-               end if;
-            end loop;
+               Add_Logical
+                 (B,
+                  Same_Case (Word,
+                             (if Op.Kind = Ada_Op_And then "or" else "or else")),
+                  C);
+            when Ada_Op_Or =>
+               Add_Logical (B, Same_Case (Word, "and"), C);
+            when Ada_Op_Or_Else =>
+               Add_Logical (B, Same_Case (Word, "and then"), C);
+            when Ada_Op_Xor =>
+               Add_Logical (B, Same_Case (Word, "or"), C);
+            when others =>
+               null;
+         end case;
+      end Mutate_Binary;
+
+      --  ConditionalExpression: the condition of an if or elsif becomes
+      --  True and False, that of a while False (True would never end the
+      --  loop) and that of an exit when True.  Not into what it already
+      --  is.
+      procedure Add_Condition
+        (Condition : LAL.Expr; To_True, To_False : Boolean; C : Context)
+      is
+         Key  : constant Positive :=
+           First (T, Previous (Condition.Token_Start));
+         --  The keyword: if, elsif, while or when.
+         Word : constant String :=
+           (if Condition.Kind = Ada_Identifier
+            then Lower_Text (T, Condition) else "");
+      begin
+         if To_True and then Word /= "true" then
+            Add (Conditional_Expression, C, Key,
+                 First (T, Condition), Last (T, Condition), "True");
+         end if;
+         if To_False and then Word /= "false" then
+            Add (Conditional_Expression, C, Key,
+                 First (T, Condition), Last (T, Condition), "False");
+         end if;
+      end Add_Condition;
+
+      function Discrete (N : LAL.Ada_Node) return Boolean is
+        (case N.Kind is
+            when Ada_Bin_Op =>
+              LC.Ada_Op'(N.As_Bin_Op.F_Op) = Ada_Op_Double_Dot,
+            when Ada_Attribute_Ref =>
+              Lower_Text (T, N.As_Attribute_Ref.F_Attribute) = "range",
+            when Ada_Subtype_Indication | Ada_Constrained_Subtype_Indication
+               | Ada_Discrete_Subtype_Indication =>
+              not N.As_Subtype_Indication.F_Constraint.Is_Null,
+            when others => False);
+      --  N is a range: "A .. B", "X'Range", "T range A .. B".
+
+      --  LoopDirection: the direction of a loop over a range ("for I in A
+      --  .. B loop", "for I in X'Range loop") or over a subtype ("for I in
+      --  Index loop").  Not over an iterator ("for C in V.Iterate", "for
+      --  E of A"), which need not go backwards; nor in a quantified
+      --  expression or an aggregate, which have no loop statement.
+      procedure Add_Direction (Loop_Stmt : LAL.For_Loop_Stmt; C : Context) is
+         Spec : constant LAL.For_Loop_Spec :=
+           Loop_Stmt.F_Spec.As_For_Loop_Spec;
+         Over : constant LAL.Ada_Node := Spec.F_Iter_Expr;
+         Into : constant LAL.Iter_Type := Spec.F_Loop_Type;
+         --  The "in" of the loop.
+         Key  : constant Positive := First (T, Loop_Stmt);
+      begin
+         if Into.Kind /= Ada_Iter_Type_In then
+            null;
+         elsif Spec.F_Has_Reverse then
+            Add (Loop_Direction, C, Key, First (T, Into),
+                 Last (T, LAL.Reverse_Node'(Spec.F_Has_Reverse)),
+                 Same_Case (Text (T, Into), "in"));
+         elsif Discrete (Over)
+           or else (Over.Kind = Ada_Identifier
+                    and then Types.Contains (Lower_Text (T, Over)))
+         then
+            Add (Loop_Direction, C, Key, First (T, Into), Last (T, Into),
+                 Same_Case (Text (T, Into), "in reverse"));
+         end if;
+      end Add_Direction;
+
+      --  A return statement right before "exception" or an "end" (not of
+      --  an if, loop, case or select), where it changes nothing in a
+      --  body.
+      function Ends_Body (N : LAL.Ada_Node) return Boolean is
+         After : constant LC.Token_Reference := Next (N.Token_End);
+      begin
+         return Is_Kind (After, LC.Ada_Exception)
+           or else (Is_Kind (After, LC.Ada_End)
+                    and then not (Is_Kind (Next (After), LC.Ada_If)
+                                  or else Is_Kind (Next (After), LC.Ada_Loop)
+                                  or else Is_Kind (Next (After), LC.Ada_Case)
+                                  or else Is_Kind (Next (After),
+                                                   LC.Ada_Select)));
+      end Ends_Body;
+
+      --  The statement N is the whole branch of an if or elsif without an
+      --  else after it: deleting it is ConditionalExpression's condition
+      --  -> False.
+      function Whole_Branch (N : LAL.Ada_Node) return Boolean is
+         List : constant LAL.Ada_Node := N.Parent;
+      begin
+         if not Has_Kind (List, Ada_Stmt_List) or else List.Children_Count /= 1
+           or else List.Parent.Is_Null
+         then
+            return False;
+         end if;
+         declare
+            Branch : constant LAL.Ada_Node := List.Parent;
+         begin
+            case Branch.Kind is
+               when Ada_If_Stmt =>
+                  return Branch.As_If_Stmt.F_Alternatives.Children_Count = 0
+                    and then Branch.As_If_Stmt.F_Else_Part.Is_Null;
+               when Ada_Elsif_Stmt_Part =>
+                  declare
+                     Parts : constant LAL.Ada_Node := Branch.Parent;
+                  begin
+                     return Same (Parts.Child (Parts.Children_Count), Branch)
+                       and then Parts.Parent.As_If_Stmt.F_Else_Part.Is_Null;
+                  end;
+               when others =>
+                  return False;
+            end case;
          end;
+      end Whole_Branch;
 
-         --  Pass 2: segments that are never mutated (context clauses,
-         --  representation clauses) and pragmas.
-         for K in 1 .. N loop
-            if Seg_Start (K) = K then
-               declare
-                  Has_Use : Boolean := False;
-                  Has_At  : Boolean := False;
-                  J       : Positive := K;
-               begin
-                  while J <= N and then Seg_Start (J) = K loop
-                     if Depth (J) = 0 then
-                        Has_Use := Has_Use or else Is_Kw (J, "use");
-                        Has_At := Has_At or else Is_Kw (J, "at");
-                     end if;
-                     J := J + 1;
-                  end loop;
-                  Seg_Skip (K) :=
-                    (Is_Kw (K, "with") and then not In_Aspect (K)
-                     and then not (Is_Kw (K + 1, "procedure")
-                                   or else Is_Kw (K + 1, "function")
-                                   or else Is_Kw (K + 1, "package")))
-                    or else Is_Kw (K, "use")
-                    or else (Is_Kw (K, "limited") and then Is_Kw (K + 1, "with"))
-                    or else (Is_Kw (K, "for") and then Has_Use)
-                    or else Has_At;
-                  Seg_Pragma (K) := Is_Kw (K, "pragma");
-                  if Seg_Pragma (K) and then K < N
-                    and then S (K + 1).Kind = Identifier
-                    and then Lower (Txt (K + 1)) in
-                      "assert" | "assert_and_cut" | "assume"
-                      | "loop_invariant" | "loop_variant"
-                  then
-                     for I in K .. J - 1 loop
-                        In_Assertion (I) := True;
-                     end loop;
-                  end if;
-               end;
-            end if;
-         end loop;
-
-         --  Pass 2b: default expressions of formal parameters.  A
-         --  subprogram declaration and its body must repeat the same
-         --  defaults (full conformance), so changing one side never
-         --  compiles.  Profiles that need no completion (is null, is
-         --  abstract, expression functions, generic formal subprograms)
-         --  stay mutable.
-         for K in 1 .. N loop
-            if (Is_Kw (K, "procedure") or else Is_Kw (K, "function")
-                or else Is_Kw (K, "entry"))
-              and then not Is_Kw (K - 1, "with")
+      --  The pragma N is the only statement of its sequence, apart from
+      --  labels ("begin pragma Assert (X); end;"): deleting it would leave
+      --  the sequence empty.
+      function Only_Statement (N : LAL.Ada_Node) return Boolean is
+         List : constant LAL.Ada_Node := N.Parent;
+      begin
+         if not Has_Kind (List, Ada_Stmt_List) then
+            return False;
+         end if;
+         for I in 1 .. List.Children_Count loop
+            if not Same (List.Child (I), N)
+              and then List.Child (I).Kind /= Ada_Label
             then
-               declare
-                  J : Positive := K + 1;
-               begin
-                  while J < N
-                    and then (S (J).Kind in Identifier | String_Literal
-                              or else Is_Del (J, "."))
-                  loop
-                     J := J + 1;
-                  end loop;
-                  if J > K + 1 and then J < N and then Is_Del (J, "(") then
-                     declare
-                        D     : constant Natural := Depth (J);
-                        Close : Positive := J + 1;
-                        After : Positive;
-                     begin
-                        while Close < N
-                          and then not (Is_Del (Close, ")")
-                                        and then Depth (Close) = D + 1)
-                        loop
-                           Close := Close + 1;
-                        end loop;
-                        After := Close + 1;
-                        while After < N and then Depth (After) >= D
-                          and then not (Depth (After) = D
-                                        and then (Is_Kw (After, "is")
-                                                  or else Is_Del (After, ";")
-                                                  or else Is_Kw (After, "with")
-                                                  or else Is_Kw (After, "do")))
-                        loop
-                           After := After + 1;
-                        end loop;
-                        if not (Is_Kw (After, "is") and then After < N
-                                and then (Is_Kw (After + 1, "null")
-                                          or else Is_Kw (After + 1, "abstract")
-                                          or else Is_Del (After + 1, "(")
-                                          or else Is_Del (After + 1, "<>")))
-                        then
-                           declare
-                              Mark : Boolean := False;
-                           begin
-                              for I in J + 1 .. Close - 1 loop
-                                 if Depth (I) = D + 1 then
-                                    if Is_Del (I, ":=") then
-                                       Mark := True;
-                                    elsif Is_Del (I, ";") then
-                                       Mark := False;
-                                    end if;
-                                 end if;
-                                 if Mark then
-                                    In_Default (I) := True;
-                                 end if;
-                              end loop;
-                           end;
-                        end if;
-                     end;
-                  end if;
-               end;
+               return False;
             end if;
          end loop;
+         return True;
+      end Only_Statement;
 
-         --  Pass 2c: ghost code (declarations and bodies of ghost entities
-         --  and statements calling or assigning them).  It only exists for
-         --  proof and in builds with assertions, so like contracts it is
-         --  marked (Contract) and mutated only with Mutate_Contracts.
-         declare
-            Names  : Name_Sets.Set := Options.Ghost_Names;
-            Ranges : Range_Vectors.Vector;
-
-            function Ghost (K : Positive) return Boolean is
-              (K <= N and then S (K).Kind in Identifier | String_Literal
-               and then Names.Contains (Lower (Txt (K))));
-
-            function Semicolon (From : Positive) return Positive is
-               J : Positive := From;
-            begin
-               while J < N and then not (Depth (J) = 0 and then Is_Del (J, ";"))
-               loop
-                  J := J + 1;
-               end loop;
-               return J;
-            end Semicolon;
-
-            procedure Mark (From, To : Positive) is
-            begin
-               for I in From .. To loop
-                  In_Ghost (I) := True;
-               end loop;
-            end Mark;
-         begin
-            Scan_Ghost (Source, Names, Ranges);
-            for R of Ranges loop
-               for I in 1 .. N loop
-                  if S (I).First in R.First .. R.Last then
-                     In_Ghost (I) := True;
-                  end if;
-               end loop;
-            end loop;
-            for K in 1 .. N loop
-               if (Is_Kw (K, "procedure") or else Is_Kw (K, "function"))
-                 and then Depth (K) = 0 and then not Is_Kw (K - 1, "with")
-                 and then Ghost (K + 1)
-               then
-                  declare
-                     J : Positive := K + 1;
-                  begin
-                     while J < N and then not (Depth (J) = 0
-                                               and then (Is_Kw (J, "is")
-                                                         or else Is_Del (J, ";")))
-                     loop
-                        J := J + 1;
-                     end loop;
-                     if Is_Kw (J, "is")
-                       and then not (Is_Del (J + 1, "(")
-                                     or else Is_Kw (J + 1, "null")
-                                     or else Is_Kw (J + 1, "abstract")
-                                     or else Is_Kw (J + 1, "separate")
-                                     or else Is_Kw (J + 1, "new"))
-                     then
-                        --  The body ends at the "end" of its own "begin";
-                        --  "end if", "end loop" and the like close other
-                        --  constructs.  "end return" closes the "do" of an
-                        --  extended return.
-                        declare
-                           Level : Natural := 0;
-                        begin
-                           while J < N loop
-                              J := J + 1;
-                              if Is_Kw (J, "begin") or else Is_Kw (J, "do") then
-                                 Level := Level + 1;
-                              elsif Is_Kw (J, "end")
-                                and then not (Is_Kw (J + 1, "if")
-                                              or else Is_Kw (J + 1, "loop")
-                                              or else Is_Kw (J + 1, "case")
-                                              or else Is_Kw (J + 1, "record")
-                                              or else Is_Kw (J + 1, "select"))
-                                and then Level > 0
-                              then
-                                 Level := Level - 1;
-                                 exit when Level = 0;
-                              end if;
-                           end loop;
-                        end;
-                        Mark (K, Semicolon (J));
-                     else
-                        Mark (K, Semicolon (J));
-                     end if;
-                  end;
-               elsif Seg_Start (K) = K and then S (K).Kind = Identifier then
-                  declare
-                     J    : Positive := K;
-                     Name : Positive := K;
-                  begin
-                     while J < N and then (S (J).Kind = Identifier
-                                           or else Is_Del (J, "."))
-                     loop
-                        if S (J).Kind = Identifier then
-                           Name := J;
-                        end if;
-                        J := J + 1;
-                     end loop;
-                     if Ghost (Name)
-                       and then (Is_Del (J, "(") or else Is_Del (J, ";")
-                                 or else Is_Del (J, ":="))
-                     then
-                        Mark (K, Semicolon (K));
-                     end if;
-                  end;
-               end if;
-            end loop;
-         end;
-
-         Types.Union (Type_Names (Source));
-         for Name of Standard_Discrete loop
-            Types.Include (Name.all);
+      --  The last identifier of the dotted name that starts the statement
+      --  N, followed by "(", ";" or ":=": the subprogram that it calls or
+      --  the object that it assigns ("m" for "S.M (X);"), or "".
+      function Statement_Name (N : LAL.Ada_Node) return String is
+         Token : LC.Token_Reference := N.Token_Start;
+         Name  : LC.Token_Reference := LC.No_Token;
+      begin
+         while Is_Kind (Token, LC.Ada_Identifier)
+           or else Is_Kind (Token, LC.Ada_Dot)
+         loop
+            if Is_Kind (Token, LC.Ada_Identifier) then
+               Name := Token;
+            end if;
+            Token := Next (Token);
          end loop;
+         if Name /= LC.No_Token
+           and then (Is_Kind (Token, LC.Ada_Par_Open)
+                     or else Is_Kind (Token, LC.Ada_Semicolon)
+                     or else Is_Kind (Token, LC.Ada_Assign))
+         then
+            return Lower (Text (T, Name));
+         end if;
+         return "";
+      end Statement_Name;
 
-         --  Pass 3: mutations.
-         for K in 1 .. N loop
+      --  N starts ghost code: a declaration with the aspect Ghost, the
+      --  declaration or the body of a subprogram with a ghost name, or a
+      --  statement that calls or assigns a ghost entity.
+      function Ghost_Code (N : LAL.Ada_Node) return Boolean is
+        (Has_Ghost_Aspect (T, N)
+         or else (N.Kind in Ada_Abstract_Subp_Decl | Ada_Subp_Decl
+                    | Ada_Expr_Function | Ada_Null_Subp_Decl | Ada_Subp_Body
+                    | Ada_Subp_Renaming_Decl | Ada_Subp_Body_Stub
+                    | Ada_Generic_Subp_Internal
+                    | Ada_Generic_Subp_Instantiation
+                  and then Ghosts.Contains
+                             (Simple_Name (T, Subprogram_Name (N))))
+         or else (N.Kind in Ada_Assign_Stmt | Ada_Call_Stmt
+                  and then Ghosts.Contains (Statement_Name (N))));
+
+      --  The literal N is the whole first argument of an attribute
+      --  ("A'Range (2)", "T'Max (10, X)").  The number of a dimension must
+      --  be one of the array, so its mutant would hardly compile.
+      function First_Argument (N : LAL.Ada_Node) return Boolean is
+         Assoc : constant LAL.Ada_Node := N.Parent;
+      begin
+         if not Has_Kind (Assoc, Ada_Param_Assoc)
+           or else not Has_Kind (Assoc.Parent, Ada_Assoc_List)
+           or else not Same (Assoc.Parent.Child (1), Assoc)
+         then
+            return False;
+         end if;
+         declare
+            Owner : constant LAL.Ada_Node := Assoc.Parent.Parent;
+         begin
+            return Has_Kind (Owner, Ada_Attribute_Ref)
+              or else (Has_Kind (Owner, Ada_Call_Expr)
+                       and then Owner.As_Call_Expr.F_Name.Kind
+                                  = Ada_Attribute_Ref);
+         end;
+      end First_Argument;
+
+      --  The literal N is a bound of a range, also with a sign ("-1 ..
+      --  1").
+      function Bound (N : LAL.Ada_Node) return Boolean is
+         P : LAL.Ada_Node := N.Parent;
+      begin
+         if Has_Kind (P, Ada_Un_Op)
+           and then LC.Ada_Op'(P.As_Un_Op.F_Op) in Ada_Op_Plus | Ada_Op_Minus
+         then
+            P := P.Parent;
+         end if;
+         return Has_Kind (P, Ada_Bin_Op)
+           and then LC.Ada_Op'(P.As_Bin_Op.F_Op) = Ada_Op_Double_Dot;
+      end Bound;
+
+      --  An attribute and its counterpart, which gives a value of the
+      --  same type: the other bound, the other extreme, the other
+      --  neighbour, the other rounding.
+      function Counterpart (Attribute : String) return String is
+        (if Attribute = "first" then "Last"
+         elsif Attribute = "last" then "First"
+         elsif Attribute = "min" then "Max"
+         elsif Attribute = "max" then "Min"
+         elsif Attribute = "succ" then "Pred"
+         elsif Attribute = "pred" then "Succ"
+         elsif Attribute = "floor" then "Ceiling"
+         elsif Attribute = "ceiling" then "Floor"
+         elsif Attribute = "first_valid" then "Last_Valid"
+         elsif Attribute = "last_valid" then "First_Valid"
+         else "");
+
+      --  The mutations of the node N itself (its children are visited
+      --  apart).
+      procedure Mutate (N : LAL.Ada_Node; C : Context) is
+      begin
+         case N.Kind is
+            when Ada_Bin_Op | Ada_Relation_Op =>
+               Mutate_Binary (N.As_Bin_Op, C);
+
+            when Ada_Un_Op =>
+               declare
+                  Op : constant LAL.Op := N.As_Un_Op.F_Op;
+               begin
+                  case Op.Kind is
+                     when Ada_Op_Plus =>
+                        Replace (Unary_Operator, C, Op, "-");
+                     when Ada_Op_Minus =>
+                        Replace (Unary_Operator, C, Op, "+");
+                     when Ada_Op_Not | Ada_Op_Abs =>
+                        Replace (Unary_Operator, C, Op, "");
+                     when others =>
+                        null;
+                  end case;
+               end;
+
+            when Ada_Membership_Expr =>
+               declare
+                  Op : constant LAL.Op := N.As_Membership_Expr.F_Op;
+               begin
+                  if Op.Kind = Ada_Op_In then
+                     Replace (Membership_Operator, C, Op,
+                              Same_Case (Text (T, Op), "not in"));
+                  else
+                     Replace (Membership_Operator, C, Op,
+                              Same_Case (Text (T, Op.Token_End), "in"));
+                  end if;
+               end;
+
+            when Ada_If_Stmt =>
+               Add_Condition (N.As_If_Stmt.F_Cond_Expr, True, True, C);
+            when Ada_Elsif_Stmt_Part =>
+               Add_Condition
+                 (N.As_Elsif_Stmt_Part.F_Cond_Expr, True, True, C);
+            when Ada_If_Expr =>
+               Add_Condition (N.As_If_Expr.F_Cond_Expr, True, True, C);
+            when Ada_Elsif_Expr_Part =>
+               Add_Condition
+                 (N.As_Elsif_Expr_Part.F_Cond_Expr, True, True, C);
+            when Ada_While_Loop_Spec =>
+               Add_Condition (N.As_While_Loop_Spec.F_Expr, False, True, C);
+            when Ada_Exit_Stmt =>
+               if not N.As_Exit_Stmt.F_Cond_Expr.Is_Null then
+                  Add_Condition (N.As_Exit_Stmt.F_Cond_Expr, True, False, C);
+               end if;
+
+            when Ada_For_Loop_Stmt =>
+               Add_Direction (N.As_For_Loop_Stmt, C);
+
+            --  StatementDeletion: a raise statement, or a return statement
+            --  without a value, except where it changes nothing in a body
+            --  (see Ends_Body).  Not the whole branch of an if or elsif
+            --  without an else: that is ConditionalExpression's condition
+            --  -> False.  Not an exit statement, which could make the loop
+            --  run for ever (see exit when), nor a delay statement, whose
+            --  only effect (time) tests and proof rarely observe.
+            when Ada_Raise_Stmt | Ada_Return_Stmt =>
+               if (N.Kind = Ada_Raise_Stmt
+                   or else (N.As_Return_Stmt.F_Return_Expr.Is_Null
+                            and then not Ends_Body (N)))
+                 and then not (Options.Enabled (Conditional_Expression)
+                               and then Whole_Branch (N))
+               then
+                  Replace (Statement_Deletion, C, N, "null;");
+               end if;
+
+            --  StatementDeletion: an assignment or a procedure call (not a
+            --  code statement, which is a qualified expression).
+            when Ada_Assign_Stmt =>
+               Replace (Statement_Deletion, C, N, "null;");
+            when Ada_Call_Stmt =>
+               if N.As_Call_Stmt.F_Call.Kind /= Ada_Qual_Expr then
+                  Replace (Statement_Deletion, C, N, "null;");
+               end if;
+
+            --  AssertionDeletion: an assertion pragma, which leaves
+            --  nothing, or "null;" where the sequence of statements would
+            --  be empty ("begin pragma Assert (X); end;").  Not "null;"
+            --  anywhere: it would split a group of loop invariants, which
+            --  GNAT rejects.
+            when Ada_Pragma_Node =>
+               if C.Assertion then
+                  Replace (Assertion_Deletion, C, N,
+                           (if Only_Statement (N) then "null;" else ""));
+               end if;
+
+            --  BooleanLiteral, not the name of an attribute or the
+            --  declaration of an enumeration literal.
+            when Ada_Identifier =>
+               declare
+                  Word : constant String := Lower_Text (T, N);
+               begin
+                  if Word in "true" | "false"
+                    and then not Has_Kind (N.Parent, Ada_Defining_Name)
+                    and then not (Has_Kind (N.Parent, Ada_Attribute_Ref)
+                                  and then Same
+                                    (N, N.Parent.As_Attribute_Ref.F_Attribute))
+                  then
+                     Replace (Boolean_Literal, C, N,
+                              Same_Case (Text (T, N),
+                                         (if Word = "true" then "False"
+                                          else "True")));
+                  end if;
+               end;
+
+            --  AttributeSwap.  Not in the subtype of a declaration, like
+            --  the bounds of NumericLiteral.
+            when Ada_Attribute_Ref =>
+               declare
+                  Attribute : constant LAL.Identifier :=
+                    N.As_Attribute_Ref.F_Attribute;
+                  Other     : constant String :=
+                    Counterpart (Lower_Text (T, Attribute));
+               begin
+                  if Other /= "" and then not C.Declared then
+                     Replace (Attribute_Swap, C, Attribute,
+                              Same_Case (Text (T, Attribute), Other));
+                  end if;
+               end;
+
+            --  NumericLiteral.  Not the first argument of an attribute, nor
+            --  a bound of a range in the subtype of a declaration: changing
+            --  it either leaves values out of the subtype (a compile error)
+            --  or only widens it (an equivalent mutant).
+            when Ada_Int_Literal | Ada_Real_Literal =>
+               declare
+                  R : constant String := Numeric_Mutation (Text (T, N));
+               begin
+                  if R /= "" and then not First_Argument (N)
+                    and then not (C.Declared and then Bound (N))
+                  then
+                     Replace (Numeric_Literal, C, N, R);
+                  end if;
+               end;
+
+            --  StringLiteral, not an operator symbol ("+" (A, B)).
+            when Ada_String_Literal =>
+               declare
+                  Content : constant String :=
+                    Lower (Source (First (T, N) + 1 .. Last (T, N) - 1));
+                  Is_Op   : Boolean := False;
+               begin
+                  for Op of Operator_Symbols loop
+                     Is_Op := Is_Op or else Op.all = Content;
+                  end loop;
+                  if not Is_Op then
+                     Replace (String_Literal, C, N,
+                              (if Content = "" then """AdaMutant was here!"""
+                               else """"""));
+                  end if;
+               end;
+
+            when others =>
+               null;
+         end case;
+      end Mutate;
+
+      function Contract_Aspect (A : LAL.Aspect_Assoc) return Boolean is
+         Id : LAL.Ada_Node := A.F_Id.As_Ada_Node;
+      begin
+         if Id.Kind = Ada_Attribute_Ref then
+            Id := Id.As_Attribute_Ref.F_Prefix.As_Ada_Node;
+         end if;
+         return Lower_Text (T, Id) in
+           "pre" | "post" | "contract_cases" | "type_invariant"
+           | "invariant" | "static_predicate" | "dynamic_predicate"
+           | "predicate" | "ghost_predicate"
+           | "default_initial_condition" | "initial_condition"
+           | "subprogram_variant" | "refined_post"
+           | "exceptional_cases" | "exit_cases" | "program_exit"
+           | "always_terminates";
+      end Contract_Aspect;
+      --  A is a contract aspect, also in its 'Class form.
+
+      --  A formal parameter P of a subprogram or an entry whose
+      --  declaration and body must repeat the same defaults (full
+      --  conformance): changing one side never compiles.  Profiles that
+      --  need no completion (is null, is abstract, expression functions,
+      --  generic formal subprograms) stay mutable, and so do the profiles
+      --  of an access to a subprogram and of an accept statement.
+      function Conforms (P : LAL.Ada_Node) return Boolean is
+         Owner : constant LAL.Ada_Node := P.Parent.Parent.Parent;
+         --  Param_Spec_List, Params, and what has the parameters.
+      begin
+         case Owner.Kind is
+            when Ada_Subp_Spec =>
+               return Owner.Parent.Kind in Ada_Subp_Decl | Ada_Subp_Body
+                 | Ada_Subp_Renaming_Decl | Ada_Subp_Body_Stub
+                 | Ada_Generic_Subp_Internal;
+            when Ada_Entry_Spec =>
+               return True;
+            when Ada_Entry_Completion_Formal_Params =>
+               return Owner.Parent.Kind = Ada_Entry_Body;
+            when others =>
+               return False;
+         end case;
+      end Conforms;
+
+      --  The context of Child, a child of Parent in the context C.
+      function Inner (Parent, Child : LAL.Ada_Node; C : Context) return Context
+      is
+         R : Context := C;
+      begin
+         case Parent.Kind is
+            when Ada_Object_Decl | Ada_Extended_Return_Stmt_Object_Decl =>
+               R.Declared := Same (Child, Parent.As_Object_Decl.F_Type_Expr);
+            when Ada_Component_Decl =>
+               R.Declared :=
+                 Same (Child, Parent.As_Component_Decl.F_Component_Def);
+            when Ada_Concrete_Type_Decl =>
+               R.Declared := Same (Child, Parent.As_Type_Decl.F_Type_Def);
+            when Ada_Subtype_Decl =>
+               R.Declared := Same (Child, Parent.As_Subtype_Decl.F_Subtype);
+            when Ada_Param_Spec =>
+               R.Skip := C.Skip
+                 or else (Same (Child, Parent.As_Param_Spec.F_Default_Expr)
+                          and then Conforms (Parent));
+            when Ada_Floating_Point_Def =>
+               R.Skip := C.Skip
+                 or else Same (Child,
+                               Parent.As_Floating_Point_Def.F_Num_Digits);
+            when Ada_Ordinary_Fixed_Point_Def =>
+               R.Skip := C.Skip
+                 or else Same (Child,
+                               Parent.As_Ordinary_Fixed_Point_Def.F_Delta);
+            when Ada_Decimal_Fixed_Point_Def =>
+               R.Skip := C.Skip
+                 or else Same (Child, Parent.As_Decimal_Fixed_Point_Def.F_Delta)
+                 or else Same (Child,
+                               Parent.As_Decimal_Fixed_Point_Def.F_Digits);
+            when Ada_Digits_Constraint =>
+               R.Skip := C.Skip
+                 or else Same (Child, Parent.As_Digits_Constraint.F_Digits);
+            when Ada_Delta_Constraint =>
+               R.Skip := C.Skip
+                 or else Same (Child, Parent.As_Delta_Constraint.F_Delta);
+            when others =>
+               null;
+         end case;
+         return R;
+      end Inner;
+
+      --  The mutations of N and of the nodes below it, N being in the
+      --  context Outer.
+      procedure Visit (N : LAL.Ada_Node; Outer : Context) is
+         C : Context := Outer;
+      begin
+         case N.Kind is
+            --  Context clauses and representation clauses are never
+            --  mutated.
+            when Ada_With_Clause | Ada_Use_Package_Clause
+               | Ada_Use_Type_Clause | Ada_Attribute_Def_Clause
+               | Ada_Enum_Rep_Clause | Ada_Record_Rep_Clause | Ada_At_Clause
+            =>
+               C.Skip := True;
+            --  Neither are pragmas, but ConjunctDeletion and
+            --  AssertionDeletion change assertion pragmas.
+            when Ada_Pragma_Node =>
+               C.Skip := True;
+               C.Assertion :=
+                 Lower_Text (T, N.As_Pragma_Node.F_Id) in
+                   "assert" | "assert_and_cut" | "assume"
+                   | "loop_invariant" | "loop_variant";
+            --  Other aspects (Size, Inline, Import, External_Name, Global,
+            --  Annotate...) are never mutated, like representation
+            --  clauses.
+            when Ada_Aspect_Assoc =>
+               C.Declared := False;
+               if Contract_Aspect (N.As_Aspect_Assoc) then
+                  C.Aspect := True;
+               else
+                  C.Skip := True;
+               end if;
+            when Ada_Record_Def | Ada_Null_Record_Def =>
+               C.Declared := False;
+            when others =>
+               null;
+         end case;
+         C.Ghost := C.Ghost or else Ghost_Code (N);
+         Mutate (N, C);
+         for I in 1 .. N.Children_Count loop
             declare
-               T     : constant Token := S (K);
-               Lw    : constant String := Lower (Txt (K));
-               Binary : constant Boolean := Is_Operand_End (K - 1);
+               Child : constant LAL.Ada_Node := N.Child (I);
             begin
-               case T.Kind is
-                  when Delimiter =>
-                     if Lw = "+" or else Lw = "-" then
-                        if Binary then
-                           Add (Arithmetic_Operator, K, K,
-                                (if Lw = "+" then "-" else "+"));
-                        else
-                           Add (Unary_Operator, K, K,
-                                (if Lw = "+" then "-" else "+"));
-                        end if;
-                     elsif Lw = "*" and then Binary then
-                        Add (Arithmetic_Operator, K, K, "/");
-                     elsif Lw = "/" and then Binary then
-                        Add (Arithmetic_Operator, K, K, "*");
-                     elsif Lw = "**" then
-                        Add (Arithmetic_Operator, K, K, "*");
-                     --  A relation splits its inputs in three: A < B, A =
-                     --  B and A > B.  Each mutant differs from it in one
-                     --  of them only, so killing all three takes a test
-                     --  that checks the result in each (the sufficient
-                     --  set of Kaminski, Ammann and Offutt, 2011).  "=" and
-                     --  "/=" may compare records, which have no "<".
-                     elsif Lw = "=" then
-                        Add (Equality_Operator, K, K, "/=");
-                        Add_Constant (K, "False");
-                     elsif Lw = "/=" then
-                        Add (Equality_Operator, K, K, "=");
-                        Add_Constant (K, "True");
-                     elsif Lw = "<" then
-                        Add (Equality_Operator, K, K, "<=");
-                        declare
-                           L, R : Positive;
-                        begin
-                           Relation (K, L, R);
-                           if not (L = K - 1 and then Zero (L)) then
-                              Add (Equality_Operator, K, K, "/=");
-                           end if;
-                        end;
-                        Add_Constant (K, "False");
-                     elsif Lw = "<=" then
-                        Add (Equality_Operator, K, K, "<");
-                        Add (Equality_Operator, K, K, "=");
-                        Add_Constant (K, "True");
-                     elsif Lw = ">" then
-                        Add (Equality_Operator, K, K, ">=");
-                        declare
-                           L, R : Positive;
-                        begin
-                           Relation (K, L, R);
-                           if not (R = K + 1 and then Zero (R)) then
-                              Add (Equality_Operator, K, K, "/=");
-                           end if;
-                        end;
-                        Add_Constant (K, "False");
-                     elsif Lw = ">=" then
-                        Add (Equality_Operator, K, K, ">");
-                        Add (Equality_Operator, K, K, "=");
-                        Add_Constant (K, "True");
-                     end if;
-
-                  when Reserved_Word =>
-                     --  mod and rem differ only for operands of opposite
-                     --  signs, so swapping them is nearly always equivalent.
-                     if (Lw = "mod" or else Lw = "rem") and then Binary then
-                        Add (Arithmetic_Operator, K, K, "*");
-
-                     elsif Lw = "and" then
-                        --  Not the "and" of a list of interfaces ("new T
-                        --  and I with", "interface and I") outside aspects.
-                        if Options.Enabled (Conjunct_Deletion)
-                          and then In_Contract (K)
-                          and then (In_Aspect (K)
-                                    or else not
-                                      (Is_Kw (Seg_Start (K), "new")
-                                       or else Is_Kw (Seg_Start (K), "interface")
-                                       or else Is_Kw (Seg_Start (K), "limited")
-                                       or else Is_Kw (Seg_Start (K), "synchronized")
-                                       or else Is_Kw (Seg_Start (K), "task")
-                                       or else Is_Kw (Seg_Start (K), "protected")))
-                        then
-                           Add_Conjuncts (K);
-                        end if;
-                        if Is_Kw (K + 1, "then") then
-                           Add_Logical (K, 2, Same_Case (Txt (K), "or else"));
-                        elsif not (Is_Kw (Seg_Start (K), "new")
-                                   or else Is_Kw (Seg_Start (K), "interface")
-                                   or else Is_Kw (Seg_Start (K), "limited")
-                                   or else Is_Kw (Seg_Start (K), "synchronized")
-                                   or else Is_Kw (Seg_Start (K), "task")
-                                   or else Is_Kw (Seg_Start (K), "protected"))
-                        then
-                           Add_Logical (K, 1, Same_Case (Txt (K), "or"));
-                        end if;
-
-                     elsif Lw = "or" and then not Is_Del (K - 1, ";") then
-                        if Is_Kw (K + 1, "else") then
-                           Add_Logical (K, 2, Same_Case (Txt (K), "and then"));
-                        else
-                           Add_Logical (K, 1, Same_Case (Txt (K), "and"));
-                        end if;
-
-                     elsif Lw = "xor" then
-                        Add_Logical (K, 1, Same_Case (Txt (K), "or"));
-
-                     elsif Lw = "not" then
-                        if Is_Kw (K + 1, "in") then
-                           if Is_Operand_End (K - 1) then
-                              Add (Membership_Operator, K, K + 1,
-                                   Same_Case (Txt (K + 1), "in"));
-                           end if;
-                        elsif not (Is_Kw (K + 1, "null")
-                                   or else Is_Kw (K + 1, "overriding"))
-                        then
-                           Add (Unary_Operator, K, K, "");
-                        end if;
-
-                     elsif Lw = "abs" then
-                        Add (Unary_Operator, K, K, "");
-
-                     --  The direction of a loop over a range ("for I in A ..
-                     --  B loop", "for I in X'Range loop") or over a subtype
-                     --  ("for I in Index loop").  Not over an iterator ("for
-                     --  C in V.Iterate", "for E of A"), which need not go
-                     --  backwards; a quantified expression or an aggregate is
-                     --  inside parentheses.
-                     elsif Lw = "for" and then Depth (K) = 0
-                       and then K + 3 <= N
-                       and then S (K + 1).Kind = Identifier
-                       and then Is_Kw (K + 2, "in")
-                     then
-                        declare
-                           J        : Positive := K + 3;
-                           Filter   : Natural := 0;
-                           --  The "when" of an iterator filter ("for I in
-                           --  Index when P (I) loop"), which is no part of
-                           --  the range.
-                           Discrete : Boolean := False;
-                        begin
-                           while J <= N
-                             and then not (Depth (J) = 0
-                                           and then (Is_Kw (J, "loop")
-                                                     or else Is_Del (J, ";")))
-                           loop
-                              if Depth (J) = 0 and then Filter = 0 then
-                                 if Is_Kw (J, "when") then
-                                    Filter := J;
-                                 elsif Is_Del (J, "..")
-                                   or else (Lower (Txt (J)) = "range"
-                                            and then Is_Del (J - 1, "'"))
-                                 then
-                                    Discrete := True;
-                                 end if;
-                              end if;
-                              J := J + 1;
-                           end loop;
-                           if J <= N and then Is_Kw (J, "loop") then
-                              if Is_Kw (K + 3, "reverse") then
-                                 Add (Loop_Direction, K + 2, K + 3,
-                                      Same_Case (Txt (K + 2), "in"));
-                              elsif Discrete
-                                or else ((if Filter > 0 then Filter else J)
-                                           = K + 4
-                                         and then S (K + 3).Kind = Identifier
-                                         and then Types.Contains
-                                                    (Lower (Txt (K + 3))))
-                              then
-                                 Add (Loop_Direction, K + 2, K + 2,
-                                      Same_Case (Txt (K + 2), "in reverse"));
-                              end if;
-                           end if;
-                        end;
-
-                     elsif Lw = "in" and then Binary
-                       and then not Is_Kw (K - 1, "not")
-                       and then not (Is_Kw (K - 2, "for")
-                                     or else Is_Kw (K - 2, "all")
-                                     or else Is_Kw (K - 2, "some"))
-                     then
-                        Add (Membership_Operator, K, K,
-                             Same_Case (Txt (K), "not in"));
-
-                     end if;
-
-                     --  Statement deletion: a raise statement, or a return
-                     --  statement without a value, except right before
-                     --  "exception" or an "end" (not of an if, loop, case or
-                     --  select), where it changes nothing in a body.  Not
-                     --  the whole branch of an if or elsif without an else:
-                     --  that is ConditionalExpression's condition -> False.
-                     --  Not an exit statement, which could make the loop run
-                     --  for ever (see exit when), nor a delay statement,
-                     --  whose only effect (time) tests and proof rarely
-                     --  observe.
-                     if Lw in "raise" | "return"
-                       and then Seg_Start (K) = K and then Depth (K) = 0
-                       and then not In_Aspect (K) and then K < N
-                     then
-                        declare
-                           J : Positive := K + 1;
-                        begin
-                           while J < N and then Seg_Start (J) = K
-                             and then not (Depth (J) = 0 and then Is_Del (J, ";"))
-                           loop
-                              J := J + 1;
-                           end loop;
-                           if Seg_Start (J) = K and then Is_Del (J, ";")
-                             and then not
-                               (Options.Enabled (Conditional_Expression)
-                                and then Is_Kw (K - 1, "then")
-                                and then Is_Kw (J + 1, "end")
-                                and then Is_Kw (J + 2, "if"))
-                             and then (Lw /= "return"
-                                       or else (J = K + 1
-                                                and then not
-                                                  (Is_Kw (J + 1, "exception")
-                                                   or else
-                                                     (Is_Kw (J + 1, "end")
-                                                      and then not
-                                                        (Is_Kw (J + 2, "if")
-                                                         or else Is_Kw (J + 2, "loop")
-                                                         or else Is_Kw (J + 2, "case")
-                                                         or else Is_Kw (J + 2, "select"))))))
-                           then
-                              Add (Statement_Deletion, K, J, "null;");
-                           end if;
-                        end;
-                     end if;
-
-                     --  Assertion deletion: an assertion pragma, which
-                     --  leaves nothing, or "null;" where the sequence of
-                     --  statements would be empty ("begin pragma Assert
-                     --  (X); end;").  Not "null;" anywhere: it would split
-                     --  a group of loop invariants, which GNAT rejects.
-                     if Lw = "pragma" and then Seg_Start (K) = K
-                       and then In_Assertion (K)
-                     then
-                        declare
-                           J : Positive := K + 1;
-                        begin
-                           while J < N and then not (Depth (J) = 0
-                                                     and then Is_Del (J, ";"))
-                           loop
-                              J := J + 1;
-                           end loop;
-                           if Is_Del (J, ";") then
-                              Add (Assertion_Deletion, K, J,
-                                   (if (Is_Kw (K - 1, "begin")
-                                        or else Is_Kw (K - 1, "loop")
-                                        or else Is_Kw (K - 1, "do")
-                                        or else Is_Kw (K - 1, "then")
-                                        or else Is_Kw (K - 1, "else")
-                                        or else Is_Kw (K - 1, "select")
-                                        or else Is_Del (K - 1, "=>"))
-                                      and then (Is_Kw (J + 1, "end")
-                                                or else Is_Kw (J + 1, "elsif")
-                                                or else Is_Kw (J + 1, "else")
-                                                or else Is_Kw (J + 1, "when")
-                                                or else Is_Kw (J + 1, "exception")
-                                                or else Is_Kw (J + 1, "or")
-                                                or else Is_Del (J + 1, "<<"))
-                                    then "null;" else ""));
-                           end if;
-                        end;
-                     end if;
-
-                     if (Lw = "if" and then not Is_Kw (K - 1, "end"))
-                       or else Lw = "elsif" or else Lw = "while"
-                       or else (Lw = "when"
-                                and then (Is_Kw (K - 1, "exit")
-                                          or else (S (K - 1).Kind = Identifier
-                                                   and then Is_Kw (K - 2, "exit"))))
-                     then
-                        --  Find the end of the condition at the same depth.
-                        declare
-                           J    : Positive := K + 1;
-                           Stop : Natural := 0;
-                        begin
-                           while J <= N and then Depth (J) >= Depth (K) loop
-                              if Depth (J) = Depth (K) then
-                                 if Lw = "while" then
-                                    exit when Is_Kw (J, "loop") or else Is_Del (J, ";");
-                                 elsif Lw = "when" then
-                                    exit when Is_Del (J, ";");
-                                 else
-                                    exit when (Is_Kw (J, "then")
-                                               and then not Is_Kw (J - 1, "and"))
-                                      or else Is_Del (J, ";");
-                                 end if;
-                              end if;
-                              J := J + 1;
-                           end loop;
-                           if J <= N and then J > K + 1
-                             and then Depth (J) = Depth (K)
-                             and then Is_Del (J, ";") = (Lw = "when")
-                           then
-                              Stop := J - 1;
-                           end if;
-                           if Stop > 0 then
-                              declare
-                                 Single : constant String :=
-                                   (if Stop = K + 1 then Lower (Txt (K + 1)) else "");
-                              begin
-                                 if Lw = "while" then
-                                    if Single /= "false" then
-                                       Add (Conditional_Expression, K + 1, Stop, "False");
-                                    end if;
-                                 elsif Lw = "when" then
-                                    if Single /= "true" then
-                                       Add (Conditional_Expression, K + 1, Stop, "True");
-                                    end if;
-                                 else
-                                    if Single /= "true" then
-                                       Add (Conditional_Expression, K + 1, Stop, "True");
-                                    end if;
-                                    if Single /= "false" then
-                                       Add (Conditional_Expression, K + 1, Stop, "False");
-                                    end if;
-                                 end if;
-                              end;
-                           end if;
-                        end;
-                     end if;
-
-                  when Identifier =>
-                     if (Lw = "true" or else Lw = "false")
-                       and then not Is_Del (K - 1, "'")
-                     then
-                        Add (Boolean_Literal, K, K,
-                             Same_Case (Txt (K),
-                                        (if Lw = "true" then "False" else "True")));
-                     end if;
-
-                     --  An attribute and its counterpart, which gives a
-                     --  value of the same type: the other bound, the other
-                     --  extreme, the other neighbour, the other rounding.
-                     --  Not in the subtype of a declaration, like the
-                     --  bounds of NumericLiteral (see Is_Declared_Bound).
-                     if Is_Del (K - 1, "'") then
-                        declare
-                           Other : constant String :=
-                             (if Lw = "first" then "Last"
-                              elsif Lw = "last" then "First"
-                              elsif Lw = "min" then "Max"
-                              elsif Lw = "max" then "Min"
-                              elsif Lw = "succ" then "Pred"
-                              elsif Lw = "pred" then "Succ"
-                              elsif Lw = "floor" then "Ceiling"
-                              elsif Lw = "ceiling" then "Floor"
-                              elsif Lw = "first_valid" then "Last_Valid"
-                              elsif Lw = "last_valid" then "First_Valid"
-                              else "");
-                        begin
-                           if Other /= "" and then not In_Declared_Subtype (K)
-                           then
-                              Add (Attribute_Swap, K, K,
-                                   Same_Case (Txt (K), Other));
-                           end if;
-                        end;
-                     end if;
-
-                     --  Statement deletion: a call or an assignment.
-                     if Seg_Start (K) = K and then Depth (K) = 0
-                       and then not In_Aspect (K)
-                       and then not Is_Del (K + 1, "'")
-                       and then not Is_Kw (K - 1, "is")
-                       and then not (Is_Kw (K - 1, "loop")
-                                     and then Is_Kw (K - 2, "end"))
-                     then
-                        declare
-                           J : Positive := K + 1;
-                           Is_Statement : Boolean := False;
-                        begin
-                           while J <= N and then Seg_Start (J) = K loop
-                              if Depth (J) = 0 then
-                                 exit when Is_Del (J, ":") or else Is_Del (J, ",");
-                                 if Is_Del (J, ";") then
-                                    Is_Statement := True;
-                                    exit;
-                                 end if;
-                                 exit when S (J).Kind = Reserved_Word
-                                   and then not Is_Kw (J, "all");
-                              end if;
-                              J := J + 1;
-                           end loop;
-                           if Is_Statement and then J <= N
-                             and then Is_Del (J, ";")
-                           then
-                              Add (Statement_Deletion, K, J, "null;");
-                           end if;
-                        end;
-                     end if;
-
-                  when Numeric_Literal =>
-                     declare
-                        R : constant String := Numeric_Mutation (Txt (K));
-                     begin
-                        if Is_Del (K - 1, "(") and then Is_Del (K - 3, "'") then
-                           null;
-                        elsif Is_Kw (K - 1, "digits") or else Is_Kw (K - 1, "delta") then
-                           null;
-                        elsif Is_Declared_Bound (K) then
-                           null;
-                        elsif R /= "" then
-                           Add (Numeric_Literal, K, K, R);
-                        end if;
-                     end;
-
-                  when String_Literal =>
-                     declare
-                        Content : constant String :=
-                          Lower (Source (T.First + 1 .. T.Last - 1));
-                        Is_Op   : Boolean := False;
-                     begin
-                        for Op of Operator_Symbols loop
-                           Is_Op := Is_Op or else Op.all = Content;
-                        end loop;
-                        if not Is_Op and then not Is_Kw (K - 1, "function")
-                          and then not Is_Kw (K - 1, "end")
-                          and then not Is_Del (K - 1, ".")
-                        then
-                           Add (String_Literal, K, K,
-                                (if Content = "" then """AdaMutant was here!"""
-                                 else """"""));
-                        end if;
-                     end;
-
-                  when Character_Literal | Comment =>
-                     null;
-               end case;
+               if not Child.Is_Null then
+                  Visit (Child, Inner (N, Child, C));
+               end if;
             end;
          end loop;
-      end;
-      return Result;
+      end Visit;
+   begin
+      Scan_Declarations (T, Ghosts, Types);
+      for Name of Standard_Discrete loop
+         Types.Include (Name.all);
+      end loop;
+      if not T.Root.Is_Null then
+         Visit (T.Root, (others => False));
+      end if;
+      Sorting.Sort (Found);
+      return Result : Mutation_Vectors.Vector do
+         for F of Found loop
+            Result.Append (F.Change);
+         end loop;
+      end return;
+   exception
+      --  A tree that Libadalang could not build as the walk expects.
+      when E : Langkit_Support.Errors.Precondition_Failure
+             | Langkit_Support.Errors.Property_Error
+             | Langkit_Support.Errors.Native_Exception =>
+         raise Lexical_Error with
+           "line 1: the syntax tree cannot be read ("
+           & Ada.Exceptions.Exception_Message (E) & ")";
    end Find;
 
    function Apply (Source : String; M : Mutation) return String is

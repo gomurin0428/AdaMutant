@@ -9,12 +9,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Alire 2.1 reads the index that has Libadalang 26 and GNAT 16.1.
       - uses: alire-project/setup-alire@v4
-      - name: Install GNAT, GPRbuild and GNATprove
+        with:
+          version: 2.1.1
+      # AdaMutant itself is built by Alire with Libadalang, which picks
+      # the compiler it supports.  The projects of the tests are built and
+      # proved with GNAT 16.1 and GNATprove 16.1 from the PATH.
+      - name: Build AdaMutant and its unit tests
+        run: |
+          alr -n build
+          alr -n exec -- gprbuild -p -q -P tests/unit/unit_tests.gpr
+      - name: Install GNAT, GPRbuild and GNATprove for the tests
         run: |
           alr -n toolchain --select gnat_native=16.1.0 gprbuild=26.0.1
           alr -n get gnatprove=16.1.0
-          echo "$(dirname $(find ~/.local/share/alire -name gnat -path '*/bin/*' -type f | head -1))" >> $GITHUB_PATH
-          echo "$(dirname $(find ~/.local/share/alire -name gprbuild -path '*/bin/*' -type f | head -1))" >> $GITHUB_PATH
+          echo "$(dirname $(find ~/.local/share/alire/toolchains -name gnat -path '*gnat_native_16.1.0*/bin/*' -type f | head -1))" >> $GITHUB_PATH
+          echo "$(dirname $(find ~/.local/share/alire/toolchains -name gprbuild -path '*/bin/*' -type f | head -1))" >> $GITHUB_PATH
           echo "$(find $PWD -maxdepth 3 -name bin -path '*gnatprove*' | head -1)" >> $GITHUB_PATH
-      - run: make test
+      - run: tests/unit/bin/unit_tests
+      - run: python3 tests/e2e/run_e2e.py

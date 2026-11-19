@@ -4,7 +4,7 @@
 
 Ada / SPARK 向けのミューテーションテストツールです。.NET の [Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/) と同じ考え方で、ソースに小さな変更（ミュータント）を自動で入れ、テストと GNATprove の証明がその変更を検出できるかを調べ、**ミューテーションスコア**を出します。
 
-- Ada 2022 までの字句解析器を内蔵（libadalang などの追加依存なし）
+- ミュータントを入れる場所は [Libadalang](https://github.com/AdaCore/libadalang) の構文木で探す（Ada 2022 まで。構文だけで、名前解決はしない）
 - **テストで検出できなかったミュータントを GNATprove の証明にかける**（SPARK 向け）。証明だけが検出したミュータントは、テストの穴の候補として一覧に出す
 - **ミュータントをまとめて 1 回でビルド**し、テストはどのミュータントを有効にするかを切り替えながら実行する（ミュータント・スキーマ）。ミュータントごとにビルドし直さないので速い
 - **テストが実行しないコードのミュータントは、テストを飛ばして証明にかける**。変更前のテストがどの場所を実行したかを記録して決める
@@ -76,18 +76,21 @@ Survived mutants:
 
 ## 必要なもの
 
-- GNAT（Ada 2022 対応）と GPRbuild（GNAT 16.1 と GPRbuild 26 で確認。GNAT 14 でもビルドできます）
+- [Alire](https://alire.ada.dev)。AdaMutant のビルドに使う [Libadalang](https://github.com/AdaCore/libadalang) 26 と、それが対応するコンパイラ（Libadalang 26 なら GNAT 15）を用意します。テストするプロジェクトのビルドと証明には、そのプロジェクトのコマンドが使うコンパイラを使います（GNAT 16.1 と GNATprove 16.1 で確認）
 - 証明に GNATprove（GNATprove 16.1 で確認）。`prove` のコマンドは必須です。GNATprove は SPARK のコード（`SPARK_Mode`）しか解析しないので、それ以外のコードのミュータントを証明が検出することはありません。SPARK のコードが 1 つもないと、GNATprove 16 は失敗で終わります。そのようなプロジェクトでは `prove = "exit 0"`（必ず通るコマンドで、GNATprove は要りません）と書きます（[examples/calculator](examples/calculator) がこの例です）
 - E2E テストを動かす場合は Python 3
 
 ## ビルド
 
 ```sh
-make build        # bin/adamutant ができる
+alr build         # Libadalang を含めて bin/adamutant ができる
+make build        # 同じものを、警告で止まるようにビルドする
 make test         # 単体テスト + examples を使った E2E テスト
 ```
 
-[Alire](https://alire.ada.dev) を使う場合は、`alr build` で同じ `bin/adamutant` ができ、コンパイラも Alire が用意します。Alire でのビルドは警告では止まりません（`ADAMUTANT_WARNINGS_AS_ERRORS=false`）。`make build` は警告で止まります。
+`alr build` は、Libadalang とその依存先、コンパイラを用意します。警告では止まりません（`ADAMUTANT_WARNINGS_AS_ERRORS=false`）。Makefile は、Alire の作業環境で gprbuild を実行し（`alr exec --`）、警告で止まります。Libadalang のプロジェクトがすでに `GPR_PROJECT_PATH` にあるときは、`make ALR_EXEC=` でそのまま実行します。Libadalang を静的にリンクするので、`bin/adamutant` はおよそ 125 MB になり、最初のビルドには 20 分ほどかかります。
+
+変異させるファイルは、Libadalang が構文解析できるコンパイル単位でなければなりません。構文エラーのあるファイル（gnatprep の入力や、Libadalang 26 が知らない GNAT の言語拡張 `return when`、`finally` など）があると、読めないファイルと同じく、AdaMutant はそこで止まります。
 
 ## 使い方
 

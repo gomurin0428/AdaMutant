@@ -148,7 +148,10 @@ procedure Unit_Tests is
               "bounds of renamed slices and labelled loops are mutated");
       Expect ("package body P is procedure Q is begin "
               & "Y := A mod B; Z := A rem B; end Q; end P;",
-              "ArithmeticOperator mod->*|ArithmeticOperator rem->*",
+              "StatementDeletion Y := A mod B;->null;"
+              & "|ArithmeticOperator mod->*"
+              & "|StatementDeletion Z := A rem B;->null;"
+              & "|ArithmeticOperator rem->*",
               "mod and rem become multiplication");
       Expect ("package P is procedure Q (X : Integer := 1; B : Boolean := "
               & "not True); function F (S : String := """") return T; end P;",
@@ -291,8 +294,9 @@ procedure Unit_Tests is
                  & "|EqualityOperator =->/=|EqualityOperator A = B->False",
                  "relational operators: negated loop conditions", O);
          --  An entry barrier never gets False; "/=" is not made against 0.
-         Expect ("protected body P is entry E when Count > 1 is begin null;"
-                 & " end E; end P; X := 0 < Y; Z := Y > 0;",
+         Expect ("procedure Q is protected body P is entry E when Count > 1"
+                 & " is begin null; end E; end P; begin X := 0 < Y;"
+                 & " Z := Y > 0; end Q;",
                  "EqualityOperator >->>=|EqualityOperator >->/="
                  & "|EqualityOperator <-><=|EqualityOperator 0 < Y->False"
                  & "|EqualityOperator >->>=|EqualityOperator Y > 0->False",
@@ -411,13 +415,13 @@ procedure Unit_Tests is
               & "   L : constant Natural := A'Last;" & LF
               & "   subtype R is Integer range T'First .. T'Last;" & LF
               & "   type V is array (T'First .. T'Last) of R;" & LF
+              & "   for X'Size use 32;" & LF
               & "begin" & LF
               & "   for I in A'First .. A'Last loop" & LF
               & "      X := Integer'Max (X, T'Succ (I)) + A'Length;" & LF
               & "   end loop;" & LF
               & "   Y := Float'FLOOR (Z) + Float'ceiling (Z);" & LF
               & "   V := Even'First_Valid + Even'First_Bit;" & LF
-              & "   for X'Size use 32;" & LF
               & "end P;",
               "AttributeSwap Last->First|AttributeSwap First->Last"
               & "|AttributeSwap Last->First|AttributeSwap Max->Min"
@@ -461,6 +465,7 @@ procedure Unit_Tests is
       Loops : constant String :=
         "procedure P is" & LF
         & "   subtype Index is Positive range 1 .. 9;" & LF
+        & "   for T'Size use 8;" & LF
         & "begin" & LF
         & "   for I in 1 .. N loop X := X + I; end loop;" & LF
         & "   Outer : for J in reverse A'Range loop null; end loop;" & LF
@@ -479,7 +484,6 @@ procedure Unit_Tests is
         & "   for E of A loop null; end loop;" & LF
         & "   X := (for all I in 1 .. N => A (I) > 0);" & LF
         & "   Y := [for I in 1 .. 3 => I];" & LF
-        & "   for T'Size use 8;" & LF
         & "end P;";
    begin
       O.Enabled := [others => False];
@@ -558,9 +562,23 @@ procedure Unit_Tests is
                  "statement deletion of guard clauses without"
                  & " ConditionalExpression", O);
       end;
-      --  A raise or return at the very end of a file.
-      Expect ("procedure P is begin raise", "",
-              "statement deletion: raise at the end of a file", O);
+      --  Text that does not parse, such as a file that ends in the
+      --  middle of a statement.
+      begin
+         declare
+            Found : constant Mutation_Vectors.Vector :=
+              Find ("procedure P is begin raise", O);
+         begin
+            Check (Found.Is_Empty and then False,
+                   "a file that ends in a statement does not parse");
+         end;
+      exception
+         when E : AdaMutant.Lexer.Lexical_Error =>
+            Check (Ada.Strings.Fixed.Head
+                     (Ada.Exceptions.Exception_Message (E), 8) = "line 1: ",
+                   "a file that ends in a statement does not parse",
+                   Ada.Exceptions.Exception_Message (E));
+      end;
    end Test_Deletions;
 
    procedure Test_Contract_Aspects is
@@ -867,6 +885,76 @@ procedure Unit_Tests is
                  "NumericLiteral 1->0", "enabled mutator set", O);
       end;
    end Test_Comments;
+
+   --  Text that the syntax tree reads apart from the lexer.
+   procedure Test_Syntax_Tree is
+      BOM     : constant String :=
+        Character'Val (16#EF#) & Character'Val (16#BB#)
+        & Character'Val (16#BF#);
+      E_Acute : constant String :=
+        Character'Val (16#C3#) & Character'Val (16#A9#);
+      Cafe    : constant String := "Caf" & E_Acute;
+   begin
+      --  A byte order mark, and UTF-8 in an identifier and a character
+      --  literal: the offsets are bytes all the same.
+      Expect (BOM & "procedure P is begin " & Cafe & " := " & Cafe
+              & " + 1; if C = '" & E_Acute & "' then null; end if; end P;",
+              "StatementDeletion " & Cafe & " := " & Cafe & " + 1;->null;"
+              & "|ArithmeticOperator +->-|NumericLiteral 1->0"
+              & "|ConditionalExpression C = '" & E_Acute & "'->True"
+              & "|ConditionalExpression C = '" & E_Acute & "'->False"
+              & "|EqualityOperator =->/=",
+              "syntax tree: byte order mark and UTF-8");
+      --  Libadalang reads '["' as the brackets notation of GNAT.
+      Expect ("procedure P is begin X := [""a"", ""b""]; end P;",
+              "StatementDeletion X := [""a"", ""b""];->null;"
+              & "|StringLiteral ""a""->""""|StringLiteral ""b""->""""",
+              "syntax tree: a bracket aggregate of strings");
+      --  The message of a raise statement is an expression, not an
+      --  aspect.
+      Expect ("procedure P is begin raise E with ""bad""; end P;",
+              "StatementDeletion raise E with ""bad"";->null;"
+              & "|StringLiteral ""bad""->""""",
+              "syntax tree: the message of a raise statement");
+      --  GNAT's brackets notation in an identifier parses as it is.
+      Expect ("procedure [""03C0""] is begin X := 1; end [""03C0""];",
+              "StatementDeletion X := 1;->null;|NumericLiteral 1->0",
+              "syntax tree: a bracket-encoded identifier");
+      --  Syntax errors after which Libadalang gives no diagnostic, only
+      --  incomplete nodes; and with Whole_Units, a file that is no
+      --  compilation unit.
+      declare
+         Whole : constant Scan_Options := (Whole_Units => True, others => <>);
+
+         function Raises (Source : String; Options : Scan_Options)
+           return Boolean is
+         begin
+            declare
+               Found : constant Mutation_Vectors.Vector :=
+                 Find (Source, Options);
+            begin
+               return Found.Is_Empty and then False;
+            end;
+         exception
+            when E : AdaMutant.Lexer.Lexical_Error =>
+               return Ada.Exceptions.Exception_Message (E)'Length > 5
+                 and then Ada.Exceptions.Exception_Message (E)
+                            (Ada.Exceptions.Exception_Message (E)'First
+                             .. Ada.Exceptions.Exception_Message (E)'First + 4)
+                          = "line ";
+         end Raises;
+      begin
+         Check (Raises ("procedure P is begin" & LF & "X := (1 + ;" & LF
+                        & "end P;", (others => <>))
+                and then Raises ("procedure P is begin X := (A and then ;"
+                                 & " end P;", Whole),
+                "syntax tree: incomplete syntax raises Lexical_Error");
+         Check (Raises ("package body P is end P;" & LF
+                        & "Y : Integer := 2;", Whole)
+                and then not Raises ("Y : Integer := 2;", (others => <>)),
+                "syntax tree: a file must be a compilation unit");
+      end;
+   end Test_Syntax_Tree;
 
    procedure Test_Ghost_Names is
       Names : constant Name_Sets.Set := Ghost_Names
@@ -2583,6 +2671,7 @@ begin
    Test_Conditions;
    Test_Skipped;
    Test_Comments;
+   Test_Syntax_Tree;
    Test_Assertions_Check;
    Test_Contract_Aspects;
    Test_Weakening;

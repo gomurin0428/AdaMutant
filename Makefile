@@ -1,15 +1,22 @@
 GPRBUILD ?= gprbuild
 PYTHON ?= python3
+# Libadalang and its dependencies come from Alire: gprbuild runs in the
+# environment of the Alire workspace.  With the projects already on
+# GPR_PROJECT_PATH, run "make ALR_EXEC=".
+ALR_EXEC ?= alr exec --
+# Alire sets ADAMUTANT_WARNINGS_AS_ERRORS=false for builds from its index;
+# here warnings stop the build.
+STRICT = -XADAMUTANT_WARNINGS_AS_ERRORS=true
 
 .PHONY: all build test unit e2e clean
 
 all: build
 
 build:
-	$(GPRBUILD) -p -q -P adamutant.gpr
+	$(ALR_EXEC) $(GPRBUILD) -p -q -P adamutant.gpr $(STRICT)
 
 unit:
-	$(GPRBUILD) -p -q -P tests/unit/unit_tests.gpr
+	$(ALR_EXEC) $(GPRBUILD) -p -q -P tests/unit/unit_tests.gpr $(STRICT)
 	tests/unit/bin/unit_tests
 
 e2e: build
