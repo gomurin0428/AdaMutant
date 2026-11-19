@@ -1289,18 +1289,37 @@ package body AdaMutant.Mutators is
             --  "<": they are only changed so when name resolution tells
             --  that the operands are scalars.  Their negation, which
             --  differs from them in two regions, is subsumed then.
+            --  Against 0, a value that is never negative makes one of them
+            --  the relation itself: "X <= 0" is "X = 0", "X > 0" is "X /=
+            --  0" (see Never_Negative).
             when Ada_Op_Eq =>
                if Mutable (C) and then Operands (B) = Scalar then
-                  Swap (Equality_Operator, "<=");
-                  Swap (Equality_Operator, ">=");
+                  if not (Zero (B.F_Right.As_Ada_Node)
+                          and then Never_Negative (B.F_Left))
+                  then
+                     Swap (Equality_Operator, "<=");
+                  end if;
+                  if not (Zero (B.F_Left.As_Ada_Node)
+                          and then Never_Negative (B.F_Right))
+                  then
+                     Swap (Equality_Operator, ">=");
+                  end if;
                else
                   Swap (Equality_Operator, "/=");
                end if;
                Add_Constant (B, "False", C);
             when Ada_Op_Neq =>
                if Mutable (C) and then Operands (B) = Scalar then
-                  Swap (Equality_Operator, "<");
-                  Swap (Equality_Operator, ">");
+                  if not (Zero (B.F_Left.As_Ada_Node)
+                          and then Never_Negative (B.F_Right))
+                  then
+                     Swap (Equality_Operator, "<");
+                  end if;
+                  if not (Zero (B.F_Right.As_Ada_Node)
+                          and then Never_Negative (B.F_Left))
+                  then
+                     Swap (Equality_Operator, ">");
+                  end if;
                else
                   Swap (Equality_Operator, "=");
                end if;

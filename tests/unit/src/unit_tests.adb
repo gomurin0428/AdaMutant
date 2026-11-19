@@ -344,15 +344,18 @@ procedure Unit_Tests is
               & "|EqualityOperator 0 < I->False",
               "operand types: Integer", O);
       --  A Natural, a subtype from 0, a modular type, Length and a sum of
-      --  such values are never negative: no "/=" against 0.  N - 1, an
-      --  Integer, may be.  Two values of universal types (S'Length and 0)
-      --  tell nothing: "=" and "/=" are as for unknown types.
+      --  such values are never negative: no "/=" against 0, nor "<=" for
+      --  "N = 0" (">=" for "0 = N"), ">" for "M /= 0" ("<" for "0 /= M"),
+      --  which would be the relation itself.  N - 1, an Integer, may be
+      --  negative.  Two values of universal types (S'Length and 0) tell
+      --  nothing: "=" and "/=" are as for unknown types.
       Expect ("procedure P (N : Natural; S : String; B : out Boolean) is"
               & " type Byte is mod 256; subtype Digit is Integer range 0 .. 9;"
               & " M : Byte := 1; D : Digit := 1; begin"
               & " B := N > 0; B := 0 < N; B := M > 0; B := D > 0;"
               & " B := S'Length > 0; B := N + D * 2 > 0; B := N - 1 > 0;"
-              & " B := N = 0; B := M /= 0; B := S'Length = 0; end P;",
+              & " B := N = 0; B := M /= 0; B := S'Length = 0;"
+              & " B := 0 = N; B := 0 /= M; end P;",
               "EqualityOperator >->>=|EqualityOperator N > 0->False"
               & "|EqualityOperator <-><=|EqualityOperator 0 < N->False"
               & "|EqualityOperator >->>=|EqualityOperator M > 0->False"
@@ -362,11 +365,11 @@ procedure Unit_Tests is
               & "|EqualityOperator N + D * 2 > 0->False"
               & "|EqualityOperator >->>=|EqualityOperator >->/="
               & "|EqualityOperator N - 1 > 0->False"
-              & "|EqualityOperator =-><=|EqualityOperator =->>="
-              & "|EqualityOperator N = 0->False"
-              & "|EqualityOperator /=-><|EqualityOperator /=->>"
-              & "|EqualityOperator M /= 0->True"
-              & "|EqualityOperator =->/=|EqualityOperator S'Length = 0->False",
+              & "|EqualityOperator =->>=|EqualityOperator N = 0->False"
+              & "|EqualityOperator /=-><|EqualityOperator M /= 0->True"
+              & "|EqualityOperator =->/=|EqualityOperator S'Length = 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator 0 = N->False"
+              & "|EqualityOperator /=->>|EqualityOperator 0 /= M->True",
               "operand types: values that are never negative", O);
       --  An enumeration and a Float are scalars ("F > 0.0" gets "/=" as
       --  before: 0.0 is not the integer 0).  Records, arrays, access
