@@ -1,0 +1,26 @@
+--  SPARKlib, which comes with GNATprove: a copy of the template
+--  sparklib.gpr.templ in the directory lib/gnat of GNATprove, with the
+--  objects of SPARKlib in obj/sparklib.  The project that it extends,
+--  sparklib_internal.gpr, is in that directory too: GNATprove finds it by
+--  itself, gprbuild needs the directory on its project path (-aP or
+--  GPR_PROJECT_PATH, see adamutant.toml).
+
+project SPARKlib extends "sparklib_internal" is
+
+   for Object_Dir use "obj/sparklib";
+
+   for Source_Dirs use SPARKlib_Internal'Source_Dirs;
+
+   for Excluded_Source_Files use SPARKlib_Internal'Excluded_Source_Files;
+
+   --  As in the sparklib.gpr of GNATprove: SPARKlib is proved already, so
+   --  GNATprove does not analyse it again.
+   GPR_Tool := external ("GPR_TOOL", "");
+   case GPR_Tool is
+      when "gnatprove" =>
+         for Externally_Built use "True";
+      when others =>
+         null;
+   end case;
+
+end SPARKlib;

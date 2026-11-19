@@ -114,6 +114,16 @@ EXAMPLES = {
     "spark_counter": {"exit": 0, "killed_by": "proof",
                       "proof_checks": ["postcondition", "range check"],
                       "output": "Mutants killed by the proof, by the check that fails"},
+    # Contracts on a Ghost model (sequences of SPARKlib, which comes with
+    # GNATprove): the test never makes the ring buffer wrap around, and
+    # the proof detects the mutants there, by an index or range check or
+    # by a postcondition on the model.  The deleted loop invariants of
+    # the model fail its refined postcondition.
+    "spark_model": {"exit": 0, "killed_by": "proof",
+                    "proof_checks": ["postcondition", "refined postcondition",
+                                     "array index check", "range check",
+                                     "precondition"],
+                    "output": "Detected only by the proof (candidates for a missing test)"},
     # A mutant that does not compile ("X * 2" with a Float X) must not stop
     # the build that contains all mutants: it becomes a CompileError and the
     # others are tested.  The test here checks little, so the score is
