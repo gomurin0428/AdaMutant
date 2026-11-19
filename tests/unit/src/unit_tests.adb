@@ -101,31 +101,45 @@ procedure Unit_Tests is
       Expect ("package P is X : Integer := 2 ** 3; end P;",
               "NumericLiteral 2->3|ArithmeticOperator **->*|NumericLiteral 3->4",
               "exponent and literals");
-      Expect ("package P is B : Boolean := X and then Y; end P;",
-              "LogicalOperator and then->or else", "short circuit");
-      Expect ("package P is B : Boolean := X and then Y and then Z; end P;",
-              "LogicalOperator X and then Y->(X or else Y)"
-              & "|LogicalOperator X and then Y and then Z->"
-              & "((X and then Y) or else Z)",
-              "short circuit chain is parenthesised");
+      Expect ("package P is X, Y : Boolean := F;"
+              & " B : Boolean := X and then Y; end P;",
+              "LogicalOperator X and then Y->Y|LogicalOperator X and then Y->X"
+              & "|LogicalOperator X and then Y->(X) = (Y)"
+              & "|LogicalOperator X and then Y->False", "short circuit");
+      Expect ("package P is X, Y, Z : Boolean := F;"
+              & " B : Boolean := X and then Y and then Z; end P;",
+              "LogicalOperator X and then Y and then Z->Y and then Z"
+              & "|LogicalOperator X and then Y and then Z->X and then Z"
+              & "|LogicalOperator X and then Y and then Z->X and then Y"
+              & "|LogicalOperator X and then Y and then Z->False",
+              "a chain loses each operand in turn");
       Expect ("package body P is procedure Q is begin "
               & "if A or else B or else C not in 1 | 3 then null; end if; "
               & "end Q; end P;",
               "ConditionalExpression A or else B or else C not in 1 | 3->True"
               & "|ConditionalExpression A or else B or else C not in 1 | 3->False"
-              & "|LogicalOperator A or else B->(A and then B)"
               & "|LogicalOperator A or else B or else C not in 1 | 3->"
-              & "((A or else B) and then C not in 1 | 3)"
+              & "B or else C not in 1 | 3"
+              & "|LogicalOperator A or else B or else C not in 1 | 3->"
+              & "A or else C not in 1 | 3"
+              & "|LogicalOperator A or else B or else C not in 1 | 3->"
+              & "A or else B"
+
               & "|MembershipOperator not in->in|NumericLiteral 1->0"
               & "|NumericLiteral 3->4",
               "membership choices stay in the operand of a logical chain");
       Expect ("package P is C : constant T := "
               & "(X and then Y and then Z | W => 1, others => 0); end P;",
               "LogicalOperator X and then Y->(X or else Y)"
+              & "|LogicalOperator X and then Y and then Z->Y and then Z"
+              & "|LogicalOperator X and then Y and then Z->X and then Z"
+              & "|LogicalOperator X and then Y and then Z->X and then Y"
               & "|LogicalOperator X and then Y and then Z->"
               & "((X and then Y) or else Z)"
               & "|NumericLiteral 1->0|NumericLiteral 0->1",
-              "other choice bars still end a logical chain");
+              "other choice bars still end a logical chain; of a type not"
+              & " known, a short-circuit chain gets the deletions and the"
+              & " swap");
       Expect ("package P is procedure Q (X : in out Integer) with "
               & "Pre => (X > 0 and then X < 9), "
               & "Post => X > 1 and then (if X = 2 then X'Old = 1); end P;",
@@ -169,11 +183,52 @@ procedure Unit_Tests is
               "StatementDeletion Y := X + 2;->null;|ArithmeticOperator +->-"
               & "|NumericLiteral 2->3",
               "body statements after a default are still mutated");
-      Expect ("package P is B : Boolean := F (A or B, (C or D) or E); end P;",
-              "LogicalOperator or->and"
+      Expect ("package P is A, B, C, D, E : Boolean := True;"
+              & " X : Boolean := A or B; Y : Boolean := (C or D) or E; end P;",
+              "BooleanLiteral True->False"
+              & "|LogicalOperator A or B->B|LogicalOperator A or B->A"
+              & "|LogicalOperator A or B->(A) /= (B)"
+              & "|LogicalOperator A or B->True"
+              & "|LogicalOperator C or D->D|LogicalOperator C or D->C"
+              & "|LogicalOperator C or D->(C) /= (D)"
+              & "|LogicalOperator (C or D) or E->E"
+              & "|LogicalOperator (C or D) or E->(C or D)"
+              & "|LogicalOperator (C or D) or E->((C or D)) /= (E)"
+              & "|LogicalOperator (C or D) or E->True",
+              "chain only spans operators at the same depth;"
+              & " True for (C or D) is the True of the outer chain");
+      --  "and" and "or" on modular values and on arrays of Booleans are
+      --  swapped: a constant would not compile.
+      Expect ("package P is type M is mod 256; A, B : M := 1;"
+              & " X : M := A and B;"
+              & " type Bits is array (1 .. 4) of Boolean with Pack;"
+              & " P, Q : Bits := (others => True); R : Bits := P or Q; end P;",
+              "NumericLiteral 256->257|NumericLiteral 1->0"
+              & "|LogicalOperator and->or"
+              & "|BooleanLiteral True->False|LogicalOperator or->and",
+              "logical operators on bits and arrays are swapped");
+      --  A type derived from Boolean: its literals and its "=" are not
+      --  those of Standard (and may not be visible), so its chains get
+      --  the deletions and the swap, without a constant or "=".
+      Expect ("package P is type My_Bool is new Boolean;"
+              & " A, B, C : My_Bool := My_Bool'First;"
+              & " X : My_Bool := A or B; Y : Boolean := X > A and C = A;"
+              & " Z : My_Bool := A and B and C; end P;",
+              "AttributeSwap First->Last"
               & "|LogicalOperator or->and"
-              & "|LogicalOperator or->and",
-              "chain only spans operators at the same depth");
+              & "|LogicalOperator A or B->B|LogicalOperator A or B->A"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|LogicalOperator X > A and C = A->C = A"
+              & "|LogicalOperator X > A and C = A->X > A"
+              & "|LogicalOperator X > A and C = A->(X > A) = (C = A)"
+              & "|LogicalOperator X > A and C = A->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|LogicalOperator A and B->(A or B)"
+              & "|LogicalOperator A and B and C->B and C"
+              & "|LogicalOperator A and B and C->A and C"
+              & "|LogicalOperator A and B and C->A and B"
+              & "|LogicalOperator A and B and C->((A and B) or C)",
+              "logical operators: a type derived from Boolean");
       Expect ("package P is B : Boolean := X not in 1 .. 3; end P;",
               "MembershipOperator not in->in|NumericLiteral 1->0|NumericLiteral 3->4",
               "not in");
@@ -315,6 +370,49 @@ procedure Unit_Tests is
                  & "|ConjunctDeletion X >= 1 and X <= 9->X >= 1"
                  & "|EqualityOperator <=-><|EqualityOperator <=->=",
                  "relational operators: no True beside ConjunctDeletion", O);
+      end;
+      --  Logical operators and the relations in them.  The operands of a
+      --  chain are left out in turn, and the chain becomes a constant
+      --  once; the relations in it get no constant ("True and B" is B,
+      --  "False and B" is the constant of the chain).  In a contract,
+      --  ConjunctDeletion leaves out the operands of "and"; those of "or"
+      --  are LogicalOperator's.  A while loop gets no constant
+      --  (ConditionalExpression makes it, or the loop would not end).
+      declare
+         O : Scan_Options := (Mutate_Contracts => True, others => <>);
+      begin
+         O.Enabled := [others => False];
+         O.Enabled (Equality_Operator) := True;
+         O.Enabled (Logical_Operator) := True;
+         O.Enabled (Conjunct_Deletion) := True;
+         Expect ("procedure P (X, Y : Integer; B : out Boolean)"
+                 & " with Pre => X > 0 and then Y > 0,"
+                 & " Post => B or else X = Y is"
+                 & " begin B := X > 0 and then Y > 0; end P;",
+                 "EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|ConjunctDeletion X > 0 and then Y > 0->Y > 0"
+                 & "|ConjunctDeletion X > 0 and then Y > 0->X > 0"
+                 & "|LogicalOperator X > 0 and then Y > 0->False"
+                 & "|EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|LogicalOperator B or else X = Y->X = Y"
+                 & "|LogicalOperator B or else X = Y->B"
+                 & "|LogicalOperator B or else X = Y->True"
+                 & "|EqualityOperator =-><=|EqualityOperator =->>="
+                 & "|EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|LogicalOperator X > 0 and then Y > 0->Y > 0"
+                 & "|LogicalOperator X > 0 and then Y > 0->X > 0"
+                 & "|LogicalOperator X > 0 and then Y > 0->(X > 0) = (Y > 0)"
+                 & "|LogicalOperator X > 0 and then Y > 0->False"
+                 & "|EqualityOperator >->>=|EqualityOperator >->/=",
+                 "logical operators: relations in chains, contracts", O);
+         O.Enabled (Conditional_Expression) := True;
+         Expect ("procedure P is A, B : Boolean := F; begin"
+                 & " while A and then B loop null; end loop; end P;",
+                 "ConditionalExpression A and then B->False"
+                 & "|LogicalOperator A and then B->B"
+                 & "|LogicalOperator A and then B->A"
+                 & "|LogicalOperator A and then B->(A) = (B)",
+                 "logical operators: no constant for a while", O);
       end;
       Expect ("procedure P is begin exit when Done; end P;",
               "ConditionalExpression Done->True",
@@ -953,6 +1051,13 @@ procedure Unit_Tests is
               & "|AssertionDeletion pragma Assume (Z > 0);->null;"
               & "|AssertionDeletion pragma Assert_And_Cut (Z > 0);->",
               "contract weakening", O);
+      --  On any type, also when name resolution does not tell it (Valid
+      --  and Ready are declared elsewhere, and names are not resolved
+      --  with ConjunctDeletion alone).
+      Expect ("procedure R (X : T) with Pre => Valid (X) and Ready (X);",
+              "ConjunctDeletion Valid (X) and Ready (X)->Ready (X)"
+              & "|ConjunctDeletion Valid (X) and Ready (X)->Valid (X)",
+              "contract weakening: operands of unknown types", O);
       --  The line breaks of what is left out stay.
       Expect ("procedure R with" & LF
               & "  Post => A" & LF
