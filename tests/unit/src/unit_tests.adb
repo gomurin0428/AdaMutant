@@ -484,8 +484,9 @@ procedure Unit_Tests is
               & "|EqualityOperator N + N > 0->False",
               "operand types: declared abs and +", O);
       --  UnaryOperator: "abs X" -> "X" is equivalent when X is never
-      --  negative, and is not made then; it is for an Integer, for N - 1
-      --  and for an "abs" that the program declares.
+      --  negative, and is not made then; it is for an Integer, for N - 1,
+      --  for an "abs" that the program declares and for an "out"
+      --  parameter, which may hold an unchecked value.
       declare
          U : Scan_Options;
       begin
@@ -495,10 +496,12 @@ procedure Unit_Tests is
                  & " type Byte is mod 256; M : Byte := 1;"
                  & " type Temp is new Integer;"
                  & " function ""abs"" (X : Temp) return Temp is (0 - X);"
-                 & " T : Temp range 0 .. 10 := 5; C : Temp; begin"
+                 & " T : Temp range 0 .. 10 := 5; C : Temp;"
+                 & " procedure Q (X : out Natural; R : out Integer) is"
+                 & " begin R := abs X; end Q; begin"
                  & " B := abs N; B := abs I; B := abs (N - 1);"
                  & " B := Integer (abs M); B := abs 3; C := abs T; end P;",
-                 "UnaryOperator abs->|UnaryOperator abs->"
+                 "UnaryOperator abs->|UnaryOperator abs->|UnaryOperator abs->"
                  & "|UnaryOperator abs->",
                  "unary operators: abs of values that are never negative", U);
       end;

@@ -60,8 +60,9 @@ package AdaMutant.Mutators is
       Whole_Units      : Boolean := False;
       --  The absolute paths of the Ada sources of the project.  Find
       --  resolves the names of Source over them, as far as Libadalang can,
-      --  to know the types of the operands of a relation.  Without them,
-      --  only the declarations of Source and of Standard are known.
+      --  to know the types and ranges of the operands of relations, of
+      --  logical operators and of "abs".  Without them, only the
+      --  declarations of Source and of Standard are known.
       Project_Files    : Name_Sets.Set;
    end record;
 
@@ -89,8 +90,9 @@ package AdaMutant.Mutators is
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector;
    --  Works on the syntax tree of Libadalang.  Name resolution only gives
-   --  the types of the operands of relations (see Project_Files), and
-   --  where it fails, the mutants are those of names of unknown types.
+   --  the types of the operands of relations, logical operators and "abs"
+   --  (see Project_Files), and where it fails, the mutants are those of
+   --  names of unknown types.
    --  Propagates AdaMutant.Lexer.Lexical_Error ("line N: ...") when
    --  Source does not parse.  Not for two tasks at a time: the unit
    --  providers of the last Project_Files are kept for the next call.
