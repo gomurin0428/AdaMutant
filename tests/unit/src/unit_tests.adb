@@ -103,12 +103,16 @@ procedure Unit_Tests is
               "exponent and literals");
       Expect ("package P is B : Boolean := X and then Y; end P;",
               "LogicalOperator X and then Y->Y|LogicalOperator X and then Y->X"
+              & "|LogicalOperator X and then Y->(X) = (Y)"
               & "|LogicalOperator X and then Y->False", "short circuit");
       Expect ("package P is B : Boolean := X and then Y and then Z; end P;",
               "LogicalOperator X and then Y and then Z->Y and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Y"
-              & "|LogicalOperator X and then Y and then Z->False",
+              & "|LogicalOperator X and then Y->(X) = (Y)"
+              & "|LogicalOperator X and then Y and then Z->False"
+              & "|LogicalOperator X and then Y and then Z->"
+              & "(X and then Y) = (Z)",
               "a chain loses each operand in turn");
       Expect ("package body P is procedure Q is begin "
               & "if A or else B or else C not in 1 | 3 then null; end if; "
@@ -121,6 +125,9 @@ procedure Unit_Tests is
               & "A or else C not in 1 | 3"
               & "|LogicalOperator A or else B or else C not in 1 | 3->"
               & "A or else B"
+              & "|LogicalOperator A or else B->(A) /= (B)"
+              & "|LogicalOperator A or else B or else C not in 1 | 3->"
+              & "(A or else B) /= (C not in 1 | 3)"
               & "|MembershipOperator not in->in|NumericLiteral 1->0"
               & "|NumericLiteral 3->4",
               "membership choices stay in the operand of a logical chain");
@@ -129,7 +136,10 @@ procedure Unit_Tests is
               "LogicalOperator X and then Y and then Z->Y and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Z"
               & "|LogicalOperator X and then Y and then Z->X and then Y"
+              & "|LogicalOperator X and then Y->(X) = (Y)"
               & "|LogicalOperator X and then Y and then Z->False"
+              & "|LogicalOperator X and then Y and then Z->"
+              & "(X and then Y) = (Z)"
               & "|NumericLiteral 1->0|NumericLiteral 0->1",
               "other choice bars still end a logical chain");
       Expect ("package P is procedure Q (X : in out Integer) with "
@@ -175,15 +185,30 @@ procedure Unit_Tests is
               "StatementDeletion Y := X + 2;->null;|ArithmeticOperator +->-"
               & "|NumericLiteral 2->3",
               "body statements after a default are still mutated");
-      Expect ("package P is B : Boolean := F (A or B, (C or D) or E); end P;",
-              "LogicalOperator A or B->B|LogicalOperator A or B->A"
+      Expect ("package P is A, B, C, D, E : Boolean := True;"
+              & " X : Boolean := A or B; Y : Boolean := (C or D) or E; end P;",
+              "BooleanLiteral True->False"
+              & "|LogicalOperator A or B->B|LogicalOperator A or B->A"
+              & "|LogicalOperator A or B->(A) /= (B)"
               & "|LogicalOperator A or B->True"
               & "|LogicalOperator C or D->D|LogicalOperator C or D->C"
+              & "|LogicalOperator C or D->(C) /= (D)"
               & "|LogicalOperator (C or D) or E->E"
               & "|LogicalOperator (C or D) or E->(C or D)"
+              & "|LogicalOperator (C or D) or E->((C or D)) /= (E)"
               & "|LogicalOperator (C or D) or E->True",
               "chain only spans operators at the same depth;"
               & " True for (C or D) is the True of the outer chain");
+      --  "and" and "or" on modular values and on arrays of Booleans are
+      --  swapped: a constant would not compile.
+      Expect ("package P is type M is mod 256; A, B : M := 1;"
+              & " X : M := A and B;"
+              & " type Bits is array (1 .. 4) of Boolean with Pack;"
+              & " P, Q : Bits := (others => True); R : Bits := P or Q; end P;",
+              "NumericLiteral 256->257|NumericLiteral 1->0"
+              & "|LogicalOperator and->or"
+              & "|BooleanLiteral True->False|LogicalOperator or->and",
+              "logical operators on bits and arrays are swapped");
       Expect ("package P is B : Boolean := X not in 1 .. 3; end P;",
               "MembershipOperator not in->in|NumericLiteral 1->0|NumericLiteral 3->4",
               "not in");
@@ -347,15 +372,18 @@ procedure Unit_Tests is
                  "EqualityOperator >->>=|EqualityOperator >->/="
                  & "|ConjunctDeletion X > 0 and then Y > 0->Y > 0"
                  & "|ConjunctDeletion X > 0 and then Y > 0->X > 0"
+                 & "|LogicalOperator X > 0 and then Y > 0->(X > 0) = (Y > 0)"
                  & "|LogicalOperator X > 0 and then Y > 0->False"
                  & "|EqualityOperator >->>=|EqualityOperator >->/="
                  & "|LogicalOperator B or else X = Y->X = Y"
                  & "|LogicalOperator B or else X = Y->B"
+                 & "|LogicalOperator B or else X = Y->(B) /= (X = Y)"
                  & "|LogicalOperator B or else X = Y->True"
                  & "|EqualityOperator =-><=|EqualityOperator =->>="
                  & "|EqualityOperator >->>=|EqualityOperator >->/="
                  & "|LogicalOperator X > 0 and then Y > 0->Y > 0"
                  & "|LogicalOperator X > 0 and then Y > 0->X > 0"
+                 & "|LogicalOperator X > 0 and then Y > 0->(X > 0) = (Y > 0)"
                  & "|LogicalOperator X > 0 and then Y > 0->False"
                  & "|EqualityOperator >->>=|EqualityOperator >->/=",
                  "logical operators: relations in chains, contracts", O);
@@ -364,7 +392,8 @@ procedure Unit_Tests is
                  & " end loop; end P;",
                  "ConditionalExpression A and then B->False"
                  & "|LogicalOperator A and then B->B"
-                 & "|LogicalOperator A and then B->A",
+                 & "|LogicalOperator A and then B->A"
+                 & "|LogicalOperator A and then B->(A) = (B)",
                  "logical operators: no constant for a while", O);
       end;
       Expect ("procedure P is begin exit when Done; end P;",
