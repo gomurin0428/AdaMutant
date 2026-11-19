@@ -2926,10 +2926,12 @@ procedure Unit_Tests is
             & "p.adb:12:05: error: found type ""Float""" & LF
             & "/tmp/x/src/Q-R.ads:7:1: warning: unused" & LF
             & "C:\work\src\w.adb:3:4: (style) bad" & LF
+            & "p.adb:14:01: missing "";""" & LF
+            & "p.adb:15:02:  Info: inlined" & LF
             & "gprbuild: *** compilation phase failed" & LF
             & "time 12:30:15: nothing");
       begin
-         Check (Natural (D.Length) = 4, "diagnostics: count",
+         Check (Natural (D.Length) = 6, "diagnostics: count",
                 D.Length'Image);
          Check (To_String (D (1).File) = "p.adb" and then D (1).Line = 12
                 and then To_String (D (1).Text)
@@ -2939,6 +2941,12 @@ procedure Unit_Tests is
                 "diagnostics: path and case");
          Check (To_String (D (4).File) = "w.adb" and then D (4).Line = 3,
                 "diagnostics: Windows path");
+         --  Errors stop a build, warnings do not (unless -gnatwe).  Older
+         --  versions of GNAT write no word before an error.
+         Check (not Is_Warning (D (1)) and then Is_Warning (D (3))
+                and then Is_Warning (D (4)) and then not Is_Warning (D (5))
+                and then Is_Warning (D (6)),
+                "diagnostics: warnings and errors");
       end;
 
       Check (Main_Source

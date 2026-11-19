@@ -1,4 +1,6 @@
 with Ada.Characters.Handling;
+with Ada.Strings;
+with Ada.Strings.Fixed;
 with AdaMutant.Lexer; use AdaMutant.Lexer;
 
 package body AdaMutant.Schemata is
@@ -899,6 +901,40 @@ package body AdaMutant.Schemata is
       end loop;
       return Result;
    end Diagnostics;
+
+   ----------------
+   -- Is_Warning --
+   ----------------
+
+   function Is_Warning (D : Diagnostic) return Boolean is
+      Line   : constant String := To_String (D.Text);
+      Colons : Natural := 0;
+   begin
+      for K in Line'First + D.Name_First - 1 .. Line'Last loop
+         if Line (K) = ':' then
+            Colons := Colons + 1;
+            if Colons = 3 then
+               declare
+                  Rest : constant String :=
+                    Ada.Characters.Handling.To_Lower
+                      (Ada.Strings.Fixed.Trim
+                         (Line (K + 1 .. Line'Last), Ada.Strings.Left));
+
+                  function Starts_With (Prefix : String) return Boolean is
+                    (Rest'Length >= Prefix'Length
+                     and then Rest (Rest'First
+                                    .. Rest'First + Prefix'Length - 1)
+                              = Prefix);
+               begin
+                  return Starts_With ("warning:") or else Starts_With ("info:")
+                    or else Starts_With ("(style)")
+                    or else Starts_With ("(info)");
+               end;
+            end if;
+         end if;
+      end loop;
+      return False;
+   end Is_Warning;
 
    function Main_Source (Ali : String) return String is
       Is_Main : Boolean := False;

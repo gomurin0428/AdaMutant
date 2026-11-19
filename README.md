@@ -381,7 +381,7 @@ The following are not put together, and are built one at a time as before.
 - Files that contain tasks, protected types, `accept` or `select`; statements that have a name; the object declaration of an extended return
 - Expression functions with the aspect `Static`, whose expression must stay potentially static, which a `case` expression on the active mutant is not
 
-When the build that contains all the mutants has a compile error, AdaMutant finds which mutant the line of the error belongs to, marks that mutant as CompileError, and builds again with the rest. When the build fails at a place that is not a line of any mutant, AdaMutant exits with an error.
+When the build that contains all the mutants has a compile error, AdaMutant finds which mutant the line of the error belongs to, marks that mutant as CompileError, and builds again with the rest. A warning (`warning:`, `(style)`, `info:`) does not stop a build, so a mutant with a warning on its line stays in the build. Only when no line of a mutant has an error are the lines of warnings taken instead, for a project that treats warnings as errors (`-gnatwe`). When the build fails at a place that is not a line of any mutant, AdaMutant exits with an error.
 
 What it needs:
 

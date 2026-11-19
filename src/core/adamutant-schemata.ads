@@ -113,6 +113,12 @@ package AdaMutant.Schemata is
    --  The compiler messages ("file:line:column: text") in a build log.
    --  A line whose line number is 0 is not one.
 
+   function Is_Warning (D : Diagnostic) return Boolean;
+   --  D is a warning, a style message or an information: "warning:",
+   --  "(style)", "info:" or "(info)" after the column.  It does not stop
+   --  a build, unless warnings are errors (-gnatwe).  Any other message
+   --  ("error:", or no word with older versions of GNAT) is an error.
+
    function Main_Source (Ali : String) return String;
    --  The lower-case file name of the source of the main subprogram that
    --  the text of a GNAT ALI file describes, or "" when the ALI file is

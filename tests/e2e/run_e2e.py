@@ -100,6 +100,99 @@ NAMED_TESTS_TABLE = ("\n[tests]\n"
 # A prove command that proves nothing and passes.
 NO_PROOF = "prove = '{python} -c \"pass\"'\n"
 
+# A unit with a statement on a line that has a compiler warning
+# ("Count := Count"), and one with a mutant that does not compile
+# ("X * 2" for a Float X).
+UNWATCHED = {
+            "calculator_tests.gpr":
+                "project Calculator_Tests is\n"
+                "   for Source_Dirs use (\"src\", \"tests\");\n"
+                "   for Object_Dir use \"obj\";\n"
+                "   for Exec_Dir use \"bin\";\n"
+                "   for Main use (\"test_calculator.adb\");\n"
+                "   package Compiler is\n"
+                "      for Default_Switches (\"Ada\") use (\"-gnat2022\", \"-gnata\", \"-gnatwa\");\n"
+                "   end Compiler;\n"
+                "end Calculator_Tests;\n",
+            "src/powers.ads":
+                "package Powers is\n"
+                "   function Square (X : Float) return Float;\n"
+                "end Powers;\n",
+            "src/powers.adb":
+                "package body Powers is\n"
+                "   function Square (X : Float) return Float is\n"
+                "   begin\n"
+                "      return X ** 2;\n"
+                "   end Square;\n"
+                "end Powers;\n",
+            "src/b_spare.ads":
+                "package B_Spare is\n"
+                "   Count : Integer;\n"
+                "   procedure Touch;\n"
+                "end B_Spare;\n",
+            "src/b_spare.adb":
+                "package body B_Spare is\n"
+                "   procedure Touch is\n"
+                "   begin\n"
+                "      Count := Count;\n"
+                "   end Touch;\n"
+                "end B_Spare;\n",
+            "tests/test_calculator.adb":
+                "with Ada.Command_Line;\n"
+                "with B_Spare;\n"
+                "with Calculator; use Calculator;\n"
+                "with Powers;\n"
+                "procedure Test_Calculator is\n"
+                "begin\n"
+                "   B_Spare.Touch;\n"
+                "   if Add (2, 3) /= 5 or else Max (1, 7) /= 7\n"
+                "     or else Max (9, 4) /= 9 or else not Is_Even (4)\n"
+                "     or else Clamp (5, 0, 10) /= 5 or else Clamp (-5, 0, 10) /= 0\n"
+                "     or else Clamp (50, 0, 10) /= 10 or else Grade (95) /= \"A\"\n"
+                "     or else Grade (70) /= \"B\" or else Grade (10) /= \"C\"\n"
+                "     or else Sum_To (4) /= 10 or else Powers.Square (3.0) /= 9.0\n"
+                "   then\n"
+                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+                "   end if;\n"
+                "end Test_Calculator;\n"}
+
+# Warnings are errors in the build that contains the mutants of B_Spare
+# only: the unmodified project and the mutants built on their own have
+# their warnings and still build.
+UNWATCHED_WE = {
+    **UNWATCHED,
+    "build.py":
+        "import subprocess, sys\n"
+        "args = ['gprbuild', '-p', '-q', '-P', 'calculator_tests.gpr']\n"
+        "with open('src/b_spare.adb') as f:\n"
+        "    if 'ADAMUTANT' in f.read():\n"
+        "        args += ['-cargs', '-gnatwe']\n"
+        "sys.exit(subprocess.call(args))\n",
+}
+
+# Modulo.Small_Rest compares N mod 3 with 3: its mutant "<=" is always
+# True, and GNAT warns of it on the line of the mutant (an equivalent
+# mutant, which the equivalence build recognizes).  Modulo is compiled
+# before Powers, whose mutant stops the build.
+WARNINGS_KEPT = {
+    **UNWATCHED,
+    "src/modulo.ads":
+        "package Modulo is\n"
+        "   function Small_Rest (N : Integer) return Boolean;\n"
+        "end Modulo;\n",
+    "src/modulo.adb":
+        "package body Modulo is\n"
+        "   function Small_Rest (N : Integer) return Boolean is\n"
+        "   begin\n"
+        "      return N mod 3 < 3;\n"
+        "   end Small_Rest;\n"
+        "end Modulo;\n",
+    "tests/test_calculator.adb":
+        UNWATCHED["tests/test_calculator.adb"]
+        .replace("with Powers;\n", "with Modulo;\nwith Powers;\n")
+        .replace("   then\n", "     or else not Modulo.Small_Rest (4)\n   then\n"),
+}
+
 EXAMPLES = {
     # The example has an equivalence_build command: the two survivors that
     # are equivalent mutants become Ignored.
@@ -258,64 +351,27 @@ EXAMPLES = {
                   "end Test_Calculator;\n"},
     },
     # A statement that is only watched, on a line with a compiler warning,
-    # in a build that fails because of a mutant elsewhere: the statement is
-    # no longer watched, and its file, which then has nothing left in the
-    # combined build, gets its original source back.  (Left as it was, it
-    # would make every later build fail to link.)
+    # in a build that fails because of a mutant elsewhere.  The warning
+    # does not stop the build: the mutant elsewhere becomes a CompileError,
+    # the statement stays watched, and the mutant whose own line has a
+    # warning ("N mod 3 <= 3", always True) keeps its place in the build
+    # and gets a verdict (Ignored: it is equivalent).
+    "warnings_kept": {
+        "exit": 0, "example": "calculator", "no_reason": "undefined reference",
+        "expect": {"src/powers.adb:4:16 ArithmeticOperator *": "CompileError",
+                   "src/modulo.adb:4:22 EqualityOperator <=": "Ignored"},
+        "extra": "WARNINGS_KEPT",
+    },
+    # The same, where warnings are errors in the build that contains the
+    # mutants (-gnatwe), as the build command does here: the warning on
+    # the line of the statement then stops the build too.  The statement
+    # is no longer watched, and its file, which then has nothing left in
+    # the combined build, gets its original source back.  (Left as it
+    # was, it would make every later build fail to link.)
     "unwatched": {
         "exit": 0, "example": "calculator", "no_reason": "undefined reference",
-        "extra": {
-            "calculator_tests.gpr":
-                "project Calculator_Tests is\n"
-                "   for Source_Dirs use (\"src\", \"tests\");\n"
-                "   for Object_Dir use \"obj\";\n"
-                "   for Exec_Dir use \"bin\";\n"
-                "   for Main use (\"test_calculator.adb\");\n"
-                "   package Compiler is\n"
-                "      for Default_Switches (\"Ada\") use (\"-gnat2022\", \"-gnata\", \"-gnatwa\");\n"
-                "   end Compiler;\n"
-                "end Calculator_Tests;\n",
-            "src/powers.ads":
-                "package Powers is\n"
-                "   function Square (X : Float) return Float;\n"
-                "end Powers;\n",
-            "src/powers.adb":
-                "package body Powers is\n"
-                "   function Square (X : Float) return Float is\n"
-                "   begin\n"
-                "      return X ** 2;\n"
-                "   end Square;\n"
-                "end Powers;\n",
-            "src/b_spare.ads":
-                "package B_Spare is\n"
-                "   Count : Integer;\n"
-                "   procedure Touch;\n"
-                "end B_Spare;\n",
-            "src/b_spare.adb":
-                "package body B_Spare is\n"
-                "   procedure Touch is\n"
-                "   begin\n"
-                "      Count := Count;\n"
-                "   end Touch;\n"
-                "end B_Spare;\n",
-            "tests/test_calculator.adb":
-                "with Ada.Command_Line;\n"
-                "with B_Spare;\n"
-                "with Calculator; use Calculator;\n"
-                "with Powers;\n"
-                "procedure Test_Calculator is\n"
-                "begin\n"
-                "   B_Spare.Touch;\n"
-                "   if Add (2, 3) /= 5 or else Max (1, 7) /= 7\n"
-                "     or else Max (9, 4) /= 9 or else not Is_Even (4)\n"
-                "     or else Clamp (5, 0, 10) /= 5 or else Clamp (-5, 0, 10) /= 0\n"
-                "     or else Clamp (50, 0, 10) /= 10 or else Grade (95) /= \"A\"\n"
-                "     or else Grade (70) /= \"B\" or else Grade (10) /= \"C\"\n"
-                "     or else Sum_To (4) /= 10 or else Powers.Square (3.0) /= 9.0\n"
-                "   then\n"
-                "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
-                "   end if;\n"
-                "end Test_Calculator;\n"},
+        "config": "build = '{python} build.py'\n",
+        "extra": "UNWATCHED_WE",
     },
     # Tests and proof together: a mutant in code that no test executes
     # skips the tests and goes to the proof.  The deleted statement of
