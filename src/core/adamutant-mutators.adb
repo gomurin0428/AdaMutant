@@ -1160,6 +1160,27 @@ package body AdaMutant.Mutators is
       --  differs from the relation only when X < 0, which a count, a
       --  length or a Natural never is: it would be equivalent.
 
+      --  The operands of B are the same tokens, case aside ("X = X"): the
+      --  relation does not split its inputs in three.  "X <= X" and "X >=
+      --  X" are "X = X", also for a NaN, where all three are False, so
+      --  such a relation gets the negation as for other types.
+      function Same_Operands (B : LAL.Bin_Op) return Boolean is
+         Left  : constant LAL.Expr := B.F_Left;
+         Right : constant LAL.Expr := B.F_Right;
+         L     : LC.Token_Reference := Left.Token_Start;
+         R     : LC.Token_Reference := Right.Token_Start;
+      begin
+         loop
+            if Lower (Text (T, L)) /= Lower (Text (T, R)) then
+               return False;
+            end if;
+            exit when L = Left.Token_End or else R = Right.Token_End;
+            L := Next (L);
+            R := Next (R);
+         end loop;
+         return L = Left.Token_End and then R = Right.Token_End;
+      end Same_Operands;
+
       --  The lower bound of the subtype of E, when it is static: below 0
       --  (Negative), 0 or more (Not_Negative); otherwise, and for a value
       --  of a universal type (a named number), Unknown.  A modular type
@@ -1309,12 +1330,15 @@ package body AdaMutant.Mutators is
             --  2011).  "=" and "/=" may compare records, which have no
             --  "<": they are only changed so when name resolution tells
             --  that the operands are scalars.  Their negation, which
-            --  differs from them in two regions, is subsumed then.
+            --  differs from them in two regions, is subsumed then.  "X =
+            --  X" has one region only (see Same_Operands).
             --  Against 0, a value that is never negative makes one of them
             --  the relation itself: "X <= 0" is "X = 0", "X > 0" is "X /=
             --  0" (see Never_Negative).
             when Ada_Op_Eq =>
-               if Mutable (C) and then Operands (B) = Scalar then
+               if Mutable (C) and then not Same_Operands (B)
+                 and then Operands (B) = Scalar
+               then
                   if not (Zero (B.F_Right.As_Ada_Node)
                           and then Never_Negative (B.F_Left))
                   then
@@ -1330,7 +1354,9 @@ package body AdaMutant.Mutators is
                end if;
                Add_Constant (B, "False", C);
             when Ada_Op_Neq =>
-               if Mutable (C) and then Operands (B) = Scalar then
+               if Mutable (C) and then not Same_Operands (B)
+                 and then Operands (B) = Scalar
+               then
                   if not (Zero (B.F_Left.As_Ada_Node)
                           and then Never_Negative (B.F_Right))
                   then

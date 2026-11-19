@@ -382,6 +382,13 @@ procedure Unit_Tests is
               & "|EqualityOperator >->>=|EqualityOperator >->/="
               & "|EqualityOperator N + N > 0->False",
               "operand types: declared abs and +", O);
+      --  "X = X" (a test for a NaN) and "X /= X": "<=" and ">=" would be
+      --  the relation itself, so they get the negation.
+      Expect ("procedure P (X : Float; I : Integer; B : out Boolean) is"
+              & " begin B := not (X = x); B := I /= I; end P;",
+              "EqualityOperator =->/=|EqualityOperator X = x->False"
+              & "|EqualityOperator /=->=|EqualityOperator I /= I->True",
+              "operand types: the same operands", O);
       --  An enumeration and a Float are scalars ("F > 0.0" gets "/=" as
       --  before: 0.0 is not the integer 0).  Records, arrays, access
       --  values, an "=" that the program declares (and the "/=" that comes
