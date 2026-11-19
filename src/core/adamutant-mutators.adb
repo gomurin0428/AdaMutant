@@ -818,7 +818,10 @@ package body AdaMutant.Mutators is
         Parse_Tree (Source, Tolerant => False,
                     Whole_Units => Options.Whole_Units,
                     Resolve     => Options.Enabled (Equality_Operator)
-                                   or else Options.Enabled (Logical_Operator),
+                                   or else Options.Enabled (Logical_Operator)
+                                   or else (Options.Enabled (Unary_Operator)
+                                            and then Ada.Strings.Fixed.Index
+                                              (Lower (Source), "abs") > 0),
                     Files       => Options.Project_Files);
 
       --  The ghost names of the spec and of Source.
@@ -1561,6 +1564,7 @@ package body AdaMutant.Mutators is
       --    Pred), which is of the base type;
       --  - an object renaming and a generic formal object "in out", which
       --    have the subtype of the renamed object or of the actual;
+      --  - an "out" parameter;
       --  - the result of a generic formal function, which has the subtype
       --    of the actual, and of a renaming of a function, which has the
       --    subtype of the renamed one;
@@ -1579,9 +1583,13 @@ package body AdaMutant.Mutators is
                   return Decl.As_Object_Decl.F_Renaming_Clause.Is_Null
                     and then not Has_Kind (Decl.As_Object_Decl.F_Mode,
                                            Ada_Mode_In_Out);
-               when Ada_Param_Spec | Ada_Component_Decl
-                  | Ada_Discriminant_Spec | Ada_For_Loop_Var_Decl
-                  | LC.Ada_Base_Type_Decl
+               --  An "out" parameter of a type with Default_Value starts
+               --  with the value of the actual, unchecked (RM 6.4.1).
+               when Ada_Param_Spec =>
+                  return not Has_Kind (Decl.As_Param_Spec.F_Mode,
+                                       Ada_Mode_Out);
+               when Ada_Component_Decl | Ada_Discriminant_Spec
+                  | Ada_For_Loop_Var_Decl | LC.Ada_Base_Type_Decl
                =>
                   return True;
                when LC.Ada_Formal_Subp_Decl | Ada_Subp_Renaming_Decl =>
@@ -2141,8 +2149,19 @@ package body AdaMutant.Mutators is
                         Replace (Unary_Operator, C, Op, "-");
                      when Ada_Op_Minus =>
                         Replace (Unary_Operator, C, Op, "+");
-                     when Ada_Op_Not | Ada_Op_Abs =>
+                     when Ada_Op_Not =>
                         Replace (Unary_Operator, C, Op, "");
+                     --  "abs X" is X when X is never negative (see
+                     --  Never_Negative): the mutant would be equivalent.
+                     --  Not with an "abs" that the program declares.
+                     when Ada_Op_Abs =>
+                        if not (Options.Enabled (Unary_Operator)
+                                and then not Skipped (C)
+                                and then Predefined_Op (Op)
+                                and then Never_Negative (N.As_Un_Op.F_Expr))
+                        then
+                           Replace (Unary_Operator, C, Op, "");
+                        end if;
                      when others =>
                         null;
                   end case;
