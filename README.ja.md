@@ -438,10 +438,13 @@ AdaMutant は、誤って等価と判定しないために、次のことをし�
 
 - [examples/calculator](examples/calculator): わざと境界値を検査しないテスト。生き残ったミュータント、タイムアウト、どのテストも実行しない行、等価ミュータントの判定が見られる
 - [examples/spark_counter](examples/spark_counter): テストが一部の振る舞いしか確かめず、残りを GNATprove の証明が検出する例。証明だけが検出したミュータントの一覧で、確定したものと、契約が足りないもの（`Halves.Half` の緩い事後条件）が見られる
+- [examples/spark_model](examples/spark_model): リングバッファで作った上限付きのキューの仕様を、ゴーストのモデルで書いた例。契約には、SPARKlib の列（`SPARK.Containers.Functional.Vectors`）である `Model` と、`Length` しか出てこない。テストではバッファの端で折り返さないので、折り返しの計算のミュータントは証明が検出する。契約のミュータントからは、呼び出し側の証明が契約のどの部分を必要としているかがわかる。`Transfer` が呼ぶ `Dequeue` の事後条件は、弱めると検出され、SPARK から呼ばれない `Transfer` の事後条件は、弱めても生き残る。PATH に GNATprove と、同じリリースの GNAT が要る。SPARKlib は GNATprove に付属していて、ビルドのコマンドは PATH 上の gnatprove から SPARKlib の場所を求める（POSIX のシェルが要る）。その gnatprove がほかのディレクトリへのシンボリックリンクのときは、GNATprove の `lib/gnat` ディレクトリを `GPR_PROJECT_PATH` に入れる
 
 ```sh
 cd examples/calculator && ../../bin/adamutant run
 ```
+
+ゴーストのモデルで仕様を書くと、ミューテーションテストに役立ちます。モデルで結果を述べる契約（`Enqueue` なら `Model (Q) = Add (Model (Q'Old), X)`）は、コードが何をするかを決め、どうするかには触れません。そのため、結果を変えるミュータントは、契約が触れない細部（リングバッファの折り返しの計算など）にあっても事後条件を破り、テストが届かない所でも証明が検出します。長さしか言わない契約（`Length (Q) = Length (Q'Old) + 1`）では、こうしたミュータントは証明を通ってしまいます。この例では、モデルについての事後条件に GNATprove が反例を見つけないので、その検出は `Undecided` になります。同じ計算をインデックスや範囲の検査が検出したものは `Confirmed` になります。
 
 ## ライセンス
 

@@ -114,6 +114,24 @@ EXAMPLES = {
     "spark_counter": {"exit": 0, "killed_by": "proof",
                       "proof_checks": ["postcondition", "range check"],
                       "output": "Mutants killed by the proof, by the check that fails"},
+    # Contracts on a Ghost model (sequences of SPARKlib, which comes with
+    # GNATprove): the test never makes the ring buffer wrap around, and
+    # the proof detects the mutants there, by an index or range check or
+    # by a postcondition on the model.  The deleted loop invariants of
+    # the model fail its refined postcondition.  An index check fails
+    # with a counterexample (Confirmed), a postcondition on the model
+    # without one (Undecided).
+    "spark_model": {"exit": 0, "killed_by": "proof",
+                    "proof_checks": ["postcondition", "refined postcondition",
+                                     "array index check", "range check",
+                                     "precondition"],
+                    "killers": {
+                        "src/queues.adb:36:10 ConditionalExpression True":
+                            "proof: array index check",
+                        "src/queues.adb:39:10 StatementDeletion null;":
+                            "proof: postcondition"},
+                    "output": "Detected only by the proof (candidates for a missing test)",
+                    "outputs": ["  Confirmed: ", "  Undecided: "]},
     # A mutant that does not compile ("X * 2" with a Float X) must not stop
     # the build that contains all mutants: it becomes a CompileError and the
     # others are tested.  The test here checks little, so the score is
@@ -647,6 +665,9 @@ def run_example(name, spec, update):
             errors.append(f"exit status {proc.returncode}, expected {spec['exit']}\n{proc.stdout}")
         if spec.get("output", "") not in proc.stdout:
             errors.append(f"output lacks {spec['output']!r}\n{proc.stdout}")
+        for text in spec.get("outputs", []):
+            if text not in proc.stdout:
+                errors.append(f"output lacks {text!r}\n{proc.stdout}")
         if "not_output" in spec and spec["not_output"] in proc.stdout:
             errors.append(f"output has {spec['not_output']!r}\n{proc.stdout}")
         for p, data in before.items():
@@ -671,6 +692,11 @@ def run_example(name, spec, update):
         for check in spec.get("proof_checks", []):
             if f"proof: {check}" not in killers:
                 errors.append(f"no mutant killed by the proof of a {check}: {sorted(killers)}")
+        for k, killer in spec.get("killers", {}).items():
+            found = [m for p, f in report["files"].items() for m in f["mutants"]
+                     if key(p, m) == k]
+            if len(found) != 1 or killer not in found[0].get("killedBy", []):
+                errors.append(f"{k}: expected a mutant killed by {killer!r}, got {found}")
         # Mutants in code that the tests do not execute are not run.
         logs = work / ".adamutant" / "logs"
         uncovered = [m for m in mutants if m.get("coveredBy") == []]

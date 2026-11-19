@@ -1,0 +1,43 @@
+# A queue specified with a Ghost model.  The contracts of Queues speak of a
+# queue only through Model (Q), the sequence of its elements (a functional
+# vector of SPARKlib), and Length: Enqueue adds an element at the end of
+# the model, Dequeue removes the first one.  The ring buffer and its
+# wrap-around arithmetic appear in no contract of the spec (only in the
+# refined postcondition of Model, in the body).  The test, built with
+# -gnata so that the contracts and the model are checked as it runs, puts
+# three elements in and takes one out: the buffer never wraps around.  The
+# mutants of the wrap-around arithmetic are then detected only by the
+# proof, by an index or range check (confirmed with a counterexample) or
+# by a postcondition on the model (for which GNATprove gives no
+# counterexample).  The mutants of the contracts show which parts the
+# proofs need: Transfer calls Dequeue, so the weaker postconditions of
+# Dequeue are detected; nothing in SPARK calls Transfer, so its own weaker
+# postconditions survive.  Two mutants of the code survive as well: a
+# Capacity of 9, which the contracts allow (they are written with
+# Capacity) and the test does not see (it never fills the queue), and a
+# new queue that starts at another place of the buffer, which the model
+# does not show (an equivalent mutant).
+#
+# SPARKlib comes with GNATprove.  sparklib.gpr, a copy of its template,
+# extends sparklib_internal.gpr, which is in the directory lib/gnat of
+# GNATprove.  GNATprove finds it by itself; the build command gives that
+# directory to gprbuild (-aP), from the gnatprove found on the PATH (in a
+# POSIX shell).  So the example needs nothing but GNATprove on the PATH,
+# and a GNAT of the same release, which compiles SPARKlib for the test.
+# When the gnatprove on the PATH is a symbolic link to another directory,
+# or for a build by hand, put the directory lib/gnat of GNATprove in
+# GPR_PROJECT_PATH instead.
+#
+# The prove command is that of examples/spark_counter: a cache of proof
+# results (ADAMUTANT_PROVE_CACHE) with a steps limit for the provers (the
+# unmodified project needs at most 2 steps for a check), and one more
+# proof of the unmodified project that looks for contracts that are
+# always False and code that is never reached (ADAMUTANT_PROVE_SWITCHES).
+mutate = ["src/**/*.ads", "src/**/*.adb"]
+# The instance of the sequences of SPARKlib has nothing of its own to test.
+exclude = ["src/integer_sequences.ads"]
+build = 'gprbuild -p -q -P queues_tests.gpr -aP "$(dirname "$(command -v gnatprove)")/../lib/gnat"'
+test = '"bin/test_queues"'
+prove = 'gnatprove -P queues.gpr --level=1 --steps=100 --report=fail --checks-as-errors=on --counterexamples=on -j1 $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
+concurrency = 2
+sandbox_exclude = [".git", "obj", "bin"]
