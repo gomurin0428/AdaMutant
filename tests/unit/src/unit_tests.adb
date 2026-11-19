@@ -434,6 +434,45 @@ procedure Unit_Tests is
               & "|EqualityOperator Cnt (K - 1) > 0->True"
               & "|EqualityOperator Cnt (K - 1) > 0->False",
               "operand types: operations in the base type", O);
+      --  Characters: the codes from 0 to 255 (Libadalang's Standard has
+      --  one literal only).  "C = 'x'" gets the three mutants; a Digit is
+      --  never below '0'.
+      Expect ("procedure P (C : Character; B : out Boolean) is"
+              & " subtype Digit is Character range '0' .. '9';"
+              & " D : Digit := '1'; begin"
+              & " B := C = 'x'; B := D = '0'; B := C > Character'First;"
+              & " end P;",
+              "EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator C = 'x'->False"
+              & "|EqualityOperator D = '0'->True"
+              & "|EqualityOperator D = '0'->False"
+              & "|EqualityOperator C > Character'First->True"
+              & "|EqualityOperator C > Character'First->False",
+              "operand types: characters", O);
+      --  Values that Ada does not check against the subtype that Libadalang
+      --  gives them: a renaming has the subtype of the renamed object, a
+      --  generic formal function that of the actual, an inherited function
+      --  returns a value of its parent type, converted.  Each "= 0" gets
+      --  "<=".
+      Expect ("procedure P (Y : in out Integer; B : out Boolean) is"
+              & " Z : Natural renames Y;"
+              & " generic with function Count return Natural;"
+              & " function G return Boolean;"
+              & " function G return Boolean is (Count = 0);"
+              & " package Q is type Parent is range -100 .. 100;"
+              & " function F (X : Parent) return Parent;"
+              & " type D is new Parent range 0 .. 10; end Q;"
+              & " package body Q is function F (X : Parent) return Parent"
+              & " is (X); end Q;"
+              & " E : Q.D := 0; begin"
+              & " B := Z = 0; B := Q.F (E) = 0; end P;",
+              "EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator Count = 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator Z = 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator Q.F (E) = 0->False",
+              "operand types: values in another subtype", O);
       --  An enumeration and a Float are scalars ("F > 0.0" gets "/=" as
       --  before: 0.0 is not the integer 0).  Records, arrays, access
       --  values, an "=" that the program declares (and the "/=" that comes

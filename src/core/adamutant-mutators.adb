@@ -1176,9 +1176,18 @@ package body AdaMutant.Mutators is
          R     : LC.Token_Reference := Right.Token_Start;
       begin
          loop
-            if Lower (Text (T, L)) /= Lower (Text (T, R)) then
-               return False;
-            end if;
+            declare
+               Left_Text  : constant String := Text (T, L);
+               Right_Text : constant String := Text (T, R);
+            begin
+               --  The case of a character or string literal counts.
+               if (if Left_Text (Left_Text'First) in ''' | '"'
+                   then Left_Text /= Right_Text
+                   else Lower (Left_Text) /= Lower (Right_Text))
+               then
+                  return False;
+               end if;
+            end;
             exit when L = Left.Token_End or else R = Right.Token_End;
             L := Next (L);
             R := Next (R);
@@ -1245,10 +1254,33 @@ package body AdaMutant.Mutators is
                   elsif Has_Kind (Def, Ada_Enum_Type_Def) then
                      R.Has_Low := True;
                      R.Low := 0;
-                     R.Has_High := True;
-                     R.High := Big.To_Big_Integer
-                       (Def.As_Enum_Type_Def.F_Enum_Literals.Children_Count
-                        - 1);
+                     --  The Standard of Libadalang declares the character
+                     --  types with one literal only.
+                     if Root.Unit /= Root.P_Standard_Unit then
+                        R.Has_High := True;
+                        R.High := Big.To_Big_Integer
+                          (Def.As_Enum_Type_Def.F_Enum_Literals
+                             .Children_Count - 1);
+                     else
+                        declare
+                           Name : constant String := To_Lower
+                             (Langkit_Support.Text.To_UTF8
+                                (Root.P_Defining_Name.Text));
+                        begin
+                           R.Has_High := True;
+                           if Name = "boolean" then
+                              R.High := 1;
+                           elsif Name = "character" then
+                              R.High := 2**8 - 1;
+                           elsif Name = "wide_character" then
+                              R.High := 2**16 - 1;
+                           elsif Name = "wide_wide_character" then
+                              R.High := 2**31 - 1;
+                           else
+                              R.Has_High := False;
+                           end if;
+                        end;
+                     end if;
                   end if;
                end;
             end if;
@@ -1303,26 +1335,75 @@ package body AdaMutant.Mutators is
             return False;
       end Predefined_Op;
 
-      --  The value of E is checked against its subtype: E names an object,
-      --  a component or a function, calls a function, which may be an
-      --  operator that the program declares, or converts or qualifies a
-      --  value.  Not the result of a predefined operator or of an attribute
-      --  (such as Pred), which is of the base type.
+      --  The value of E is in the subtype that Libadalang gives it
+      --  (P_Expression_Type), which Ada checks: a constant, a variable, a
+      --  parameter, a component, a loop parameter, the result of a function
+      --  that the program declares (an operator among them), a conversion,
+      --  a qualified expression.  Not:
+      --  - the result of a predefined operator or of an attribute (such as
+      --    Pred), which is of the base type;
+      --  - an object renaming and a generic formal object "in out", which
+      --    have the subtype of the renamed object or of the actual;
+      --  - the result of a generic formal function, which has the subtype
+      --    of the actual;
+      --  - the result of an inherited function ("type D is new P range 0
+      --    .. 10" and a function of P), which is converted to D without a
+      --    check of its range.
       function Checked (E : LAL.Expr) return Boolean is
+
+         function Checked_Decl (Decl : LAL.Basic_Decl) return Boolean is
+         begin
+            if Decl.Is_Null then
+               return False;
+            end if;
+            case Decl.Kind is
+               when Ada_Object_Decl =>
+                  return Decl.As_Object_Decl.F_Renaming_Clause.Is_Null
+                    and then not Has_Kind (Decl.As_Object_Decl.F_Mode,
+                                           Ada_Mode_In_Out);
+               when Ada_Param_Spec | Ada_Component_Decl
+                  | Ada_Discriminant_Spec | Ada_For_Loop_Var_Decl
+                  | LC.Ada_Base_Type_Decl
+               =>
+                  return True;
+               when LC.Ada_Formal_Subp_Decl =>
+                  return False;
+               when others =>
+                  declare
+                     Spec : constant LAL.Base_Subp_Spec :=
+                       Decl.P_Subp_Spec_Or_Null;
+                  begin
+                     return not Spec.Is_Null
+                       and then not Spec.P_Returns.Is_Null
+                       and then Same (Spec.P_Returns.P_Designated_Type_Decl,
+                                      E.P_Expression_Type);
+                  end;
+            end case;
+         end Checked_Decl;
+
       begin
          case E.Kind is
-            when Ada_Identifier | Ada_Dotted_Name | Ada_Qual_Expr
-               | Ada_Explicit_Deref =>
-               return True;
+            when Ada_Identifier | Ada_Dotted_Name =>
+               return Checked_Decl (E.As_Name.P_Referenced_Decl);
             when Ada_Call_Expr =>
-               return E.As_Call_Expr.F_Name.Kind /= Ada_Attribute_Ref;
+               return E.As_Call_Expr.F_Name.Kind /= Ada_Attribute_Ref
+                 and then Checked_Decl
+                   (E.As_Call_Expr.F_Name.P_Referenced_Decl);
+            when Ada_Qual_Expr | Ada_Explicit_Deref =>
+               return True;
             when Ada_Un_Op =>
-               return not Predefined_Op (E.As_Un_Op.F_Op);
+               return not Predefined (E.As_Un_Op.F_Op)
+                 and then Checked_Decl (E.As_Un_Op.F_Op.P_Referenced_Decl);
             when Ada_Bin_Op =>
-               return not Predefined_Op (E.As_Bin_Op.F_Op);
+               return not Predefined (E.As_Bin_Op.F_Op)
+                 and then Checked_Decl (E.As_Bin_Op.F_Op.P_Referenced_Decl);
             when others =>
                return False;
          end case;
+      exception
+         --  Any error of Libadalang (Property_Error and the like).
+         when others =>
+            return False;
       end Checked;
 
       function Unparen (E : LAL.Expr) return LAL.Expr is
