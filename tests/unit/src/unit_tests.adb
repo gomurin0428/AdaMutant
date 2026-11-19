@@ -346,9 +346,11 @@ procedure Unit_Tests is
       --  A Natural, a subtype from 0, a modular type, Length and a sum of
       --  such values are never negative: no "/=" against 0, nor "<=" for
       --  "N = 0" (">=" for "0 = N"), ">" for "M /= 0" ("<" for "0 /= M"),
-      --  which would be the relation itself.  N - 1, an Integer, may be
-      --  negative.  Two values of universal types (S'Length and 0) tell
-      --  nothing: "=" and "/=" are as for unknown types.
+      --  which would be the relation itself.  ">=" for "N > 0" and "N = 0"
+      --  always holds: it becomes True ("<" for "M /= 0", False).  N - 1,
+      --  an Integer, may be negative.  Two values of universal types
+      --  (S'Length and 0) tell nothing: "=" and "/=" are as for unknown
+      --  types.
       Expect ("procedure P (N : Natural; S : String; B : out Boolean) is"
               & " type Byte is mod 256; subtype Digit is Integer range 0 .. 9;"
               & " M : Byte := 1; D : Digit := 1; begin"
@@ -356,20 +358,21 @@ procedure Unit_Tests is
               & " B := S'Length > 0; B := N + D * 2 > 0; B := N - 1 > 0;"
               & " B := N = 0; B := M /= 0; B := S'Length = 0;"
               & " B := 0 = N; B := 0 /= M; end P;",
-              "EqualityOperator >->>=|EqualityOperator N > 0->False"
-              & "|EqualityOperator <-><=|EqualityOperator 0 < N->False"
-              & "|EqualityOperator >->>=|EqualityOperator M > 0->False"
-              & "|EqualityOperator >->>=|EqualityOperator D > 0->False"
+              "EqualityOperator N > 0->True|EqualityOperator N > 0->False"
+              & "|EqualityOperator 0 < N->True|EqualityOperator 0 < N->False"
+              & "|EqualityOperator M > 0->True|EqualityOperator M > 0->False"
+              & "|EqualityOperator D > 0->True|EqualityOperator D > 0->False"
               & "|EqualityOperator >->>=|EqualityOperator S'Length > 0->False"
-              & "|EqualityOperator >->>="
+              & "|EqualityOperator N + D * 2 > 0->True"
               & "|EqualityOperator N + D * 2 > 0->False"
               & "|EqualityOperator >->>=|EqualityOperator >->/="
               & "|EqualityOperator N - 1 > 0->False"
-              & "|EqualityOperator =->>=|EqualityOperator N = 0->False"
-              & "|EqualityOperator /=-><|EqualityOperator M /= 0->True"
+              & "|EqualityOperator N = 0->True|EqualityOperator N = 0->False"
+              & "|EqualityOperator M /= 0->False|EqualityOperator M /= 0->True"
               & "|EqualityOperator =->/=|EqualityOperator S'Length = 0->False"
-              & "|EqualityOperator =-><=|EqualityOperator 0 = N->False"
-              & "|EqualityOperator /=->>|EqualityOperator 0 /= M->True",
+              & "|EqualityOperator 0 = N->True|EqualityOperator 0 = N->False"
+              & "|EqualityOperator 0 /= M->False"
+              & "|EqualityOperator 0 /= M->True",
               "operand types: values that are never negative", O);
       --  An "abs" or a "+" that the program declares may give a negative
       --  value: "abs I = 0" gets "<=" and "N + N > 0" gets "/=".
@@ -389,6 +392,48 @@ procedure Unit_Tests is
               "EqualityOperator =->/=|EqualityOperator X = x->False"
               & "|EqualityOperator /=->=|EqualityOperator I /= I->True",
               "operand types: the same operands", O);
+      --  Other bounds than 0: the first and last values of Boolean, of an
+      --  enumeration, of Positive, Natural'Last.  A mutant that differs
+      --  from the relation only beyond them is left out; one that always
+      --  holds there (or never does) becomes the constant.  Green, in the
+      --  middle, gets the three mutants.  "N <= 0" is "N = 0": no "=".
+      Expect ("procedure P (D : Boolean; P : Positive; N : Natural;"
+              & " B : out Boolean) is type Color is (Red, Green, Blue);"
+              & " C : Color := Red; begin"
+              & " B := D = True; B := D /= True; B := P = 1;"
+              & " B := N = Natural'Last; B := C = Red; B := C = Green;"
+              & " B := N <= 0; B := 0 >= N; end P;",
+              "EqualityOperator D = True->True|EqualityOperator D = True->False"
+              & "|EqualityOperator D /= True->False"
+              & "|EqualityOperator D /= True->True"
+              & "|EqualityOperator P = 1->True|EqualityOperator P = 1->False"
+              & "|EqualityOperator N = Natural'Last->True"
+              & "|EqualityOperator N = Natural'Last->False"
+              & "|EqualityOperator C = Red->True"
+              & "|EqualityOperator C = Red->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator C = Green->False"
+              & "|EqualityOperator N <= 0->False"
+              & "|EqualityOperator N <= 0->True"
+              & "|EqualityOperator 0 >= N->False"
+              & "|EqualityOperator 0 >= N->True",
+              "operand types: bounds of subtypes", O);
+      --  The result of a predefined operator on a type from 0 is of its
+      --  base type, which goes below 0: "K - 1" and "-K" may be negative.
+      --  A conversion is checked against its subtype.
+      Expect ("procedure P (B : out Boolean) is"
+              & " type Cnt is range 0 .. 100; K : Cnt := 1; begin"
+              & " B := K - 1 > 0; B := -K > 0; B := K - 1 = 0;"
+              & " B := Cnt (K - 1) > 0; end P;",
+              "EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator K - 1 > 0->False"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator -K > 0->False"
+              & "|EqualityOperator =-><=|EqualityOperator =->>="
+              & "|EqualityOperator K - 1 = 0->False"
+              & "|EqualityOperator Cnt (K - 1) > 0->True"
+              & "|EqualityOperator Cnt (K - 1) > 0->False",
+              "operand types: operations in the base type", O);
       --  An enumeration and a Float are scalars ("F > 0.0" gets "/=" as
       --  before: 0.0 is not the integer 0).  Records, arrays, access
       --  values, an "=" that the program declares (and the "/=" that comes
@@ -406,9 +451,8 @@ procedure Unit_Tests is
               & " B7 : Boolean := T1 /= T2; B8 : Boolean := F = 1.0;"
               & " B9 : Boolean := F > 0.0; B10 : Boolean := C = Unknown;"
               & " end P;",
-              "EqualityOperator =-><=|EqualityOperator =->>="
-              & "|EqualityOperator C = Red->False"
-              & "|EqualityOperator /=-><|EqualityOperator /=->>"
+              "EqualityOperator C = Red->True|EqualityOperator C = Red->False"
+              & "|EqualityOperator C /= Blue->False"
               & "|EqualityOperator C /= Blue->True"
               & "|EqualityOperator =->/=|EqualityOperator R1 = R2->False"
               & "|EqualityOperator /=->=|EqualityOperator A1 /= A2->True"
@@ -479,11 +523,44 @@ procedure Unit_Tests is
          Expect (Read (Tmp & "/units.adb"),
                  "EqualityOperator >->>=|EqualityOperator >->/="
                  & "|EqualityOperator T > 0->False"
-                 & "|EqualityOperator >->>=|EqualityOperator N > 0->False"
+                 & "|EqualityOperator N > 0->True|EqualityOperator N > 0->False"
                  & "|EqualityOperator /=-><|EqualityOperator /=->>"
                  & "|EqualityOperator T /= 20->True"
                  & "|EqualityOperator =->/=|EqualityOperator P = Q->False",
                  "operand types: a spec in another file, with the files",
+                 With_Files);
+      end;
+      --  In a child unit, a subtype and a derived type of a private type
+      --  of the parent have no "<" either.
+      declare
+         Tmp : constant String :=
+           Ada.Directories.Current_Directory & "/obj/child";
+         Kid : constant String :=
+           "package Pkg.Kid is" & LF
+           & "   subtype S is T;" & LF
+           & "   type D is new T;" & LF
+           & "   function Same (A, B : S; X, Y : D) return Boolean is" & LF
+           & "     (A /= B or else X = Y);" & LF
+           & "end Pkg.Kid;" & LF;
+         With_Files : Scan_Options := O;
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp);
+         Write (Tmp & "/pkg.ads",
+                "package Pkg is" & LF
+                & "   type T is private;" & LF
+                & "private" & LF
+                & "   type T is new Integer;" & LF
+                & "end Pkg;" & LF);
+         Write (Tmp & "/pkg-kid.ads", Kid);
+         With_Files.Project_Files.Include (Tmp & "/pkg.ads");
+         With_Files.Project_Files.Include (Tmp & "/pkg-kid.ads");
+         Expect (Kid,
+                 "EqualityOperator /=->=|EqualityOperator A /= B->True"
+                 & "|EqualityOperator =->/=|EqualityOperator X = Y->False",
+                 "operand types: private types in a child unit",
                  With_Files);
       end;
    end Test_Operand_Types;
