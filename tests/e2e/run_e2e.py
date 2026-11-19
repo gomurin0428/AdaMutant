@@ -156,9 +156,10 @@ UNWATCHED = {
                 "   end if;\n"
                 "end Test_Calculator;\n"}
 
-# Warnings are errors in the build that contains the mutants of B_Spare
-# only: the unmodified project and the mutants built on their own have
-# their warnings and still build.
+# Warnings are errors (-cargs -gnatwe, for every unit) in the builds where
+# B_Spare contains the generated code that watches its statement, as in
+# the build that contains the mutants: the unmodified project and the
+# mutants built on their own have their warnings and still build.
 UNWATCHED_WE = {
     **UNWATCHED,
     "build.py":
@@ -360,6 +361,8 @@ EXAMPLES = {
         "exit": 0, "example": "calculator", "no_reason": "undefined reference",
         "expect": {"src/powers.adb:4:16 ArithmeticOperator *": "CompileError",
                    "src/modulo.adb:4:22 EqualityOperator <=": "Ignored"},
+        # Watched: the build knows which tests execute it.
+        "covered": {"src/b_spare.adb:4:7 StatementDeletion null;": ["tests"]},
         "extra": "WARNINGS_KEPT",
     },
     # The same, where warnings are errors in the build that contains the
@@ -371,6 +374,8 @@ EXAMPLES = {
     "unwatched": {
         "exit": 0, "example": "calculator", "no_reason": "undefined reference",
         "config": "build = '{python} build.py'\n",
+        # No longer watched: no test is known to execute it.
+        "covered": {"src/b_spare.adb:4:7 StatementDeletion null;": None},
         "extra": "UNWATCHED_WE",
     },
     # Tests and proof together: a mutant in code that no test executes
@@ -830,6 +835,11 @@ def run_example(name, spec, update):
                 errors.append(f"{single} mutants were built on their own, "
                               f"expected at most {spec['max_single_builds']}")
 
+        for k, want in spec.get("covered", {}).items():
+            found = [m for p, f in report["files"].items() for m in f["mutants"]
+                     if key(p, m) == k]
+            if len(found) != 1 or found[0].get("coveredBy") != want:
+                errors.append(f"{k}: expected coveredBy {want}, got {found}")
         for k, want in spec.get("expect", {}).items():
             if actual.get(k) != want:
                 errors.append(f"{k}: expected {want}, got {actual.get(k)}")

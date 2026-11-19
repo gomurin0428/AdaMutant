@@ -1637,18 +1637,22 @@ package body AdaMutant.Runner is
             --  only watched, without a verdict on their mutants.  A warning
             --  does not stop the build: a mutant with one compiles, unless
             --  warnings are errors (-gnatwe).  So the lines of warnings
-            --  only count when no line of a mutant has an error.
+            --  only count when no line of a mutant has an error.  A note
+            --  never stops it (see AdaMutant.Schemata.Kind).
             Messages : constant AdaMutant.Schemata.Diagnostic_Vectors.Vector
               := AdaMutant.Schemata.Diagnostics (Read (Log));
 
             function Drop (With_Warnings : Boolean) return Natural;
 
             function Drop (With_Warnings : Boolean) return Natural is
+               use type AdaMutant.Schemata.Message_Kind;
                Dropped : Natural := 0;
             begin
                for D of Messages loop
-                  if With_Warnings
-                    or else not AdaMutant.Schemata.Is_Warning (D)
+                  if AdaMutant.Schemata.Kind (D) = AdaMutant.Schemata.Error
+                    or else (With_Warnings
+                             and then AdaMutant.Schemata.Kind (D)
+                                      = AdaMutant.Schemata.Warning)
                   then
                      Dropped := Dropped + Drop_At (D);
                   end if;

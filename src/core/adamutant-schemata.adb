@@ -902,11 +902,11 @@ package body AdaMutant.Schemata is
       return Result;
    end Diagnostics;
 
-   ----------------
-   -- Is_Warning --
-   ----------------
+   ----------
+   -- Kind --
+   ----------
 
-   function Is_Warning (D : Diagnostic) return Boolean is
+   function Kind (D : Diagnostic) return Message_Kind is
       Line   : constant String := To_String (D.Text);
       Colons : Natural := 0;
    begin
@@ -926,15 +926,22 @@ package body AdaMutant.Schemata is
                                     .. Rest'First + Prefix'Length - 1)
                               = Prefix);
                begin
-                  return Starts_With ("warning:") or else Starts_With ("info:")
-                    or else Starts_With ("(style)")
-                    or else Starts_With ("(info)");
+                  if Starts_With ("warning:") or else Starts_With ("(style)")
+                  then
+                     return Warning;
+                  elsif Rest = "" or else Starts_With ("info:")
+                    or else Starts_With ("(info)") or else Starts_With ("note:")
+                  then
+                     return Note;
+                  else
+                     return Error;
+                  end if;
                end;
             end if;
          end if;
       end loop;
-      return False;
-   end Is_Warning;
+      return Error;
+   end Kind;
 
    function Main_Source (Ali : String) return String is
       Is_Main : Boolean := False;
