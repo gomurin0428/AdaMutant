@@ -87,8 +87,19 @@ package AdaMutant.Mutators is
 
    package Mutation_Vectors is new Ada.Containers.Vectors (Positive, Mutation);
 
+   type Scan_Statistics is tagged record
+      Proven_Equivalent_Comparison_Skips : Natural := 0;
+   end record;
+   --  Comparison-operator replacements omitted only after a built-in range
+   --  proof.  Excludes whole-expression constants and deduplication.
+
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector;
+   function Find
+     (Source : String; Options : Scan_Options; Statistics : out Scan_Statistics)
+      return Mutation_Vectors.Vector;
+   --  Like Find above, and reports comparison candidates omitted by proof;
+   --  Statistics is reset on every scan.
    --  Works on the syntax tree of Libadalang.  Name resolution only gives
    --  the types of the operands of relations, logical operators and "abs"
    --  (see Project_Files), and where it fails, the mutants are those of

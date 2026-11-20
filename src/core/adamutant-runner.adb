@@ -145,6 +145,7 @@ package body AdaMutant.Runner is
                   then Path (Path'First .. Path'Last - 1) & "s" else "");
                Options : Scan_Options := Settings.Scan;
                Found   : Mutation_Vectors.Vector;
+               Statistics : Scan_Statistics;
             begin
                --  A file is a compilation unit, never a fragment.
                Options.Whole_Units := True;
@@ -160,7 +161,10 @@ package body AdaMutant.Runner is
                      Options.Type_Names.Union
                        (Type_Names (Read (Join (Root, Spec))));
                   end if;
-                  Found := Find (Source, Options);
+                  Found := Find (Source, Options, Statistics);
+                  R.Proven_Equivalent_Comparison_Skips :=
+                    R.Proven_Equivalent_Comparison_Skips
+                    + Statistics.Proven_Equivalent_Comparison_Skips;
                exception
                   when E : AdaMutant.Lexer.Lexical_Error =>
                      Fail (Path & ": " & Ada.Exceptions.Exception_Message (E));
