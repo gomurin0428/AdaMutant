@@ -178,13 +178,17 @@ preempted, so a slow operation there can make total wall-clock time exceed the
 configured budget.
 
 Currently supported targets are public, non-overloaded package functions with
-an integer scalar result and one or more `in` integer scalar parameters. The
-search tries small integers and each formal subtype's bounds and adjacent
-values, then bounded argument combinations (at most 256), with contracts and
-assertions enabled. Unsupported signatures, rejected inputs, exceptions,
-timeouts, malformed output, build failures, and exhaustion without a witness
-are reported as inconclusive. No witness never means equivalent and does not
-change mutation status, score, or killers.
+an integer scalar result and one or more `in` parameters whose types are
+integer scalars, `Standard.Boolean`, or public package enumeration types and
+subtypes. Integer candidates remain small values plus each formal subtype's
+bounds and adjacent values. Enumeration candidates follow declaration order
+from the formal type's `'Base` range, are converted to the formal subtype with
+contracts and assertions enabled, and are capped at 256 accepted distinct
+values per formal. The overall argument-combination search is capped at 256.
+Unsupported signatures, rejected inputs, exceptions, timeouts, malformed
+output, build failures, and exhaustion without a witness are reported as
+inconclusive. No witness never means equivalent and does not change mutation
+status, score, or killers.
 
 A found result records the concrete function call and the outputs observed
 from the original and mutant programs. These are observations of program
