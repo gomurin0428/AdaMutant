@@ -267,7 +267,8 @@ package body AdaMutant.Suggestions is
 
    function Candidate_Source
      (Procedure_Name, Package_Name, Function_Name, Arguments,
-      Expected_Value, Failure_Marker : String) return String
+      Expected_Value, Failure_Marker, Result_Type, Type_Package : String)
+      return String
    is
       Call : constant String := Package_Name & "." & Function_Name
         & " (" & Arguments & ")";
@@ -275,7 +276,12 @@ package body AdaMutant.Suggestions is
       return "with Ada.Command_Line;" & LF
         & "with Ada.Text_IO;" & LF
         & "with " & Package_Name & ";" & LF
+        & (if Type_Package'Length = 0
+             or else To_Lower (Type_Package) = To_Lower (Package_Name)
+           then ""
+           else "with " & Type_Package & ";" & LF)
         & "procedure " & Procedure_Name & " is" & LF
+        & "   use type " & Result_Type & ";" & LF
         & "   procedure Report_Failure is" & LF
         & "   begin" & LF
         & "      Ada.Text_IO.Put_Line (""" & Failure_Marker & """);" & LF
@@ -381,11 +387,79 @@ package body AdaMutant.Suggestions is
          return False;
    end Is_Integer_Type;
 
+   function Integer_Type_Info
+     (Type_Expr : LAL.Type_Expr;
+      Type_Name, Type_Package : out Unbounded_String) return Boolean
+   is
+      Name : LAL.Name;
+      Decl : LAL.Basic_Decl;
+      Type_Decl : LAL.Base_Type_Decl;
+      Current : LAL.Ada_Node;
+      Package_Path : Unbounded_String;
+      Simple_Name : Unbounded_String;
+   begin
+      Type_Name := Null_Unbounded_String;
+      Type_Package := Null_Unbounded_String;
+      if Type_Expr.Is_Null or else Type_Expr.Kind /= LC.Ada_Subtype_Indication
+      then
+         return False;
+      end if;
+      Name := Type_Expr.As_Subtype_Indication.F_Name;
+      if Name.Kind not in LC.Ada_Identifier | LC.Ada_Dotted_Name then
+         return False;
+      end if;
+      Decl := Name.P_Referenced_Decl;
+      if Decl.Is_Null
+        or else not Decl.As_Base_Type_Decl.P_Is_Int_Type (Origin => Name)
+      then
+         return False;
+      end if;
+      Type_Decl := Decl.As_Base_Type_Decl;
+      if Type_Decl.F_Name.Is_Null
+        or else Type_Decl.F_Name.F_Name.Is_Null
+      then
+         return False;
+      end if;
+      Simple_Name := To_Unbounded_String (Text_Of (Type_Decl.F_Name.F_Name));
+      Current := Type_Decl.Parent;
+      while not Current.Is_Null loop
+         if Current.Kind = LC.Ada_Package_Decl then
+            declare
+               Name_Text : constant String :=
+                 Text_Of (Current.As_Package_Decl.F_Package_Name.F_Name);
+            begin
+               if Length (Package_Path) = 0 then
+                  Package_Path := To_Unbounded_String (Name_Text);
+               elsif Ada.Strings.Fixed.Index (Name_Text, ".") = 0 then
+                  Package_Path := To_Unbounded_String
+                    (Name_Text & "." & To_String (Package_Path));
+               end if;
+            end;
+         end if;
+         Current := Current.Parent;
+      end loop;
+      if Length (Package_Path) = 0 then
+         return False;
+      elsif To_Lower (To_String (Package_Path)) = "standard" then
+         Type_Name := Simple_Name;
+      else
+         Type_Package := Package_Path;
+         Type_Name := To_Unbounded_String
+           (To_String (Package_Path) & "." & To_String (Simple_Name));
+      end if;
+      return True;
+   exception
+      when others =>
+         return False;
+   end Integer_Type_Info;
+
    type Function_Info is record
-      Package_Name  : Unbounded_String;
-      Function_Name : Unbounded_String;
-      Formals       : String_Vectors.Vector;
-      Actuals       : String_Vectors.Vector;
+      Package_Name        : Unbounded_String;
+      Function_Name       : Unbounded_String;
+      Result_Type_Name    : Unbounded_String;
+      Result_Type_Package : Unbounded_String;
+      Formals             : String_Vectors.Vector;
+      Actuals             : String_Vectors.Vector;
    end record;
 
    function Identify
@@ -579,7 +653,9 @@ package body AdaMutant.Suggestions is
 
       Subp_Spec := Candidate_Node.As_Subp_Body.F_Subp_Spec;
       if Subp_Spec.F_Subp_Returns.Is_Null
-        or else not Is_Integer_Type (Subp_Spec.F_Subp_Returns)
+        or else not Integer_Type_Info
+          (Subp_Spec.F_Subp_Returns,
+           Info.Result_Type_Name, Info.Result_Type_Package)
       then
          Reason := To_Unbounded_String
            ("the function return type is not a supported integer scalar type");
@@ -1289,7 +1365,9 @@ package body AdaMutant.Suggestions is
       Candidate := To_Unbounded_String
         (Candidate_Source (To_String (Test_Name), To_String (Info.Package_Name),
                            To_String (Info.Function_Name), To_String (Arg_List),
-                           To_String (Expected), To_String (Failure_Marker)));
+                           To_String (Expected), To_String (Failure_Marker),
+                           To_String (Info.Result_Type_Name),
+                           To_String (Info.Result_Type_Package)));
       AdaMutant.Files.Write (To_String (Test_Source_Path), To_String (Candidate));
       Original_GPR := To_Unbounded_String
         (AdaMutant.Files.Join (To_String (Work_Original), "suggestion_original_" & Id & ".gpr"));

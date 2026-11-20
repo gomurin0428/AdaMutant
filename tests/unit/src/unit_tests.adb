@@ -1990,7 +1990,7 @@ procedure Unit_Tests is
       declare
          Candidate : constant String := AdaMutant.Suggestions.Candidate_Source
            ("Suggestion_Test", "Counters", "Saturating_Add", "0, 1", "1",
-            "ADAMUTANT_SUGGESTION_FAILURE_8");
+            "ADAMUTANT_SUGGESTION_FAILURE_8", "Integer", "");
       begin
          Check (Ada.Strings.Fixed.Index
                   (Candidate,

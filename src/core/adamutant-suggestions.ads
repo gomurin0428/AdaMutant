@@ -14,7 +14,8 @@ package AdaMutant.Suggestions is
 
    function Candidate_Source
      (Procedure_Name, Package_Name, Function_Name, Arguments,
-      Expected_Value, Failure_Marker : String) return String;
+      Expected_Value, Failure_Marker, Result_Type, Type_Package : String)
+      return String;
 
    function Is_Explicit_Mutant_Failure
      (Exit_Code : Integer; Timed_Out : Boolean; Output, Failure_Marker : String)
