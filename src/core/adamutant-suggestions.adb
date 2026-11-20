@@ -1310,6 +1310,10 @@ package body AdaMutant.Suggestions is
    function Build_Command (Project_File : String) return String is
      ("gprbuild -p -f -q -P " & Shell_Quote (Native_Path (Project_File)));
 
+   function Search_Build_Command (Project_File : String) return String is
+     ("gprbuild -p -f -q -P " & Shell_Quote (Native_Path (Project_File))
+      & " -cargs:Ada -gnata -gnato");
+
    procedure Search
      (Root, File_Path, Source, Search_Project : String;
       Skip_Dirs : String_Vectors.Vector;
@@ -1732,7 +1736,7 @@ package body AdaMutant.Suggestions is
       end if;
       declare
          Built : constant AdaMutant.Processes.Run_Result := Run_Child
-           (Build_Command (To_String (Original_Project)),
+           (Search_Build_Command (To_String (Original_Project)),
             To_String (Original_Dir),
             AdaMutant.Files.Join (To_String (Original_Dir), "search-build.log"),
             Build_Timeout);
@@ -1755,7 +1759,7 @@ package body AdaMutant.Suggestions is
       end if;
       declare
          Built : constant AdaMutant.Processes.Run_Result := Run_Child
-           (Build_Command (To_String (Mutant_Project)),
+           (Search_Build_Command (To_String (Mutant_Project)),
             To_String (Mutant_Dir),
             AdaMutant.Files.Join (To_String (Mutant_Dir), "search-build.log"),
             Build_Timeout);

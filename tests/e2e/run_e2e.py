@@ -1919,6 +1919,89 @@ def check_survivor_input_search():
                     f"inputSearch {observed}, expected {search_status}")
             return mutant
 
+        def run_dependency_case():
+            work = temp_root / "dependency_precondition"
+            work.mkdir()
+            (work / "src").mkdir()
+            (work / "tests").mkdir()
+            (work / "search-source").mkdir()
+            (work / "src" / "search_dep.ads").write_text(
+                "package Search_Dep is\n"
+                "   function Half (X : Integer) return Integer\n"
+                "     with Pre => X = 0;\n"
+                "   function Plain (X : Integer) return Integer;\n"
+                "end Search_Dep;\n")
+            (work / "src" / "search_dep.adb").write_text(
+                "package body Search_Dep is\n"
+                "   function Half (X : Integer) return Integer is\n"
+                "   begin\n"
+                "      return X / 2;\n"
+                "   end Half;\n"
+                "   function Plain (X : Integer) return Integer is\n"
+                "   begin\n"
+                "      return X / 2;\n"
+                "   end Plain;\n"
+                "end Search_Dep;\n")
+            (work / "tests" / "test_search.adb").write_text(
+                "with Search_Dep;\n"
+                "procedure Test_Search is\n"
+                "begin\n"
+                "   null;\n"
+                "end Test_Search;\n")
+            (work / "lib.gpr").write_text(
+                "project Lib is\n"
+                "   for Source_Dirs use (\"src\");\n"
+                "   for Object_Dir use \"lib_obj\";\n"
+                "   package Compiler is\n"
+                "      for Default_Switches (\"Ada\") use (\"-gnat2022\");\n"
+                "   end Compiler;\n"
+                "end Lib;\n")
+            for filename, project, switches, object_dir in (
+                    ("tests.gpr", "Tests", '("-gnat2022", "-gnata")', "tests_obj"),
+                    ("search.gpr", "Search", '("-gnat2022")', "search_obj")):
+                (work / filename).write_text(
+                    'with "lib.gpr";\n'
+                    f"project {project} is\n"
+                    "   for Source_Dirs use (\"tests\");\n"
+                    f"   for Object_Dir use \"{object_dir}\";\n"
+                    "   for Exec_Dir use \"bin\";\n"
+                    "   for Main use (\"test_search.adb\");\n"
+                    "   package Compiler is\n"
+                    f"      for Default_Switches (\"Ada\") use {switches};\n"
+                    "   end Compiler;\n"
+                    f"end {project};\n")
+            python = (f'"{sys.executable}"' if " " in sys.executable
+                      else sys.executable).replace("\\", "/")
+            (work / "adamutant.toml").write_text(
+                'mutate = ["src/search_dep.adb"]\n'
+                'build = "gprbuild -p -q -P tests.gpr"\n'
+                'test = \'"bin/test_search"\'\n'
+                f"prove = '{python} -c \"pass\"'\n"
+                "coverage_analysis = false\n"
+                'mutators = ["NumericLiteral"]\n'
+                "timeout_ms = 250\n"
+                "build_timeout_ms = 30000\n"
+                'search_project = "search.gpr"\n'
+                'reporters = ["console", "json"]\n')
+            try:
+                proc = subprocess.run(
+                    [str(EXE), "run"], cwd=work, env=os.environ.copy(),
+                    text=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, timeout=120)
+            except subprocess.TimeoutExpired:
+                errors.append("dependency-precondition: run exceeded 120 seconds")
+                return None
+            if proc.returncode != 0:
+                errors.append(
+                    f"dependency-precondition: exit {proc.returncode}\n{proc.stdout}")
+            report_path = (
+                work / ".adamutant" / "reports" / "mutation-report.json")
+            if not report_path.exists():
+                errors.append(
+                    f"dependency-precondition: no JSON report\n{proc.stdout}")
+                return None
+            return json.loads(report_path.read_text(encoding="utf-8"))
+
         if numeric_report is not None:
             half = expect_search(
                 numeric_report, "src/search_half.adb", "3",
@@ -2011,6 +2094,27 @@ def check_survivor_input_search():
                 errors.append("unsupported floating-point input was not inconclusive")
             if "input search: witness found" not in numeric_output:
                 errors.append("console report did not print the found witness")
+
+        dependency_report = run_dependency_case()
+        if dependency_report is not None:
+            precondition = expect_search(
+                dependency_report, "src/search_dep.adb", "3",
+                "Survived", "Inconclusive", line=4)
+            if precondition is not None \
+                    and precondition["inputSearch"].get("input"):
+                errors.append(
+                    "dependency precondition rejection was treated as a witness: "
+                    f"{precondition['inputSearch']}")
+            plain = expect_search(
+                dependency_report, "src/search_dep.adb", "3",
+                "Survived", "Found", line=8)
+            if plain is not None:
+                search = plain["inputSearch"]
+                if search.get("input") != "Search_Dep.Plain (2)" \
+                        or search.get("originalOutput") != "1" \
+                        or search.get("mutantOutput") != "0":
+                    errors.append(
+                        f"unrestricted dependency witness was malformed: {search}")
 
         arithmetic_packages = {
             "Search_Two": (
