@@ -19,6 +19,7 @@ with AdaMutant.Reports;
 with AdaMutant.Results;
 with AdaMutant.Runner;
 with AdaMutant.Schemata;
+with AdaMutant.Suggestions;
 with Ada.Strings.Fixed;
 
 procedure Unit_Tests is
@@ -1932,6 +1933,646 @@ procedure Unit_Tests is
              "diff lines: modified and added, not removed");
    end Test_Changes;
 
+   procedure Test_Suggestions is
+      use AdaMutant.Files.String_Vectors;
+      use type AdaMutant.Results.Suggestion_Status;
+      use type AdaMutant.Results.Verification_Outcome;
+
+      Formals : Vector;
+      Actuals : Vector;
+      Reason : Unbounded_String;
+      Basic_Spec : constant String :=
+        "package P is" & LF
+        & "   function Add (A, B : Integer) return Integer;" & LF
+        & "end P;" & LF;
+      Basic_Body : constant String :=
+        "package body P is" & LF
+        & "   function Add (A, B : Integer) return Integer is" & LF
+        & "   begin" & LF
+        & "      return A + B;" & LF
+        & "   end Add;" & LF
+        & "end P;" & LF;
+
+      procedure Rejects (Example, Name : String) is
+         Parsed : Vector;
+         Why : Unbounded_String;
+      begin
+         Check (not AdaMutant.Suggestions.Parse_Bindings
+                  (Example, Formals, Parsed, Why)
+                and then Length (Why) > 0,
+                Name, To_String (Why));
+      end Rejects;
+
+      procedure Generate_Fixture
+        (Name, Spec_Source, Body_Source, Example : String;
+         M : out AdaMutant.Results.Mutant;
+         Project_Mode : String := "-gnat2022";
+         Extra_Source_Path, Extra_Source : String := "";
+         Mutation_Replacement : String := "-";
+         Run_Timeout : Duration := 10.0)
+      is
+         Tmp : constant String := Ada.Directories.Current_Directory
+           & "/obj/suggestion-fixture-" & Name;
+         No_Skip : Vector;
+         Operator_Offset : constant Natural :=
+           Ada.Strings.Fixed.Index (Body_Source, "+");
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp & "/src");
+         AdaMutant.Files.Write (Tmp & "/src/p.ads", Spec_Source);
+         AdaMutant.Files.Write (Tmp & "/src/p.adb", Body_Source);
+         if Extra_Source_Path /= "" then
+            AdaMutant.Files.Write
+              (Tmp & "/src/" & Extra_Source_Path, Extra_Source);
+         end if;
+         AdaMutant.Files.Write
+           (Tmp & "/tests.gpr",
+            "project Tests is" & LF
+            & "   for Source_Dirs use (""src"");" & LF
+            & "   for Object_Dir use ""obj/tests"";" & LF
+            & "   for Exec_Dir use ""bin"";" & LF
+            & "   package Compiler is" & LF
+            & "      for Default_Switches (""Ada"") use ("""
+            & Project_Mode & """);" & LF
+            & "   end Compiler;" & LF
+            & "end Tests;" & LF);
+         Ada.Directories.Create_Path
+           (Tmp & "/.adamutant/suggestion-work/stale");
+         AdaMutant.Files.Write
+           (Tmp & "/.adamutant/suggestion-work/stale/p.ads",
+            "package P is" & LF
+            & "   function Wrong return Float;" & LF
+            & "end P;" & LF);
+         M := (others => <>);
+         M.Status := AdaMutant.Results.Killed;
+         M.Killed_By := AdaMutant.Results.Proof;
+         M.Evidence := AdaMutant.Results.Confirmed;
+         M.Example := To_Unbounded_String (Example);
+         if Operator_Offset = 0 then
+            Check (False, "suggestion fixture contains a mutation operator", Name);
+            Ada.Directories.Delete_Tree (Tmp);
+            return;
+         end if;
+         M.Mutation :=
+           (Kind => Arithmetic_Operator,
+            First => Operator_Offset,
+            Last => Operator_Offset,
+            Replacement => To_Unbounded_String (Mutation_Replacement),
+            Contract => False);
+         M.Start_Pos := AdaMutant.Positions.Of_Offset
+           (Body_Source, Operator_Offset);
+         M.End_Pos := M.Start_Pos;
+         AdaMutant.Suggestions.Generate
+           (Root => Tmp,
+            File_Path => "src/p.adb",
+            Source => Body_Source,
+            Suggestion_Project => "tests.gpr",
+            Report_Dir => "reports",
+            Skip_Dirs => No_Skip,
+            Build_Timeout => 20.0,
+            Run_Timeout => Run_Timeout,
+            M => M);
+         Ada.Directories.Delete_Tree (Tmp);
+      end Generate_Fixture;
+   begin
+      Formals.Append ("Left");
+      Formals.Append ("Right");
+      Check (AdaMutant.Suggestions.Parse_Bindings
+               ("e.g. when right = 1 and LEFT = 0", Formals, Actuals, Reason)
+             and then Natural (Actuals.Length) = 2
+             and then Actuals (1) = "0" and then Actuals (2) = "1",
+             "suggestion bindings: map names case-insensitively",
+             To_String (Reason));
+      Rejects ("when Left = 0 and Right = 1", "suggestion bindings: strict prefix");
+      Rejects ("e.g. when Left = 0", "suggestion bindings: missing formal");
+      Rejects ("e.g. when Left = 0 and Right = 1 and Extra = 2",
+               "suggestion bindings: extra formal");
+      Rejects ("e.g. when Left = 0 and left = 1 and Right = 2",
+               "suggestion bindings: duplicate formal");
+      Rejects ("e.g. when Left = 0 and Right = 1 + 2",
+               "suggestion bindings: reject expressions");
+      Rejects ("e.g. when Left = 0, Right = 1",
+               "suggestion bindings: reject alternate separators");
+      Rejects ("e.g. when ", "suggestion bindings: empty example");
+      declare
+         Empty_Formals : Vector;
+         Parsed : Vector;
+         Why : Unbounded_String;
+      begin
+         Check (not AdaMutant.Suggestions.Parse_Bindings
+                  ("e.g. when Left = 0", Empty_Formals, Parsed, Why)
+                and then Length (Why) > 0,
+                "suggestion bindings: empty formal list");
+      end;
+      Check (AdaMutant.Suggestions.Is_Integer_Literal ("-2_000")
+             and then AdaMutant.Suggestions.Is_Integer_Literal ("16#FF#")
+             and then not AdaMutant.Suggestions.Is_Integer_Literal ("1 + 2")
+             and then not AdaMutant.Suggestions.Is_Integer_Literal ("1__0")
+             and then not AdaMutant.Suggestions.Is_Integer_Literal ("2#2#"),
+             "suggestion bindings: strict integer literals");
+      declare
+         Candidate : constant String := AdaMutant.Suggestions.Candidate_Source
+           ("Suggestion_Test", "Counters", "Saturating_Add", "0, 1", "1",
+            "ADAMUTANT_SUGGESTION_FAILURE_8", "Integer", "");
+      begin
+         Check (Ada.Strings.Fixed.Index
+                  (Candidate,
+                   "if Counters.Saturating_Add (0, 1) /= 1 then") > 0
+                and then Ada.Strings.Fixed.Index
+                  (Candidate, "ADAMUTANT_SUGGESTION_FAILURE_8") > 0
+                and then Ada.Strings.Fixed.Index
+                  (Candidate, "when others =>") > 0
+                and then Ada.Strings.Fixed.Index
+                  (Candidate, "use type Integer;") > 0
+                and then Ada.Strings.Fixed.Index
+                  (Candidate, "Ada.Command_Line.Set_Exit_Status (1)") > 0,
+                "suggestion source: mismatch and exception emit explicit failure");
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "local-result-type",
+            Spec_Source =>
+              "package P is" & LF
+              & "   type Number is range -100 .. 100;" & LF
+              & "   function Add (A, B : Number) return Number;" & LF
+              & "end P;" & LF,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A, B : Number) return Number is" & LF
+              & "   begin" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Verified
+                and then M.Suggestion.Assertion = "P.Add (0, 1) = 1"
+                and then M.Suggestion.Probe_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Probe_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Assertion_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Original_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Run = AdaMutant.Results.Passed,
+                "suggestion integration: package-defined scalar result type",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "public-result-private-body-subtype",
+            Spec_Source =>
+              "package P is" & LF
+              & "   function Add (A, B : Integer) return Integer;" & LF
+              & "private" & LF
+              & "   subtype Hidden is Integer;" & LF
+              & "end P;" & LF,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A, B : Integer) return Hidden is" & LF
+              & "   begin" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Verified
+                and then M.Suggestion.Probe_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Probe_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Assertion_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Original_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Run = AdaMutant.Results.Passed,
+                "suggestion integration: use the public function result subtype",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "external-result-type",
+            Spec_Source =>
+              "with Types;" & LF
+              & "package P is" & LF
+              & "   function Add (A, B : Types.Number) return Types.Number;" & LF
+              & "end P;" & LF,
+            Body_Source =>
+              "with Types;" & LF
+              & "use type Types.Number;" & LF
+              & "package body P is" & LF
+              & "   function Add (A, B : Types.Number) return Types.Number is" & LF
+              & "   begin" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            Extra_Source_Path => "types.ads",
+            Extra_Source =>
+              "package Types is" & LF
+              & "   type Number is range -100 .. 100;" & LF
+              & "end Types;" & LF,
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Verified
+                and then M.Suggestion.Assertion = "P.Add (0, 1) = 1"
+                and then M.Suggestion.Probe_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Assertion_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Run = AdaMutant.Results.Passed,
+                "suggestion integration: result type from another package",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "ada2012-result-type",
+            Spec_Source =>
+              "package P is" & LF
+              & "   type Number is range -100 .. 100;" & LF
+              & "   function Add (A, B : Number) return Number;" & LF
+              & "end P;" & LF,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A, B : Number) return Number is" & LF
+              & "   begin" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M,
+            Project_Mode => "-gnat2012");
+         Check (M.Suggestion.Status = AdaMutant.Results.Verified
+                and then M.Suggestion.Probe_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Probe_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Assertion_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Original_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Run = AdaMutant.Results.Passed,
+                "suggestion integration: custom scalar result under Ada 2012",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "nested-same-name",
+            Spec_Source =>
+              "package P is" & LF
+              & "   function Add (A, B : Integer) return Integer;" & LF
+              & "   package Nested is" & LF
+              & "      function Add (A, B : Integer) return Integer;" & LF
+              & "   end Nested;" & LF
+              & "end P;" & LF,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A, B : Integer) return Integer is" & LF
+              & "   begin" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "   package body Nested is" & LF
+              & "      function Add (A, B : Integer) return Integer is" & LF
+              & "      begin" & LF
+              & "         return A + B;" & LF
+              & "      end Add;" & LF
+              & "   end Nested;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Verified
+                and then M.Suggestion.Assertion = "P.Add (0, 1) = 1"
+                and then M.Suggestion.Mutant_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Run = AdaMutant.Results.Passed,
+                "suggestion integration: ignore nested same-name declaration",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "same-scope-overload",
+            Spec_Source =>
+              "package P is" & LF
+              & "   function Add (A, B : Integer) return Integer;" & LF
+              & "   function Add (A, B, C : Integer) return Integer;" & LF
+              & "end P;" & LF,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A, B : Integer) return Integer is" & LF
+              & "   begin" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Unsupported
+                and then Ada.Strings.Fixed.Index
+                  (To_String (M.Suggestion.Reason), "overloaded") > 0,
+                "suggestion eligibility: reject same-scope overloads",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "unsupported-signature",
+            Spec_Source =>
+              "package P is" & LF
+              & "   function Add (A : Float; B : Integer) return Integer;" & LF
+              & "end P;" & LF,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A : Float; B : Integer) return Integer is" & LF
+              & "   begin" & LF
+              & "      return Integer (A) + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Unsupported
+                and then M.Suggestion.Assertion_Build = AdaMutant.Results.Not_Run,
+                "suggestion eligibility: reject unsupported signatures",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "malformed-bindings",
+            Spec_Source => Basic_Spec,
+            Body_Source => Basic_Body,
+            Example => "e.g. when A = 0 and A = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Unsupported
+                and then M.Suggestion.Probe_Build = AdaMutant.Results.Not_Run,
+                "suggestion eligibility: reject malformed bindings",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "probe-runtime-failure",
+            Spec_Source => Basic_Spec,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A, B : Integer) return Integer is" & LF
+              & "   begin" & LF
+              & "      if A = 0 then" & LF
+              & "         raise Program_Error;" & LF
+              & "      end if;" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Failed
+                and then M.Suggestion.Probe_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Probe_Run = AdaMutant.Results.Failed,
+                "suggestion verification: reject original probe runtime failure",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "original-candidate-runtime-failure",
+            Spec_Source => Basic_Spec,
+            Body_Source =>
+              "with Ada.Command_Line;" & LF
+              & "with Ada.Strings.Fixed;" & LF
+              & "package body P is" & LF
+              & "   function Add (A, B : Integer) return Integer is" & LF
+              & "   begin" & LF
+              & "      if Ada.Strings.Fixed.Index" & LF
+              & "        (Ada.Command_Line.Command_Name, ""suggestion_mutant_1"") > 0 then" & LF
+              & "         raise Program_Error;" & LF
+              & "      end if;" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Failed
+                and then M.Suggestion.Probe_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Assertion_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Original_Run = AdaMutant.Results.Failed,
+                "suggestion verification: reject original candidate runtime failure",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "mutant-build-failure",
+            Spec_Source => Basic_Spec,
+            Body_Source => Basic_Body,
+            Example => "e.g. when A = 0 and B = 1",
+            Mutation_Replacement => "BAD",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Failed
+                and then M.Suggestion.Assertion_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Original_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Build = AdaMutant.Results.Build_Failed,
+                "suggestion verification: require mutant build before detection",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "mutant-remains-successful",
+            Spec_Source => Basic_Spec,
+            Body_Source => Basic_Body,
+            Example => "e.g. when A = 0 and B = 0",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Failed
+                and then M.Suggestion.Mutant_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Run = AdaMutant.Results.Failed,
+                "suggestion verification: mutant success is not a detection",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
+           (Name => "probe-timeout",
+            Spec_Source => Basic_Spec,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A, B : Integer) return Integer is" & LF
+              & "   begin" & LF
+              & "      if A = 0 and then B = 1 then" & LF
+              & "         loop" & LF
+              & "            null;" & LF
+              & "         end loop;" & LF
+              & "      end if;" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M,
+            Run_Timeout => 0.2);
+         Check (M.Suggestion.Status = AdaMutant.Results.Failed
+                and then M.Suggestion.Probe_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Probe_Run = AdaMutant.Results.Timed_Out,
+                "suggestion verification: classify real original probe timeout",
+                To_String (M.Suggestion.Reason));
+      end;
+      Check (AdaMutant.Suggestions.Is_Explicit_Mutant_Failure
+                (1, False, "ADAMUTANT_SUGGESTION_FAILURE_8",
+                 "ADAMUTANT_SUGGESTION_FAILURE_8")
+             and then not AdaMutant.Suggestions.Is_Explicit_Mutant_Failure
+               (127, False, "command not found",
+                "ADAMUTANT_SUGGESTION_FAILURE_8")
+             and then not AdaMutant.Suggestions.Is_Explicit_Mutant_Failure
+               (126, False, "permission denied",
+                "ADAMUTANT_SUGGESTION_FAILURE_8")
+             and then not AdaMutant.Suggestions.Is_Explicit_Mutant_Failure
+               (1, True, "ADAMUTANT_SUGGESTION_FAILURE_8",
+                "ADAMUTANT_SUGGESTION_FAILURE_8")
+             and then not AdaMutant.Suggestions.Is_Explicit_Mutant_Failure
+               (0, False, "normal output", "ADAMUTANT_SUGGESTION_FAILURE_8")
+             and then not AdaMutant.Suggestions.Is_Explicit_Mutant_Failure
+               (1, False, "other failure", "ADAMUTANT_SUGGESTION_FAILURE_8"),
+             "suggestion verification: require marker, exit 1, and no timeout");
+      declare
+         No_Skip : Vector;
+         Weak : AdaMutant.Results.Mutant;
+         Undecided : AdaMutant.Results.Mutant;
+         Missing_Project : AdaMutant.Results.Mutant;
+      begin
+         Weak.Status := AdaMutant.Results.Killed;
+         Weak.Killed_By := AdaMutant.Results.Proof;
+         Weak.Evidence := AdaMutant.Results.Weak_Contract;
+         AdaMutant.Suggestions.Generate
+           (Root => "/nonexistent", File_Path => "p.adb", Source => "",
+            Suggestion_Project => "p.gpr", Report_Dir => ".adamutant/reports",
+            Skip_Dirs => No_Skip, Build_Timeout => 1.0, Run_Timeout => 1.0,
+            M => Weak);
+         Undecided.Status := AdaMutant.Results.Killed;
+         Undecided.Killed_By := AdaMutant.Results.Proof;
+         Undecided.Evidence := AdaMutant.Results.Undecided;
+         AdaMutant.Suggestions.Generate
+           (Root => "/nonexistent", File_Path => "p.adb", Source => "",
+            Suggestion_Project => "p.gpr", Report_Dir => ".adamutant/reports",
+            Skip_Dirs => No_Skip, Build_Timeout => 1.0, Run_Timeout => 1.0,
+            M => Undecided);
+         Missing_Project.Status := AdaMutant.Results.Killed;
+         Missing_Project.Killed_By := AdaMutant.Results.Proof;
+         Missing_Project.Evidence := AdaMutant.Results.Confirmed;
+         AdaMutant.Suggestions.Generate
+           (Root => "/nonexistent", File_Path => "p.adb", Source => "",
+            Suggestion_Project => "p.gpr", Report_Dir => ".adamutant/reports",
+            Skip_Dirs => No_Skip, Build_Timeout => 1.0, Run_Timeout => 1.0,
+            M => Missing_Project);
+         Check (Weak.Has_Suggestion
+                and then Weak.Suggestion.Status = AdaMutant.Results.Ineligible
+                and then Undecided.Has_Suggestion
+                and then Undecided.Suggestion.Status = AdaMutant.Results.Ineligible,
+                "suggestion evidence: weak and undecided are not verified");
+         Check (Missing_Project.Has_Suggestion
+                and then Missing_Project.Suggestion.Status = AdaMutant.Results.Failed
+                and then Missing_Project.Suggestion.Probe_Build
+                          = AdaMutant.Results.Build_Failed,
+                "suggestion verification: missing project is a build failure");
+      end;
+      declare
+         Tmp : constant String :=
+           Ada.Directories.Current_Directory & "/obj/suggestion-unsupported";
+         Source : constant String :=
+           "package body Unsupported is" & LF
+           & "   function Add (A : Float) return Integer is" & LF
+           & "   begin" & LF
+           & "      return Integer (A) + 1;" & LF
+           & "   end Add;" & LF
+           & "end Unsupported;" & LF;
+         No_Skip : Vector;
+         M : AdaMutant.Results.Mutant;
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp & "/src");
+         AdaMutant.Files.Write
+           (Tmp & "/src/unsupported.ads",
+            "package Unsupported is" & LF
+            & "   function Add (A : Float) return Integer;" & LF
+            & "end Unsupported;" & LF);
+         AdaMutant.Files.Write (Tmp & "/src/unsupported.adb", Source);
+         AdaMutant.Files.Write
+           (Tmp & "/tests.gpr",
+            "project Tests is" & LF
+            & "   for Source_Dirs use (""src"");" & LF
+            & "end Tests;" & LF);
+         M.Status := AdaMutant.Results.Killed;
+         M.Killed_By := AdaMutant.Results.Proof;
+         M.Evidence := AdaMutant.Results.Confirmed;
+         M.Example := To_Unbounded_String ("e.g. when A = 1");
+         M.Start_Pos := AdaMutant.Positions.Position'(Line => 4, Column => 14);
+         AdaMutant.Suggestions.Generate
+           (Root => Tmp, File_Path => "src/unsupported.adb", Source => Source,
+            Suggestion_Project => "tests.gpr", Report_Dir => ".adamutant/reports",
+            Skip_Dirs => No_Skip, Build_Timeout => 1.0, Run_Timeout => 1.0,
+            M => M);
+         Check (M.Has_Suggestion
+                and then M.Suggestion.Status = AdaMutant.Results.Unsupported,
+                "suggestion eligibility: reject a noninteger formal",
+                To_String (M.Suggestion.Reason));
+         Ada.Directories.Delete_Tree (Tmp);
+      end;
+      declare
+         R : AdaMutant.Results.Report;
+         M : AdaMutant.Results.Mutant;
+         Text : Unbounded_String;
+      begin
+         R.Files.Append
+           (AdaMutant.Results.Source_File'
+              (Path => To_Unbounded_String ("src/counters.adb"),
+               Source => To_Unbounded_String
+                 ("package body Counters is end Counters;")));
+         M.File := 1;
+         M.Status := AdaMutant.Results.Killed;
+         M.Killed_By := AdaMutant.Results.Proof;
+         M.Failed_Checks.Append ("range check");
+         M.Mutation.Replacement := To_Unbounded_String ("A - B");
+         M.Start_Pos := (Line => 13, Column => 19);
+         M.End_Pos := (Line => 13, Column => 24);
+         M.Has_Suggestion := True;
+         M.Suggestion :=
+           (Status => AdaMutant.Results.Verified,
+            Reason => To_Unbounded_String ("verified independently"),
+            Call => To_Unbounded_String ("Counters.Saturating_Add (0, 1)"),
+            Assertion => To_Unbounded_String
+              ("Counters.Saturating_Add (0, 1) = 1"),
+            Artifact_Path => To_Unbounded_String
+              (".adamutant/reports/suggestions/suggestion_mutant_1.adb"),
+            Project_Path => To_Unbounded_String
+              (".adamutant/reports/suggestions/mutant-1.gpr"),
+            Command => To_Unbounded_String ("gprbuild -P mutant-1.gpr"),
+            Probe_Build => AdaMutant.Results.Passed,
+            Probe_Run => AdaMutant.Results.Passed,
+            Assertion_Build => AdaMutant.Results.Passed,
+            Original_Run => AdaMutant.Results.Passed,
+            Mutant_Build => AdaMutant.Results.Passed,
+            Mutant_Run => AdaMutant.Results.Passed);
+         R.Mutants.Append (M);
+         Text := To_Unbounded_String (AdaMutant.Reports.Json (R));
+         Check (Ada.Strings.Fixed.Index
+                  (To_String (Text), """suggestion"":{""status"":""verified""") > 0
+                and then Ada.Strings.Fixed.Index
+                  (To_String (Text), """assertion"":""Counters.Saturating_Add (0, 1) = 1""") > 0
+                and then Ada.Strings.Fixed.Index
+                  (To_String (Text), """probeBuild"":""passed""") > 0
+                and then Ada.Strings.Fixed.Index
+                  (To_String (Text), """killedBy"":[""proof: range check""]") > 0,
+                "suggestion report fields preserve proof-only detection");
+      end;
+   end Test_Suggestions;
+
    procedure Test_Config is
       use AdaMutant.Config;
 
@@ -1954,6 +2595,7 @@ procedure Unit_Tests is
          & "test = ""bin/t""  # trailing" & LF
          & "prove = ""gnatprove -P p.gpr""" & LF
          & "concurrency = 3" & LF
+         & "suggestion_project = ""p_tests.gpr""" & LF
          & "timeout_factor = 2.5" & LF
          & "mutators = [""ArithmeticOperator""]" & LF
          & "[thresholds]" & LF & "high = 90" & LF & "break = 10" & LF,
@@ -1962,6 +2604,8 @@ procedure Unit_Tests is
       Check (Natural (C.Mutate.Length) = 2 and then C.Mutate (2) = "x.ads",
              "config arrays");
       Check (To_String (C.Build) = "gprbuild -P ""p.gpr""", "config escapes");
+      Check (To_String (C.Suggestion_Project) = "p_tests.gpr",
+             "config: optional suggestion project");
       Check (C.Concurrency = 3 and then C.Timeout_Factor = 2.5,
              "config numbers");
       Check (C.Scan.Enabled (Arithmetic_Operator)
@@ -3118,6 +3762,7 @@ begin
    Test_Positions;
    Test_Changes;
    Test_Config;
+   Test_Suggestions;
    Test_Json;
    Test_Json_Reader;
    Test_Baselines;

@@ -240,7 +240,7 @@ package body AdaMutant.Config is
                  | "bail" | "coverage_analysis" | "mutators"
                  | "exclude_mutators" | "include_mutators" | "mutate_contracts"
                  | "sandbox_exclude"
-                 | "report_dir" | "reporters"
+                 | "report_dir" | "reporters" | "suggestion_project"
             then
                Fail ("'" & Key & "' is a setting, not a test: write the"
                      & " settings before the tables");
@@ -319,6 +319,8 @@ package body AdaMutant.Config is
             Have_Sandbox_Exclude := True;
          elsif Full = "report_dir" then
             C.Report_Dir := To_Unbounded_String (String_Value);
+         elsif Full = "suggestion_project" then
+            C.Suggestion_Project := To_Unbounded_String (String_Value);
          elsif Full = "reporters" then
             Reporters := Array_Value;
             C.Console_Report := False;
@@ -526,6 +528,8 @@ package body AdaMutant.Config is
       & "# Off unless named in mutators or here: LoopDirection." & LF
       & "# include_mutators = [""LoopDirection""]" & LF
       & "sandbox_exclude = ["".git"", ""obj"", ""bin""]" & LF
+      & "# Optional GPR project for verified test suggestions." & LF
+      & "# suggestion_project = ""tests/tests.gpr""" & LF
       & "reporters = [""console"", ""html"", ""json""]" & LF
       & LF
       & "[thresholds]" & LF

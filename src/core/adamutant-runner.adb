@@ -12,6 +12,7 @@ with AdaMutant.Mutators; use AdaMutant.Mutators;
 with AdaMutant.Positions;
 with AdaMutant.Processes; use AdaMutant.Processes;
 with AdaMutant.Schemata;
+with AdaMutant.Suggestions;
 
 package body AdaMutant.Runner is
 
@@ -198,6 +199,8 @@ package body AdaMutant.Runner is
                            Failed_Checks => String_Vectors.Empty_Vector,
                            Evidence      => None,
                            Example       => Null_Unbounded_String,
+                           Has_Suggestion => False,
+                           Suggestion    => (others => <>),
                            Reached       => Unknown,
                            Covered_By    => String_Vectors.Empty_Vector,
                            Killers       => String_Vectors.Empty_Vector,
@@ -2563,6 +2566,34 @@ package body AdaMutant.Runner is
       for K in Work_Items'Range loop
          R.Mutants.Replace_Element (K, Work_Items (K));
       end loop;
+      if Length (S.Suggestion_Project) > 0 and then not R.Mutants.Is_Empty then
+         declare
+            Skip : String_Vectors.Vector := S.Sandbox_Exclude;
+         begin
+            Skip.Append (".adamutant");
+            Skip.Append ("**/.adamutant");
+            for K in R.Mutants.First_Index .. R.Mutants.Last_Index loop
+               declare
+                  M : Mutant := R.Mutants (K);
+               begin
+                  if M.Status = Killed and then M.Killed_By = Proof then
+                     AdaMutant.Suggestions.Generate
+                       (Root             => Root,
+                        File_Path        => To_String (R.Files (M.File).Path),
+                        Source           => To_String (R.Files (M.File).Source),
+                        Suggestion_Project => To_String (S.Suggestion_Project),
+                        Report_Dir       => To_String (S.Report_Dir),
+                        Skip_Dirs        => Skip,
+                        Build_Timeout    => Build_TO,
+                        Run_Timeout      => Ms (S.Timeout_Ms),
+                        M                => M,
+                        Memory_Limit_Mb  => S.Test_Memory_Limit_Mb);
+                     R.Mutants.Replace_Element (K, M);
+                  end if;
+               end;
+            end loop;
+         end;
+      end if;
       Free (Work_Items);
       Free (Covers);
       R.Elapsed := Clock - Started;

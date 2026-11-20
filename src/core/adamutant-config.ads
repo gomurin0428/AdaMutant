@@ -50,6 +50,7 @@ package AdaMutant.Config is
       Scan             : AdaMutant.Mutators.Scan_Options;
       Sandbox_Exclude  : String_Vector;
       Report_Dir       : Unbounded_String;
+      Suggestion_Project : Unbounded_String;
       Console_Report   : Boolean := True;
       Html_Report      : Boolean := True;
       Json_Report      : Boolean := True;

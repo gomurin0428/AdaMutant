@@ -16,6 +16,33 @@ package AdaMutant.Results is
 
    type Detector is (None, Tests, Proof);
 
+   type Suggestion_Status is
+     (No_Suggestion, Ineligible, Unsupported, Failed, Verified);
+
+   function Name (S : Suggestion_Status) return String;
+
+   type Verification_Outcome is
+     (Not_Run, Passed, Failed, Build_Failed, Timed_Out, Spawn_Failed,
+      Invalid_Output);
+
+   function Name (S : Verification_Outcome) return String;
+
+   type Suggestion_Record is record
+      Status          : Suggestion_Status := No_Suggestion;
+      Reason          : Unbounded_String;
+      Call            : Unbounded_String;
+      Assertion       : Unbounded_String;
+      Artifact_Path   : Unbounded_String;
+      Project_Path    : Unbounded_String;
+      Command         : Unbounded_String;
+      Probe_Build     : Verification_Outcome := Not_Run;
+      Probe_Run       : Verification_Outcome := Not_Run;
+      Assertion_Build : Verification_Outcome := Not_Run;
+      Original_Run    : Verification_Outcome := Not_Run;
+      Mutant_Build    : Verification_Outcome := Not_Run;
+      Mutant_Run      : Verification_Outcome := Not_Run;
+   end record;
+
    type Proof_Evidence is (None, Confirmed, Weak_Contract, Undecided);
    --  For a mutant that only the proof detects, what GNATprove gives with
    --  the failure.  Confirmed: a message of severity high (GNATprove ran
@@ -48,6 +75,8 @@ package AdaMutant.Results is
       Example       : Unbounded_String;
       --  The counterexample that GNATprove gives with the failure, "e.g.
       --  when H = 51", or "".
+      Has_Suggestion : Boolean := False;
+      Suggestion     : Suggestion_Record;
       Reached       : Coverage := Unknown;
       Covered_By    : AdaMutant.Config.String_Vector;
       --  With Reached = Covered: the names of the tests that execute the

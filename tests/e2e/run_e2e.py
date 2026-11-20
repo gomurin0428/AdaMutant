@@ -207,7 +207,10 @@ EXAMPLES = {
     # The report says which checks the proof failed on.
     "spark_counter": {"exit": 0, "killed_by": "proof",
                       "proof_checks": ["postcondition", "range check"],
-                      "output": "Mutants killed by the proof, by the check that fails"},
+                      "output": "Mutants killed by the proof, by the check that fails",
+                      "suggestion": True,
+                      "report_dir": ".adamutant/reports/../custom-report",
+                      "config_tail": 'report_dir = ".adamutant/reports/../custom-report"\n'},
     # Contracts on a Ghost model (sequences of SPARKlib, which comes with
     # GNATprove): the test never makes the ring buffer wrap around, and
     # the proof detects the mutants there, by an index or range check or
@@ -690,6 +693,28 @@ def statuses(report):
             for p, f in report["files"].items() for m in f["mutants"]}
 
 
+def suggestion_targets(report):
+    found = []
+    for path, file in report["files"].items():
+        if path != "src/counters.adb":
+            continue
+        lines = file["source"].splitlines()
+        for mutant in file["mutants"]:
+            start = mutant["location"]["start"]
+            line_number = start["line"]
+            column = start["column"] - 1
+            if line_number != 13 or line_number > len(lines):
+                continue
+            line = lines[line_number - 1]
+            if (mutant["mutatorName"] == "ArithmeticOperator"
+                    and mutant["replacement"] == "-"
+                    and line[column:column + 1] == "+"
+                    and line[:column].rstrip().endswith("A")
+                    and line[column + 1:].lstrip().startswith("B")):
+                found.append(mutant)
+    return found
+
+
 def run_example(name, spec, update):
     errors = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -736,11 +761,12 @@ def run_example(name, spec, update):
                 errors.append(f"{p.relative_to(work)} was modified by the run")
         if (work / ".adamutant" / "sandbox").exists():
             errors.append("sandbox directory was not removed")
-        report_path = work / ".adamutant" / "reports" / "mutation-report.json"
+        report_dir = Path(spec.get("report_dir", ".adamutant/reports"))
+        report_path = work / report_dir / "mutation-report.json"
         if not report_path.exists():
             return errors + ["no JSON report"]
         report = json.loads(report_path.read_text(encoding="utf-8"))
-        if not (work / ".adamutant" / "reports" / "mutation-report.html").exists():
+        if not report_path.with_suffix(".html").exists():
             errors.append("no HTML report")
         if report.get("schemaVersion") != "2":
             errors.append("schemaVersion is not 2")
@@ -852,6 +878,115 @@ def run_example(name, spec, update):
             for k in sorted(set(expected) | set(actual)):
                 if expected.get(k) != actual.get(k):
                     errors.append(f"{k}: expected {expected.get(k)}, got {actual.get(k)}")
+        if spec.get("suggestion"):
+            targets = suggestion_targets(report)
+            if len(targets) != 1:
+                errors.append(f"expected one line-13 A + B to A - B mutant, got {targets}")
+            else:
+                target = targets[0]
+                killed_by = target.get("killedBy", [])
+                if target.get("status") != "Killed" or not any(
+                        killer.startswith("proof:") for killer in killed_by):
+                    errors.append(f"target did not remain proof-only: {target}")
+                suggestion = target.get("suggestion", {})
+                if suggestion.get("status") != "verified":
+                    errors.append(f"target suggestion was not verified: {suggestion}")
+                if suggestion.get("call") != "Counters.Saturating_Add (0, 1)" \
+                        or suggestion.get("assertion") \
+                        != "Counters.Saturating_Add (0, 1) = 1":
+                    errors.append(f"unexpected suggested assertion: {suggestion}")
+                outcomes = suggestion.get("verification", {})
+                if any(outcomes.get(field) != "passed" for field in (
+                        "probeBuild", "probeRun", "assertionBuild", "originalRun",
+                        "mutantBuild", "mutantRun")):
+                    errors.append(f"suggestion verification outcomes were incomplete: {outcomes}")
+                if "suggestion: verified" not in proc.stdout:
+                    errors.append("console report did not expose the verified suggestion")
+                artifact = suggestion.get("artifactPath")
+                project = suggestion.get("projectPath")
+                command = suggestion.get("command")
+                if not artifact or not (work / artifact).is_file():
+                    errors.append(f"saved suggestion source is missing: {artifact}")
+                if not project or not (work / project).is_file():
+                    errors.append(f"saved suggestion project is missing: {project}")
+                if not command:
+                    errors.append("suggestion report has no runnable command")
+                else:
+                    failure_marker = (
+                        f"ADAMUTANT_SUGGESTION_FAILURE_{target['id']}")
+                    build_command, separator, run_command = command.partition(" && ")
+                    if not separator:
+                        errors.append("saved suggestion command lacks separate build/run steps")
+                    else:
+                        original_build = subprocess.run(
+                            build_command, cwd=work, shell=True, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                        if original_build.returncode != 0:
+                            errors.append("saved harness did not build on the original:\n"
+                                          + original_build.stdout)
+                        else:
+                            original_harness = subprocess.run(
+                                run_command, cwd=work, shell=True, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            if (original_harness.returncode != 0
+                                    or failure_marker in original_harness.stdout):
+                                errors.append("saved harness failed on the original:\n"
+                                              + original_harness.stdout)
+                    counter_file = work / "src" / "counters.adb"
+                    original_source = counter_file.read_text(encoding="utf-8")
+                    lines = original_source.splitlines(keepends=True)
+                    start = target["location"]["start"]
+                    offset = start["column"] - 1
+                    original_line = lines[start["line"] - 1]
+                    lines[start["line"] - 1] = (
+                        original_line[:offset] + target["replacement"]
+                        + original_line[offset + 1:])
+                    try:
+                        counter_file.write_text("".join(lines), encoding="utf-8")
+                        mutant_build = subprocess.run(
+                            build_command, cwd=work, shell=True, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                        if mutant_build.returncode != 0:
+                            errors.append("saved harness did not build on the exact mutant:\n"
+                                          + mutant_build.stdout)
+                        else:
+                            mutant_harness = subprocess.run(
+                                run_command, cwd=work, shell=True, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            if (mutant_harness.returncode != 1
+                                    or failure_marker not in mutant_harness.stdout):
+                                errors.append(
+                                    "saved harness did not report the exact mutant failure:\n"
+                                    + mutant_harness.stdout)
+                    finally:
+                        counter_file.write_text(original_source, encoding="utf-8")
+
+                    test_file = work / "tests" / "test_counters.adb"
+                    test_source = test_file.read_text(encoding="utf-8")
+                    marker = "end Test_Counters;"
+                    assertion = (
+                        f"   pragma Assert ({suggestion.get('assertion', '')});\n")
+                    if marker not in test_source:
+                        errors.append("could not inject the suggested assertion into the copied test")
+                    else:
+                        test_file.write_text(
+                            test_source.replace(marker, assertion + marker, 1),
+                            encoding="utf-8")
+                        rerun = subprocess.run(
+                            [str(EXE), "run"], cwd=work, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                        if rerun.returncode != 0:
+                            errors.append("run with the injected test failed:\n" + rerun.stdout)
+                        shifted = json.loads(report_path.read_text(encoding="utf-8"))
+                        shifted_targets = suggestion_targets(shifted)
+                        if (len(shifted_targets) != 1
+                                or shifted_targets[0].get("status") != "Killed"
+                                or "tests" not in shifted_targets[0].get("killedBy", [])
+                                or any(k.startswith("proof:")
+                                       for k in shifted_targets[0].get("killedBy", []))):
+                            errors.append(
+                                "the injected assertion did not shift the target to tests: "
+                                + repr(shifted_targets))
     return errors
 
 
