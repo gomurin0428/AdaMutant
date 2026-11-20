@@ -198,6 +198,7 @@ package body AdaMutant.Runner is
                            Killed_By     => None,
                            Failed_Checks => String_Vectors.Empty_Vector,
                            Evidence      => None,
+                           Input_Search  => (others => <>),
                            Example       => Null_Unbounded_String,
                            Has_Suggestion => False,
                            Suggestion    => (others => <>),
@@ -2588,6 +2589,37 @@ package body AdaMutant.Runner is
                         Run_Timeout      => Ms (S.Timeout_Ms),
                         M                => M,
                         Memory_Limit_Mb  => S.Test_Memory_Limit_Mb);
+                     R.Mutants.Replace_Element (K, M);
+                  end if;
+               end;
+            end loop;
+         end;
+      end if;
+      if Length (S.Search_Project) > 0
+        and then S.Search_Budget_Ms > 0
+        and then not R.Mutants.Is_Empty
+      then
+         declare
+            Skip : String_Vectors.Vector := S.Sandbox_Exclude;
+         begin
+            Skip.Append (".adamutant");
+            Skip.Append ("**/.adamutant");
+            for K in R.Mutants.First_Index .. R.Mutants.Last_Index loop
+               declare
+                  M : Mutant := R.Mutants (K);
+               begin
+                  if M.Status = Survived then
+                     AdaMutant.Suggestions.Search
+                       (Root              => Root,
+                        File_Path         => To_String (R.Files (M.File).Path),
+                        Source            => To_String (R.Files (M.File).Source),
+                        Search_Project    => To_String (S.Search_Project),
+                        Skip_Dirs         => Skip,
+                        Build_Timeout     => Build_TO,
+                        Run_Timeout       => Ms (S.Timeout_Ms),
+                        Budget            => Ms (S.Search_Budget_Ms),
+                        M                 => M,
+                        Memory_Limit_Mb   => S.Test_Memory_Limit_Mb);
                      R.Mutants.Replace_Element (K, M);
                   end if;
                end;

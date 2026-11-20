@@ -7,10 +7,13 @@ Run with --update to rewrite them after a reviewed behaviour change.
 """
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1674,6 +1677,518 @@ def check_baseline():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_survivor_input_search():
+    errors = []
+    with tempfile.TemporaryDirectory() as tmp:
+        temp_root = Path(tmp)
+
+        def write_project(work, packages, source_dirs=("src", "tests")):
+            (work / "src").mkdir(parents=True)
+            (work / "tests").mkdir()
+            for directory in source_dirs:
+                (work / directory).mkdir(parents=True, exist_ok=True)
+            for name, (spec, body) in packages.items():
+                (work / "src" / (name.lower() + ".ads")).write_text(
+                    f"package {name} is\n{spec}\nend {name};\n")
+                (work / "src" / (name.lower() + ".adb")).write_text(
+                    f"package body {name} is\n{body}\nend {name};\n")
+            imports = "".join(f"with {name};\n" for name in packages)
+            (work / "tests" / "test_search.adb").write_text(
+                imports + "procedure Test_Search is\nbegin\n   null;\n"
+                "end Test_Search;\n")
+            for filename, project in (("tests.gpr", "Tests"),
+                                      ("search.gpr", "Search")):
+                project_dirs = (
+                    ("src", "tests") if filename == "tests.gpr" else source_dirs)
+                dirs = ", ".join(f'"{item}"' for item in project_dirs)
+                (work / filename).write_text(
+                    f"project {project} is\n"
+                    f"   for Source_Dirs use ({dirs});\n"
+                    "   for Object_Dir use \"obj\";\n"
+                    "   for Exec_Dir use \"bin\";\n"
+                    "   for Main use (\"test_search.adb\");\n"
+                    "   package Compiler is\n"
+                    "      for Default_Switches (\"Ada\") use "
+                    "(\"-gnat2022\", \"-gnata\");\n"
+                    "   end Compiler;\n"
+                    f"end {project};\n")
+        def run_case(name, packages, mutate_packages, mutators,
+                     test_source=None, search_dirs=("src", "tests"),
+                     budget=None, timeout_ms=250, slow_search_build=False):
+            work = temp_root / name
+            work.mkdir()
+            write_project(work, packages, search_dirs)
+            if test_source is not None:
+                (work / "tests" / "test_search.adb").write_text(test_source)
+            mutation_files = [
+                f"src/{package.lower()}.adb" for package in mutate_packages]
+            python = (f'"{sys.executable}"' if " " in sys.executable
+                      else sys.executable).replace("\\", "/")
+            config = (
+                "mutate = [" + ", ".join(f'"{item}"' for item in mutation_files)
+                + "]\n"
+                "build = \"gprbuild -p -q -P tests.gpr\"\n"
+                "test = '\"bin/test_search\"'\n"
+                f"prove = '{python} -c \"pass\"'\n"
+                "coverage_analysis = false\n"
+                "mutators = [" + ", ".join(f'"{item}"' for item in mutators)
+                + "]\n"
+                "timeout_ms = " + str(timeout_ms) + "\n"
+                "build_timeout_ms = 30000\n"
+                "search_project = \"search.gpr\"\n"
+                "reporters = [\"console\", \"json\"]\n")
+            if budget is not None:
+                config += f"search_budget_ms = {budget}\n"
+            (work / "adamutant.toml").write_text(config)
+            env = os.environ.copy()
+            marker = temp_root / "search-build-started"
+            if slow_search_build:
+                real_gprbuild = shutil.which("gprbuild")
+                if not real_gprbuild:
+                    errors.append("budget case: gprbuild is not on PATH")
+                    return None, ""
+                wrapper_dir = temp_root / "wrapper"
+                wrapper_dir.mkdir()
+                wrapper = wrapper_dir / "gprbuild"
+                wrapper.write_text(
+                    "#!/bin/sh\n"
+                    "case \" $* \" in\n"
+                    "  *adamutant_search_original_*)\n"
+                    "    : > \"$ADAMUTANT_SEARCH_WRAPPER_STARTED\"\n"
+                    "    sleep 10\n"
+                    "    ;;\n"
+                    "esac\n"
+                    f"exec {shlex.quote(real_gprbuild)} \"$@\"\n")
+                wrapper.chmod(0o755)
+                env["PATH"] = str(wrapper_dir) + os.pathsep + env["PATH"]
+                env["ADAMUTANT_SEARCH_WRAPPER_STARTED"] = str(marker)
+            try:
+                started = time.monotonic()
+                proc = subprocess.run(
+                    [str(EXE), "run"], cwd=work, env=env, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    timeout=120)
+            except subprocess.TimeoutExpired:
+                errors.append(f"{name}: run exceeded 120 seconds")
+                return None, ""
+            elapsed = time.monotonic() - started
+            if slow_search_build and elapsed > 8:
+                errors.append(
+                    f"{name}: search exceeded its total build-inclusive budget "
+                    f"({elapsed:.2f}s)")
+            if proc.returncode != 0:
+                errors.append(f"{name}: exit {proc.returncode}\n{proc.stdout}")
+            report_path = work / ".adamutant" / "reports" / "mutation-report.json"
+            if not report_path.exists():
+                errors.append(f"{name}: no JSON report\n{proc.stdout}")
+                return None, proc.stdout
+            if report_path.with_suffix(".html").exists():
+                errors.append(f"{name}: unexpectedly wrote an HTML report")
+            if slow_search_build and not marker.exists():
+                errors.append(f"{name}: search probe build was not reached")
+            return json.loads(report_path.read_text(encoding="utf-8")), proc.stdout
+
+        numeric_packages = {
+            "Search_Half": (
+                "   function Value (X : Integer) return Integer;",
+                "   function Value (X : Integer) return Integer is\n"
+                "   begin\n      return X / 2;\n   end Value;"),
+            "Search_Positive": (
+                "   function At_Last (X : Positive) return Integer;",
+                "   function At_Last (X : Positive) return Integer is\n"
+                "   begin\n"
+                "      if X = Positive'Last then\n         return 1;\n"
+                "      else\n         return Integer (X) - Integer (X);\n      end if;\n"
+                "   end At_Last;"),
+            "Search_Derived": (
+                "   type Small is new Integer range 10 .. 20;\n"
+                "   function At_Last (X : Small) return Integer;",
+                "   function At_Last (X : Small) return Integer is\n"
+                "   begin\n"
+                "      if X = Small'Last then\n         return 1;\n"
+                "      else\n         return Integer (X) - Integer (X);\n      end if;\n"
+                "   end At_Last;"),
+            "Search_Predicate": (
+                "   subtype Even is Integer\n"
+                "     with Dynamic_Predicate => Even mod 2 = 0;\n"
+                "   function Half (X : Even) return Integer;",
+                "   function Half (X : Even) return Integer is\n"
+                "   begin\n      return X / 2;\n   end Half;"),
+            "Search_Predicate_Range": (
+                "   subtype Small is Integer range 10 .. 20\n"
+                "     with Dynamic_Predicate => Small mod 2 = 0;\n"
+                "   subtype Inherited_Small is Small;\n"
+                "   Boundary : constant Integer := 20;\n"
+                "   function Direct (X : Small) return Integer;\n"
+                "   function Inherited (X : Inherited_Small) return Integer;",
+                "   function Direct (X : Small) return Integer is\n"
+                "   begin\n"
+                "      if X = Boundary then\n"
+                "         return 1;\n"
+                "      else\n"
+                "         return 0;\n"
+                "      end if;\n"
+                "   end Direct;\n"
+                "   function Inherited (X : Inherited_Small) return Integer is\n"
+                "   begin\n"
+                "      if X = Boundary then\n"
+                "         return 1;\n"
+                "      else\n"
+                "         return 0;\n"
+                "      end if;\n"
+                "   end Inherited;"),
+            "Search_Pre": (
+                "   function Zero (X : Integer) return Integer\n"
+                "     with Pre => X = 0;",
+                "   function Zero (X : Integer) return Integer is\n"
+                "   begin\n      return X / 2;\n   end Zero;"),
+            "Search_Original_Exception": (
+                "   function Quotient (X : Integer) return Integer;",
+                "   function Quotient (X : Integer) return Integer is\n"
+                "   begin\n      return 10 / X;\n   end Quotient;"),
+            "Search_Timeout": (
+                "   function Trigger (X : Integer) return Integer;",
+                "   function Trigger (X : Integer) return Integer is\n"
+                "   begin\n"
+                "      if X = 1 then\n         loop\n            null;\n"
+                "         end loop;\n      end if;\n"
+                "      return X * 0;\n"
+                "   end Trigger;"),
+            "Search_Killed": (
+                "   function Value (X : Integer) return Integer;",
+                "   function Value (X : Integer) return Integer is\n"
+                "   begin\n      return X / 2;\n   end Value;"),
+            "Search_Unsupported": (
+                "   function Value (X : Float) return Integer;",
+                "   function Value (X : Float) return Integer is\n"
+                "   begin\n"
+                "      if X > 0.0 then\n         return 1;\n"
+                "      else\n         return 0;\n      end if;\n"
+                "   end Value;"),
+        }
+        numeric_imports = "".join(
+            f"with {package};\n" for package in numeric_packages)
+        killed_test = (
+            "with Ada.Command_Line;\n" + numeric_imports
+            + "procedure Test_Search is\nbegin\n"
+            "   if Search_Killed.Value (2) /= 1 then\n"
+            "      Ada.Command_Line.Set_Exit_Status "
+            "(Ada.Command_Line.Failure);\n"
+            "   end if;\nend Test_Search;\n")
+        numeric_report, numeric_output = run_case(
+            "numeric", numeric_packages, list(numeric_packages),
+            ["NumericLiteral"], test_source=killed_test, timeout_ms=250)
+
+        def mutants_at(report, source):
+            if report is None:
+                return []
+            return report.get("files", {}).get(source, {}).get("mutants", [])
+
+        def find_mutant(report, source, replacement, line=None):
+            found = [
+                mutant for mutant in mutants_at(report, source)
+                if mutant.get("replacement") == replacement
+                and (line is None
+                     or mutant["location"]["start"]["line"] == line)
+            ]
+            if len(found) != 1:
+                errors.append(
+                    f"{source}: expected one replacement {replacement!r}, "
+                    f"found {len(found)}")
+                return None
+            return found[0]
+
+        def expect_search(report, source, replacement, status,
+                          search_status, line=None):
+            mutant = find_mutant(report, source, replacement, line)
+            if mutant is None:
+                return None
+            if mutant.get("status") != status:
+                errors.append(
+                    f"{source} replacement {replacement!r}: status "
+                    f"{mutant.get('status')!r}, expected {status!r}")
+            observed = mutant.get("inputSearch")
+            if search_status is None:
+                if observed is not None:
+                    errors.append(
+                        f"{source} replacement {replacement!r}: "
+                        f"unexpected inputSearch {observed}")
+            elif observed is None or observed.get("status") != search_status:
+                errors.append(
+                    f"{source} replacement {replacement!r}: "
+                    f"inputSearch {observed}, expected {search_status}")
+            return mutant
+
+        def run_dependency_case():
+            work = temp_root / "dependency_precondition"
+            work.mkdir()
+            (work / "src").mkdir()
+            (work / "tests").mkdir()
+            (work / "search-source").mkdir()
+            (work / "src" / "search_dep.ads").write_text(
+                "package Search_Dep is\n"
+                "   function Half (X : Integer) return Integer\n"
+                "     with Pre => X = 0;\n"
+                "   function Plain (X : Integer) return Integer;\n"
+                "end Search_Dep;\n")
+            (work / "src" / "search_dep.adb").write_text(
+                "package body Search_Dep is\n"
+                "   function Half (X : Integer) return Integer is\n"
+                "   begin\n"
+                "      return X / 2;\n"
+                "   end Half;\n"
+                "   function Plain (X : Integer) return Integer is\n"
+                "   begin\n"
+                "      return X / 2;\n"
+                "   end Plain;\n"
+                "end Search_Dep;\n")
+            (work / "tests" / "test_search.adb").write_text(
+                "with Search_Dep;\n"
+                "procedure Test_Search is\n"
+                "begin\n"
+                "   null;\n"
+                "end Test_Search;\n")
+            (work / "lib.gpr").write_text(
+                "project Lib is\n"
+                "   for Source_Dirs use (\"src\");\n"
+                "   for Object_Dir use \"lib_obj\";\n"
+                "   package Compiler is\n"
+                "      for Default_Switches (\"Ada\") use (\"-gnat2022\");\n"
+                "   end Compiler;\n"
+                "end Lib;\n")
+            for filename, project, switches, object_dir in (
+                    ("tests.gpr", "Tests", '("-gnat2022", "-gnata")', "tests_obj"),
+                    ("search.gpr", "Search", '("-gnat2022")', "search_obj")):
+                (work / filename).write_text(
+                    'with "lib.gpr";\n'
+                    f"project {project} is\n"
+                    "   for Source_Dirs use (\"tests\");\n"
+                    f"   for Object_Dir use \"{object_dir}\";\n"
+                    "   for Exec_Dir use \"bin\";\n"
+                    "   for Main use (\"test_search.adb\");\n"
+                    "   package Compiler is\n"
+                    f"      for Default_Switches (\"Ada\") use {switches};\n"
+                    "   end Compiler;\n"
+                    f"end {project};\n")
+            python = (f'"{sys.executable}"' if " " in sys.executable
+                      else sys.executable).replace("\\", "/")
+            (work / "adamutant.toml").write_text(
+                'mutate = ["src/search_dep.adb"]\n'
+                'build = "gprbuild -p -q -P tests.gpr"\n'
+                'test = \'"bin/test_search"\'\n'
+                f"prove = '{python} -c \"pass\"'\n"
+                "coverage_analysis = false\n"
+                'mutators = ["NumericLiteral"]\n'
+                "timeout_ms = 250\n"
+                "build_timeout_ms = 30000\n"
+                'search_project = "search.gpr"\n'
+                'reporters = ["console", "json"]\n')
+            try:
+                proc = subprocess.run(
+                    [str(EXE), "run"], cwd=work, env=os.environ.copy(),
+                    text=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, timeout=120)
+            except subprocess.TimeoutExpired:
+                errors.append("dependency-precondition: run exceeded 120 seconds")
+                return None
+            if proc.returncode != 0:
+                errors.append(
+                    f"dependency-precondition: exit {proc.returncode}\n{proc.stdout}")
+            report_path = (
+                work / ".adamutant" / "reports" / "mutation-report.json")
+            if not report_path.exists():
+                errors.append(
+                    f"dependency-precondition: no JSON report\n{proc.stdout}")
+                return None
+            return json.loads(report_path.read_text(encoding="utf-8"))
+
+        if numeric_report is not None:
+            half = expect_search(
+                numeric_report, "src/search_half.adb", "3",
+                "Survived", "Found")
+            if half is not None:
+                search = half["inputSearch"]
+                if not search.get("input", "").endswith("(2)") \
+                        or search.get("originalOutput") != "1" \
+                        or search.get("mutantOutput") != "0":
+                    errors.append(f"half witness was not 2 -> 1/0: {search}")
+                if half.get("suggestion") is not None:
+                    errors.append("half search incorrectly required a suggestion")
+                if half.get("example") not in (None, "") \
+                        or half.get("evidence") not in (None, "", []):
+                    errors.append(
+                        "half search depended on an example or proof evidence")
+            for source in ("src/search_positive.adb",
+                           "src/search_derived.adb"):
+                boundary = expect_search(
+                    numeric_report, source, "0", "Survived", "Found")
+                if boundary is not None:
+                    call = boundary["inputSearch"].get("input", "")
+                    if source.endswith("search_positive.adb"):
+                        match = re.search(r"\((\d+)\)$", call)
+                        if not match or int(match.group(1)) <= 3:
+                            errors.append(
+                                f"Positive search did not use a boundary: {call}")
+                    elif "(20)" not in call:
+                        errors.append(
+                            f"derived constrained search did not use Last: {call}")
+            predicate = expect_search(
+                numeric_report, "src/search_predicate.adb", "3",
+                "Survived", "Found")
+            if predicate is not None \
+                    and not predicate["inputSearch"].get("input", "").endswith("(2)"):
+                errors.append(
+                    "predicate-invalid small values were not skipped: "
+                    f"{predicate['inputSearch']}")
+            for line in (5, 13):
+                candidates = [
+                    mutant
+                    for mutant in mutants_at(
+                        numeric_report, "src/search_predicate_range.adb")
+                    if mutant["location"]["start"]["line"] == line]
+                if len(candidates) != 1:
+                    errors.append(
+                        "expected one predicate-boundary mutant at line "
+                        f"{line}, found {len(candidates)}")
+                    continue
+                ranged = candidates[0]
+                search = ranged.get("inputSearch", {})
+                if ranged.get("status") != "Survived" \
+                        or search.get("status") != "Found" \
+                        or not search.get("input", "").endswith("(20)") \
+                        or search.get("originalOutput") != "1" \
+                        or search.get("mutantOutput") == "1":
+                    errors.append(
+                        "predicate range boundary witness was not at 20 "
+                        f"for line {line}: {search}")
+            expect_search(
+                numeric_report, "src/search_pre.adb", "3",
+                "Survived", "Inconclusive")
+            original_exception = expect_search(
+                numeric_report, "src/search_original_exception.adb", "11",
+                "Survived", "Found")
+            if original_exception is not None \
+                    and not original_exception["inputSearch"].get("input", "").endswith("(1)"):
+                errors.append(
+                    "original exception was not skipped before the witness: "
+                    f"{original_exception['inputSearch']}")
+            timeout_mutant = expect_search(
+                numeric_report, "src/search_timeout.adb", "0",
+                "Survived", "Inconclusive", line=4)
+            if timeout_mutant is not None \
+                    and timeout_mutant["inputSearch"].get("input"):
+                errors.append(
+                    "mutant timeout was treated as a witness: "
+                    f"{timeout_mutant['inputSearch']}")
+            killed = expect_search(
+                numeric_report, "src/search_killed.adb", "3",
+                "Killed", None)
+            if killed is not None and not killed.get("killedBy"):
+                errors.append(f"test-detected mutant was not killed by tests: {killed}")
+            unsupported = mutants_at(
+                numeric_report, "src/search_unsupported.adb")
+            if not unsupported or not any(
+                    mutant.get("inputSearch", {}).get("status") == "Inconclusive"
+                    and "integer" in mutant.get("inputSearch", {}).get("reason", "")
+                    for mutant in unsupported):
+                errors.append("unsupported floating-point input was not inconclusive")
+            if "input search: witness found" not in numeric_output:
+                errors.append("console report did not print the found witness")
+
+        dependency_report = run_dependency_case()
+        if dependency_report is not None:
+            precondition = expect_search(
+                dependency_report, "src/search_dep.adb", "3",
+                "Survived", "Inconclusive", line=4)
+            if precondition is not None \
+                    and precondition["inputSearch"].get("input"):
+                errors.append(
+                    "dependency precondition rejection was treated as a witness: "
+                    f"{precondition['inputSearch']}")
+            plain = expect_search(
+                dependency_report, "src/search_dep.adb", "3",
+                "Survived", "Found", line=8)
+            if plain is not None:
+                search = plain["inputSearch"]
+                if search.get("input") != "Search_Dep.Plain (2)" \
+                        or search.get("originalOutput") != "1" \
+                        or search.get("mutantOutput") != "0":
+                    errors.append(
+                        f"unrestricted dependency witness was malformed: {search}")
+
+        arithmetic_packages = {
+            "Search_Two": (
+                "   function Sum (X, Y : Integer) return Integer;",
+                "   function Sum (X, Y : Integer) return Integer is\n"
+                "   begin\n      return X + Y;\n   end Sum;"),
+            "Search_Product": (
+                "   function Product (X : Integer) return Integer;",
+                "   function Product (X : Integer) return Integer is\n"
+                "   begin\n      return X * 0;\n   end Product;"),
+        }
+        arithmetic_report, _ = run_case(
+            "arithmetic", arithmetic_packages, list(arithmetic_packages),
+            ["ArithmeticOperator"])
+        if arithmetic_report is not None:
+            two = expect_search(
+                arithmetic_report, "src/search_two.adb", "-",
+                "Survived", "Found")
+            if two is not None:
+                search = two["inputSearch"]
+                if search.get("input") != "Search_Two.Sum (0, 1)" \
+                        or search.get("originalOutput") != "1" \
+                        or search.get("mutantOutput") != "-1":
+                    errors.append(f"two-formal witness was malformed: {search}")
+            product = expect_search(
+                arithmetic_report, "src/search_product.adb", "/",
+                "Survived", "Inconclusive")
+            if product is not None and product["inputSearch"].get("input"):
+                errors.append(
+                    f"mutant exception was treated as a witness: "
+                    f"{product['inputSearch']}")
+
+        build_failure_report, _ = run_case(
+            "build_failure",
+            {"Search_Build_Failure": numeric_packages["Search_Half"]},
+            ["Search_Build_Failure"], ["NumericLiteral"],
+            search_dirs=("empty",))
+        build_failure = expect_search(
+            build_failure_report, "src/search_build_failure.adb", "3",
+            "Survived", "Inconclusive")
+        if build_failure is not None \
+                and "did not build" not in build_failure["inputSearch"].get("reason", ""):
+            errors.append(
+                f"search probe build failure was not reported: "
+                f"{build_failure['inputSearch']}")
+
+        if os.name == "nt":
+            print("  SKIP build-inclusive budget subcase: POSIX wrapper unavailable")
+        else:
+            budget_report, _ = run_case(
+                "budget",
+                {"Search_Budget": numeric_packages["Search_Half"]},
+                ["Search_Budget"], ["NumericLiteral"],
+                budget=5000, slow_search_build=True)
+            budget_mutant = expect_search(
+                budget_report, "src/search_budget.adb", "3",
+                "Survived", "Inconclusive")
+            if budget_mutant is not None \
+                    and "time limit" not in budget_mutant["inputSearch"].get("reason", ""):
+                errors.append(
+                    f"build time was not included in the search budget: "
+                    f"{budget_mutant['inputSearch']}")
+
+        disabled_report, _ = run_case(
+            "disabled",
+            {"Search_Disabled": numeric_packages["Search_Half"]},
+            ["Search_Disabled"], ["NumericLiteral"], budget=0)
+        expect_search(
+            disabled_report, "src/search_disabled.adb", "3",
+            "Survived", None)
+
+    return errors
+
+
 def main():
     update = "--update" in sys.argv
     if not EXE.exists():
@@ -1683,6 +2198,7 @@ def main():
     checks = (("since", check_since), ("proof_log", check_proof_log),
               ("baseline", check_baseline), ("library", check_library),
               ("prove_cache", check_prove_cache),
+              ("survivor_input_search", check_survivor_input_search),
               ("assertions", check_assertions))
     unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:

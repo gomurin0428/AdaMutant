@@ -51,6 +51,8 @@ package AdaMutant.Config is
       Sandbox_Exclude  : String_Vector;
       Report_Dir       : Unbounded_String;
       Suggestion_Project : Unbounded_String;
+      Search_Project   : Unbounded_String;
+      Search_Budget_Ms : Natural := 10_000;
       Console_Report   : Boolean := True;
       Html_Report      : Boolean := True;
       Json_Report      : Boolean := True;

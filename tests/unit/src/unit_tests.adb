@@ -2596,6 +2596,8 @@ procedure Unit_Tests is
          & "prove = ""gnatprove -P p.gpr""" & LF
          & "concurrency = 3" & LF
          & "suggestion_project = ""p_tests.gpr""" & LF
+         & "search_project = ""search.gpr""" & LF
+         & "search_budget_ms = 0" & LF
          & "timeout_factor = 2.5" & LF
          & "mutators = [""ArithmeticOperator""]" & LF
          & "[thresholds]" & LF & "high = 90" & LF & "break = 10" & LF,
@@ -2606,6 +2608,9 @@ procedure Unit_Tests is
       Check (To_String (C.Build) = "gprbuild -P ""p.gpr""", "config escapes");
       Check (To_String (C.Suggestion_Project) = "p_tests.gpr",
              "config: optional suggestion project");
+      Check (To_String (C.Search_Project) = "search.gpr"
+             and then C.Search_Budget_Ms = 0,
+             "config: independent input-search project and disabled budget");
       Check (C.Concurrency = 3 and then C.Timeout_Factor = 2.5,
              "config numbers");
       Check (C.Scan.Enabled (Arithmetic_Operator)
@@ -2622,6 +2627,8 @@ procedure Unit_Tests is
       begin
          Check (not D.Scan.Enabled (Loop_Direction)
                 and then D.Scan.Enabled (Attribute_Swap)
+                and then Length (D.Search_Project) = 0
+                and then D.Search_Budget_Ms = 10_000
                 and then I.Scan.Enabled (Loop_Direction)
                 and then I.Scan.Enabled (Numeric_Literal)
                 and then not I.Scan.Enabled (String_Literal)
