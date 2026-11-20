@@ -298,6 +298,7 @@ procedure Unit_Tests is
                  & "|EqualityOperator =->/=|EqualityOperator G (I) = H->False"
                  & "|EqualityOperator =->/=|EqualityOperator P = Q->False"
                  & "|EqualityOperator >->>="
+                 & "|EqualityOperator >->/="
                  & "|EqualityOperator (if P = Q then 1 else 2) > 0->False",
                  "relational operators: the extent of the relation", O);
          --  The whole condition of a loop: never the constant, which
@@ -354,8 +355,10 @@ procedure Unit_Tests is
                  & " is begin null; end E; end P; begin X := 0 < Y;"
                  & " Z := Y > 0; end Q;",
                  "EqualityOperator >->>=|EqualityOperator >->/="
-                 & "|EqualityOperator <-><=|EqualityOperator 0 < Y->False"
-                 & "|EqualityOperator >->>=|EqualityOperator Y > 0->False",
+                 & "|EqualityOperator <-><=|EqualityOperator <->/="
+                 & "|EqualityOperator 0 < Y->False"
+                 & "|EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|EqualityOperator Y > 0->False",
                  "relational operators: entry barriers and 0", O);
       end;
       --  In a contract, True for an operand of "and" is ConjunctDeletion's.
@@ -461,7 +464,8 @@ procedure Unit_Tests is
               & "|EqualityOperator 0 < N->True|EqualityOperator 0 < N->False"
               & "|EqualityOperator M > 0->True|EqualityOperator M > 0->False"
               & "|EqualityOperator D > 0->True|EqualityOperator D > 0->False"
-              & "|EqualityOperator >->>=|EqualityOperator S'Length > 0->False"
+              & "|EqualityOperator >->>=|EqualityOperator >->/="
+              & "|EqualityOperator S'Length > 0->False"
               & "|EqualityOperator N + D * 2 > 0->True"
               & "|EqualityOperator N + D * 2 > 0->False"
               & "|EqualityOperator >->>=|EqualityOperator >->/="
@@ -676,8 +680,10 @@ procedure Unit_Tests is
                 & "end Units;" & LF);
          Write (Tmp & "/units.adb", Body_Text);
          Expect (Body_Text,
-                 "EqualityOperator >->>=|EqualityOperator T > 0->False"
-                 & "|EqualityOperator >->>=|EqualityOperator N > 0->False"
+                 "EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|EqualityOperator T > 0->False"
+                 & "|EqualityOperator >->>=|EqualityOperator >->/="
+                 & "|EqualityOperator N > 0->False"
                  & "|EqualityOperator /=->=|EqualityOperator T /= 20->True"
                  & "|EqualityOperator =->/=|EqualityOperator P = Q->False",
                  "operand types: a spec in another file, without the files",
@@ -728,6 +734,252 @@ procedure Unit_Tests is
                  With_Files);
       end;
    end Test_Operand_Types;
+
+   procedure Test_Comparison_Skip_Statistics is
+      use AdaMutant.Files;
+
+      O : Scan_Options := (Enabled => [others => False], others => <>);
+
+      function Has_Not_Equal (Mutations : Mutation_Vectors.Vector)
+        return Boolean
+      is
+      begin
+         for M of Mutations loop
+            if M.Kind = Equality_Operator
+              and then To_String (M.Replacement) = "/="
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has_Not_Equal;
+
+      procedure Check_Scan
+        (Source : String; Skips : Natural; Has_Not_Equal_Mutant : Boolean;
+         Name : String; Options : Scan_Options := O)
+      is
+         Statistics : Scan_Statistics;
+         Mutations  : constant Mutation_Vectors.Vector :=
+           Find (Source, Options, Statistics);
+      begin
+         Check
+           (Statistics.Proven_Equivalent_Comparison_Skips = Skips
+            and then Has_Not_Equal (Mutations) = Has_Not_Equal_Mutant,
+            Name,
+            "skips:" & Statistics.Proven_Equivalent_Comparison_Skips'Image
+            & ", /= mutant:" & Has_Not_Equal (Mutations)'Image);
+      end Check_Scan;
+   begin
+      O.Enabled (Equality_Operator) := True;
+      Check_Scan
+        ("procedure P (N : Natural; B : out Boolean) is begin"
+         & " B := N > 0; B := 0 < N; end P;",
+         2, False, "comparison skips: Natural and reversed zero comparison");
+      Check_Scan
+        ("procedure P is begin null; end P;", 0, False,
+         "comparison skips: no eligible comparisons");
+      Check_Scan
+        ("procedure P (I : Integer; B : out Boolean) is begin"
+         & " B := I > 0; B := 0 < I; end P;",
+         0, True, "comparison skips: signed Integer retains /=");
+      Check_Scan
+        ("procedure P (N : Positive; B : out Boolean) is"
+         & " subtype Negative is Integer range -2 .. -1; I : Negative := -1;"
+         & " begin B := N > 0; B := I < 0; end P;",
+         4, False, "comparison skips: positive and negative static bounds");
+      Check_Scan
+        ("procedure P (B : out Boolean) is"
+         & " subtype Low is Integer range 1 .. 2;"
+         & " subtype High is Integer range 5 .. 6;"
+         & " L : Low := 1; R : High := 5;"
+         & " begin B := L < R; end P;",
+         2, False, "comparison skips: disjoint integer ranges");
+      Check_Scan
+        ("procedure P (N : Integer; B : out Boolean) is"
+         & " Limit : Integer := N; X : Integer range 0 .. Limit := 0;"
+         & " begin B := X > 0; end P;",
+         0, True, "comparison skips: dynamic bounds remain conservative");
+      Check_Scan
+        ("procedure P (B : out Boolean) is begin B := Unknown > 0; end P;",
+         0, True, "comparison skips: unresolved operand retains /=");
+
+      declare
+         Disabled : Scan_Options := O;
+         Contract : constant String :=
+           "procedure P (N : Natural) with Pre => N > 0 is"
+           & " begin null; end P;";
+         Contract_Enabled : Scan_Options := O;
+      begin
+         Disabled.Enabled (Equality_Operator) := False;
+         Check_Scan
+           ("procedure P (N : Natural; B : out Boolean) is begin"
+            & " B := N > 0; end P;",
+            0, False, "comparison skips: disabled mutator", Disabled);
+         Check_Scan
+           (Contract, 0, False, "comparison skips: ignored contract", O);
+         Contract_Enabled.Mutate_Contracts := True;
+         Check_Scan
+           (Contract, 1, False, "comparison skips: enabled contract",
+            Contract_Enabled);
+      end;
+
+      Check_Scan
+        ("procedure P (B : out Boolean) is"
+         & " type T is record null; end record;"
+         & " function "">"" (L, R : T) return Boolean is (True);"
+         & " X, Y : T; begin B := X > Y; end P;",
+         0, True, "comparison skips: overloaded original operator");
+      Check_Scan
+        ("procedure P (B : out Boolean) is"
+         & " type T is new Natural;"
+         & " function ""="" (L, R : T) return Boolean is (False);"
+         & " N : T := 1; begin B := N > 0; end P;",
+         0, True, "comparison skips: overloaded replacement operator");
+
+      declare
+         Tmp : constant String :=
+           Ada.Directories.Current_Directory & "/obj/custom-replacement";
+         With_Files : Scan_Options := O;
+         Source : constant String :=
+           "with Units; use Units; procedure P (N : T; B : out Boolean) is"
+           & " begin B := N > 0; end P;";
+         Statistics : Scan_Statistics;
+         Mutations : Mutation_Vectors.Vector;
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp);
+         Write
+           (Tmp & "/units.ads",
+            "package Units is type T is new Natural;"
+            & " function ""/="" (L, R : T) return Boolean is (False); end Units;"
+            & LF);
+         With_Files.Project_Files.Include (Tmp & "/units.ads");
+         Mutations := Find (Source, With_Files, Statistics);
+         Check
+           (Statistics.Proven_Equivalent_Comparison_Skips = 0
+            and then Has_Not_Equal (Mutations),
+            "comparison skips: external custom replacement is retained");
+      end;
+
+      declare
+         Source : constant String :=
+           "procedure P (B : out Boolean) is"
+           & " subtype Positive_Small is Integer range 1 .. 2;"
+           & " X : Positive_Small := 1;"
+           & " function Effectful (Value : Integer) return Positive_Small is"
+           & " begin X := 2; return X; end Effectful;"
+           & " begin B := Effectful (1) < 0; end P;";
+         Statistics : Scan_Statistics;
+         Mutations : constant Mutation_Vectors.Vector :=
+           Find (Source, O, Statistics);
+         Has_False : Boolean := False;
+      begin
+         for M of Mutations loop
+            Has_False := Has_False
+              or else (M.Kind = Equality_Operator
+                       and then To_String (M.Replacement) = "False");
+         end loop;
+         Check
+           (Statistics.Proven_Equivalent_Comparison_Skips = 1 and then Has_False,
+            "comparison skips: effectful function keeps whole-expression constant");
+      end;
+
+      Check_Scan
+        ("procedure P (N : Natural; B : out Boolean) is begin"
+         & " B := N - 1 > 0; end P;",
+         0, True, "comparison skips: arithmetic uses its base type");
+
+      declare
+         Statistics : Scan_Statistics :=
+           (Proven_Equivalent_Comparison_Skips => 99);
+         First : constant Mutation_Vectors.Vector := Find
+           ("procedure P (N : Natural; B : out Boolean) is begin"
+            & " B := N > 0; end P;", O, Statistics);
+      begin
+         Check (Statistics.Proven_Equivalent_Comparison_Skips = 1,
+                "comparison skips: first scan count resets");
+         declare
+            Second : constant Mutation_Vectors.Vector := Find
+              ("procedure P (I : Integer; B : out Boolean) is begin"
+               & " B := I > 0; end P;", O, Statistics);
+         begin
+            Check (Statistics.Proven_Equivalent_Comparison_Skips = 0
+                   and then Has_Not_Equal (Second),
+                   "comparison skips: statistics reset between scans");
+         end;
+         Check (not Has_Not_Equal (First),
+                "comparison skips: suppressed candidates are not mutations");
+      end;
+
+      declare
+         Statistics : Scan_Statistics :=
+           (Proven_Equivalent_Comparison_Skips => 99);
+      begin
+         begin
+            declare
+               Bad : constant Mutation_Vectors.Vector :=
+                 Find ("procedure P is begin", O, Statistics);
+            begin
+               Check (Bad.Is_Empty and then False,
+                      "comparison skips: invalid source is rejected");
+            end;
+         exception
+            when AdaMutant.Lexer.Lexical_Error =>
+               Check (Statistics.Proven_Equivalent_Comparison_Skips = 0,
+                      "comparison skips: error scan resets statistics");
+         end;
+      end;
+
+      declare
+         Tmp : constant String :=
+           Ada.Directories.Current_Directory & "/obj/range-skips";
+         Settings : AdaMutant.Config.Configuration;
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp);
+         Write (Tmp & "/p.adb",
+                "procedure P (N : Natural; B : out Boolean) is begin"
+                & " B := N > 0; end P;" & LF);
+         Write (Tmp & "/q.adb",
+                "procedure Q (N : Natural; B : out Boolean) is begin"
+                & " B := N > 0; end Q;" & LF);
+         Settings.Root := To_Unbounded_String (Tmp);
+         Settings.Mutate.Append ("*.adb");
+         Settings.Scan.Enabled := [others => False];
+         Settings.Scan.Enabled (Equality_Operator) := True;
+         declare
+            R : constant AdaMutant.Results.Report :=
+              AdaMutant.Runner.Discover
+                (Settings, String_Vectors.Empty_Vector);
+            Counts : constant AdaMutant.Results.Status_Counts :=
+              AdaMutant.Results.Count (R);
+            Json : constant String := AdaMutant.Reports.Json (R);
+            Html : constant String := AdaMutant.Reports.Html (R);
+         begin
+            Check
+              (R.Proven_Equivalent_Comparison_Skips = 2
+               and then Natural (R.Mutants.Length) = 4
+               and then R.Mutants (1).Id = 1
+               and then R.Mutants (4).Id = 4
+               and then Counts (AdaMutant.Results.Pending) = 4,
+               "comparison skips: runner aggregation excludes score and IDs",
+               R.Proven_Equivalent_Comparison_Skips'Image
+               & R.Mutants.Length'Image);
+            Check
+              (Ada.Strings.Fixed.Index
+               (Json, """provenEquivalentComparisonSkips"":2") > 0
+               and then Ada.Strings.Fixed.Index
+                 (Html, "Proven-equivalent comparison skips: ") > 0
+               and then Ada.Strings.Fixed.Index
+                 (Html, "r.provenEquivalentComparisonSkips") > 0,
+               "comparison skips: JSON metadata and HTML summary");
+         end;
+      end;
+   end Test_Comparison_Skip_Statistics;
 
    procedure Test_Skipped is
    begin
@@ -3748,6 +4000,7 @@ begin
    Test_Operators;
    Test_Conditions;
    Test_Operand_Types;
+   Test_Comparison_Skip_Statistics;
    Test_Skipped;
    Test_Comments;
    Test_Syntax_Tree;

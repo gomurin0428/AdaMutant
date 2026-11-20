@@ -811,8 +811,9 @@ package body AdaMutant.Mutators is
    package Node_Vectors is new Ada.Containers.Vectors
      (Positive, LAL.Ada_Node, Same_Node);
 
-   function Find
-     (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector
+   function Find_Internal
+     (Source : String; Options : Scan_Options; Statistics : in out Scan_Statistics)
+      return Mutation_Vectors.Vector
    is
       T : constant Syntax_Tree :=
         Parse_Tree (Source, Tolerant => False,
@@ -1379,12 +1380,6 @@ package body AdaMutant.Mutators is
             Anchor => First (T, Operators.First_Element));
       end Mutate_Chain;
 
-      function Zero (N : LAL.Ada_Node) return Boolean is
-        (N.Kind = Ada_Int_Literal and then Squash (Text (T, N)) = "0");
-      --  The integer literal 0.  In "X > 0" and "0 < X", the mutant "/="
-      --  differs from the relation only when X < 0, which a count, a
-      --  length or a Natural never is: it would be equivalent.
-
       --  The operands of B are the same tokens, case aside ("X = X"): the
       --  relation does not split its inputs in three.  "X <= X" and "X >=
       --  X" are "X = X", also for a NaN, where all three are False, so
@@ -1733,27 +1728,70 @@ package body AdaMutant.Mutators is
          return R;
       end Operand_Range;
 
-      --  X, a scalar compared with 0 ("X > 0" or "0 < X"), may be
-      --  negative: its range starts below 0 (an Integer, not a Natural), or
-      --  it is the result of an operation in a signed type that is not
-      --  known to be never negative ("N - 1").  Not when name resolution
-      --  does not tell (see Operands).
-      function May_Be_Negative (X : LAL.Expr) return Boolean is
-      begin
-         if Never_Negative (X) then
-            return False;
-         end if;
-         declare
-            R : constant Value_Range := Base_Range (X);
-         begin
-            return (if R.Has_Low then R.Low < 0 else not Checked (Unparen (X)));
-         end;
-      end May_Be_Negative;
-
       function Mutable (C : Context) return Boolean is
         (Options.Enabled (Equality_Operator) and then not Skipped (C));
       --  EqualityOperator may change a relation in the context C: name
       --  resolution, which takes time, is not needed otherwise.
+
+      function Relation_At
+        (Tree : Syntax_Tree; N : LAL.Ada_Node; Operator_Offset : Positive)
+         return LAL.Ada_Node
+      is
+         Found : LAL.Ada_Node;
+      begin
+         if N.Is_Null then
+            return LAL.No_Ada_Node;
+         elsif N.Kind = Ada_Relation_Op
+           and then First (Tree, N.As_Relation_Op.F_Op.Token_Start)
+             = Operator_Offset
+         then
+            return N;
+         end if;
+         for I in 1 .. N.Children_Count loop
+            Found := Relation_At (Tree, N.Child (I), Operator_Offset);
+            if not Found.Is_Null then
+               return Found;
+            end if;
+         end loop;
+         return LAL.No_Ada_Node;
+      end Relation_At;
+
+      function Builtin_Replacement
+        (B : LAL.Bin_Op; Replacement : String) return Boolean
+      is
+         Operator_First : constant Positive := First (T, B.F_Op.Token_Start);
+         Operator_Last  : constant Natural := Last (T, B.F_Op.Token_Start);
+         Candidate_Source : constant String :=
+           Source (Source'First .. Operator_First - 1) & Replacement
+           & Source (Operator_Last + 1 .. Source'Last);
+         Candidate_Tree : constant Syntax_Tree :=
+           Parse_Tree (Candidate_Source, Tolerant => False,
+                       Whole_Units => Options.Whole_Units,
+                       Resolve => True, Files => Options.Project_Files);
+         Candidate : constant LAL.Ada_Node :=
+           Relation_At (Candidate_Tree, Candidate_Tree.Root, Operator_First);
+      begin
+         return not Candidate.Is_Null
+           and then Operands (LAL.Bin_Op (Candidate.As_Relation_Op)) = Scalar;
+      exception
+         when others =>
+            return False;
+      end Builtin_Replacement;
+
+      function Has_Call (N : LAL.Ada_Node) return Boolean is
+      begin
+         if N.Is_Null then
+            return False;
+         elsif N.Kind = Ada_Call_Expr then
+            return True;
+         end if;
+         for I in 1 .. N.Children_Count loop
+            if Has_Call (N.Child (I)) then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Has_Call;
 
       --  The mutants of the relation B.
       procedure Mutate_Relation (B : LAL.Bin_Op; C : Context) is
@@ -1771,8 +1809,20 @@ package body AdaMutant.Mutators is
          --  The operands, scalars, are never in that region: Less when the
          --  left one is never below the right one (its lower bound is at
          --  least the upper bound of the other), Greater the other way.
-         --  Equal is never ruled out.
+         --  Equal is ruled out for operator replacements only, when integer
+         --  ranges are disjoint.
          Never : array (Order) of Boolean := [others => False];
+         Never_Equal_For_Operator : Boolean := False;
+
+         function Range_Proof_Applies
+           (Replacement : String; Differs : Order) return Boolean
+         is
+           (Never (Differs)
+            or else (Differs = Equal and then Never_Equal_For_Operator)
+            or else (Replacement = "<=" and then Never (Greater))
+            or else (Replacement = ">=" and then Never (Less))
+            or else (Replacement = "<" and then Never (Less))
+            or else (Replacement = ">" and then Never (Greater)));
 
          --  The mutant that makes the relation Replacement, which differs
          --  from B in the region Differs only.  None when the operands
@@ -1782,7 +1832,19 @@ package body AdaMutant.Mutators is
          --  a condition, and ConditionalExpression may make it already.
          procedure Replace_By (Replacement : String; Differs : Order) is
          begin
-            if Never (Differs) then
+            if not Mutable (C) then
+               return;
+            elsif not Scalars then
+               Replace (Equality_Operator, C, Op, Replacement);
+            elsif not Range_Proof_Applies (Replacement, Differs) then
+               Replace (Equality_Operator, C, Op, Replacement);
+            elsif not Builtin_Replacement (B, Replacement) then
+               Replace (Equality_Operator, C, Op, Replacement);
+            elsif Never (Differs)
+              or else (Differs = Equal and then Never_Equal_For_Operator)
+            then
+               Statistics.Proven_Equivalent_Comparison_Skips :=
+                 Statistics.Proven_Equivalent_Comparison_Skips + 1;
                return;
             elsif (Replacement = "<=" and then Never (Greater))
               or else (Replacement = ">=" and then Never (Less))
@@ -1801,7 +1863,10 @@ package body AdaMutant.Mutators is
          --  Differs only.
          procedure Replace_By_Constant (Value : String; Differs : Order) is
          begin
-            if not Never (Differs) then
+            if not Never (Differs)
+              or else Has_Call (B.F_Left.As_Ada_Node)
+              or else Has_Call (B.F_Right.As_Ada_Node)
+            then
                Add_Constant (B, Value, C);
             end if;
          end Replace_By_Constant;
@@ -1811,11 +1876,30 @@ package body AdaMutant.Mutators is
             declare
                L : constant Value_Range := Operand_Range (B.F_Left);
                R : constant Value_Range := Operand_Range (B.F_Right);
+
+               function Integer_Operand (E : LAL.Expr) return Boolean is
+                  T : constant LAL.Base_Type_Decl := E.P_Expression_Type;
+               begin
+                  return not T.Is_Null
+                    and then
+                      (Same (T, T.P_Universal_Int_Type)
+                       or else T.P_Is_Int_Type (Origin => E));
+               exception
+                  when others =>
+                     return False;
+               end Integer_Operand;
             begin
                Never (Less) :=
                  L.Has_Low and then R.Has_High and then L.Low >= R.High;
                Never (Greater) :=
                  L.Has_High and then R.Has_Low and then L.High <= R.Low;
+               if Integer_Operand (B.F_Left) and then Integer_Operand (B.F_Right)
+               then
+                  Never_Equal_For_Operator :=
+                    (L.Has_High and then R.Has_Low and then L.High < R.Low)
+                    or else
+                      (R.Has_High and then L.Has_Low and then R.High < L.Low);
+               end if;
             end;
          end if;
          case Relation is
@@ -1835,16 +1919,9 @@ package body AdaMutant.Mutators is
                   Replace (Equality_Operator, C, Op, "=");
                end if;
                Replace_By_Constant ("True", Equal);
-            --  Against 0, "/=" differs from "X > 0" when X < 0 only, which
-            --  a count or a length never is: without the type, there is
-            --  none.
             when Ada_Op_Lt =>
                Replace_By ("<=", Equal);
-               if not Zero (B.F_Left.As_Ada_Node)
-                 or else (Scalars and then May_Be_Negative (B.F_Right))
-               then
-                  Replace_By ("/=", Greater);
-               end if;
+               Replace_By ("/=", Greater);
                Replace_By_Constant ("False", Less);
             when Ada_Op_Lte =>
                Replace_By ("<", Equal);
@@ -1852,11 +1929,7 @@ package body AdaMutant.Mutators is
                Replace_By_Constant ("True", Greater);
             when Ada_Op_Gt =>
                Replace_By (">=", Equal);
-               if not Zero (B.F_Right.As_Ada_Node)
-                 or else (Scalars and then May_Be_Negative (B.F_Left))
-               then
-                  Replace_By ("/=", Less);
-               end if;
+               Replace_By ("/=", Less);
                Replace_By_Constant ("False", Greater);
             when Ada_Op_Gte =>
                Replace_By (">", Equal);
@@ -2463,6 +2536,27 @@ package body AdaMutant.Mutators is
          raise Lexical_Error with
            "line 1: the syntax tree cannot be read ("
            & Ada.Exceptions.Exception_Message (E) & ")";
+   end Find_Internal;
+
+   function Find
+     (Source : String; Options : Scan_Options; Statistics : out Scan_Statistics)
+      return Mutation_Vectors.Vector
+   is
+   begin
+      Statistics := (others => 0);
+      return Find_Internal (Source, Options, Statistics);
+   exception
+      when others =>
+         Statistics := (others => 0);
+         raise;
+   end Find;
+
+   function Find
+     (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector
+   is
+      Statistics : Scan_Statistics;
+   begin
+      return Find (Source, Options, Statistics);
    end Find;
 
    function Apply (Source : String; M : Mutation) return String is
