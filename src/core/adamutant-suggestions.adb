@@ -373,7 +373,6 @@ package body AdaMutant.Suggestions is
       end loop;
       if (for some Kind of Formal_Kinds => Kind = "Enumeration") then
          Add_With ("Ada.Strings.UTF_Encoding.Wide_Wide_Strings");
-         Add_With ("Ada.Wide_Wide_Text_IO");
       end if;
       Append (Result, "with Ada.Assertions;" & LF
               & "with Ada.Command_Line;" & LF
@@ -382,6 +381,29 @@ package body AdaMutant.Suggestions is
          Append (Result, "with " & Name & ";" & LF);
       end loop;
       Append (Result, "procedure " & Procedure_Name & " is" & LF);
+      if (for some Kind of Formal_Kinds => Kind = "Enumeration") then
+         Append
+           (Result,
+            "   function Search_Hex_Encode (Value : String) return String is"
+            & LF
+            & "      Hex : constant String := ""0123456789ABCDEF"";" & LF
+            & "      Encoded : String (1 .. Value'Length * 2);" & LF
+            & "      Offset : Natural := 1;" & LF
+            & "   begin" & LF
+            & "      for Item of Value loop" & LF
+            & "         declare" & LF
+            & "            Code : constant Natural := Character'Pos (Item);"
+            & LF
+            & "         begin" & LF
+            & "            Encoded (Offset) := Hex (Code / 16 + 1);" & LF
+            & "            Encoded (Offset + 1) := Hex (Code mod 16 + 1);"
+            & LF
+            & "            Offset := Offset + 2;" & LF
+            & "         end;" & LF
+            & "      end loop;" & LF
+            & "      return Encoded;" & LF
+            & "   end Search_Hex_Encode;" & LF);
+      end if;
       for I in 1 .. Natural (Formal_Types.Length) loop
          declare
             Kind : constant String := Formal_Kinds (I);
@@ -510,10 +532,13 @@ package body AdaMutant.Suggestions is
             end if;
             if Formal_Kind = "Enumeration" then
                Append (Result, "      for K in 1 .. Count loop" & LF
-                       & "         Ada.Wide_Wide_Text_IO.Put_Line" & LF
-                       & "           (""ADAMUTANT_SEARCH_VALUE:""" & LF
-                       & "            & Search_Argument_" & Suffix
-                       & "'Wide_Wide_Image (Values (K)));" & LF
+                       & "         Ada.Text_IO.Put_Line" & LF
+                       & "           (""ADAMUTANT_SEARCH_ENUM_UTF8_HEX:""" & LF
+                       & "            & Search_Hex_Encode" & LF
+                       & "              (Ada.Strings.UTF_Encoding.Wide_Wide_Strings.Encode"
+                       & LF
+                       & "                 (Search_Argument_" & Suffix
+                       & "'Wide_Wide_Image (Values (K)))));" & LF
                        & "      end loop;" & LF
                        & "   end List_" & Suffix & ";" & LF);
             else
@@ -1783,7 +1808,43 @@ package body AdaMutant.Suggestions is
       is
          Text : constant String := AdaMutant.Files.Read (Path);
          Marker : constant String := "ADAMUTANT_SEARCH_VALUE:";
+         Enum_Marker : constant String := "ADAMUTANT_SEARCH_ENUM_UTF8_HEX:";
          First : Natural := Text'First;
+
+         function Hex_Value (Value : Character) return Natural is
+         begin
+            case Value is
+               when '0' .. '9' =>
+                  return Character'Pos (Value) - Character'Pos ('0');
+               when 'A' .. 'F' =>
+                  return Character'Pos (Value) - Character'Pos ('A') + 10;
+               when 'a' .. 'f' =>
+                  return Character'Pos (Value) - Character'Pos ('a') + 10;
+               when others =>
+                  raise Constraint_Error;
+            end case;
+         end Hex_Value;
+
+         function Decode_Enum_Hex (Value : String) return String is
+         begin
+            if Value'Length mod 2 /= 0 then
+               raise Constraint_Error;
+            end if;
+            declare
+               Result : String (1 .. Value'Length / 2);
+               Source_Index : Natural := Value'First;
+               Result_Index : Natural := Result'First;
+            begin
+               while Source_Index <= Value'Last loop
+                  Result (Result_Index) := Character'Val
+                    (Hex_Value (Value (Source_Index)) * 16
+                     + Hex_Value (Value (Source_Index + 1)));
+                  Source_Index := Source_Index + 2;
+                  Result_Index := Result_Index + 1;
+               end loop;
+               return Result;
+            end;
+         end Decode_Enum_Hex;
       begin
          Values := String_Vectors.Empty_Vector;
          Valid := True;
@@ -1802,34 +1863,53 @@ package body AdaMutant.Suggestions is
                declare
                   Line_Text_Value : constant String := To_String (Line);
                begin
-                  if Line_Text_Value'Length >= Marker'Length
-                    and then Line_Text_Value
-                      (1 .. Marker'Length) = Marker
-                  then
-                     declare
-                        Value : constant String := Search_Trim
-                          (if Line_Text_Value'Length = Marker'Length then ""
-                           else Line_Text_Value
-                             (Marker'Length + 1 .. Line_Text_Value'Last));
-                        Candidate : constant String :=
-                          (if To_Lower (Type_Name) in
-                                "boolean" | "standard.boolean"
-                           then To_Upper (Value)
-                           else Value);
-                     begin
-                        if not Is_Formal_Candidate
-                          (Candidate, Kind, Type_Name)
-                        then
-                           Valid := False;
-                           return;
-                        end if;
-                        if not (for some Existing of Values =>
-                                  Existing = Candidate)
-                        then
-                           Values.Append (Candidate);
-                        end if;
-                     end;
-                  end if;
+                  declare
+                     Is_Enum_Hex : constant Boolean :=
+                       Line_Text_Value'Length >= Enum_Marker'Length
+                       and then Line_Text_Value
+                         (1 .. Enum_Marker'Length) = Enum_Marker;
+                     Has_Value_Marker : constant Boolean :=
+                       Line_Text_Value'Length >= Marker'Length
+                       and then Line_Text_Value
+                         (1 .. Marker'Length) = Marker;
+                  begin
+                     if Is_Enum_Hex or else Has_Value_Marker then
+                        declare
+                           Prefix_Length : constant Natural :=
+                             (if Is_Enum_Hex then Enum_Marker'Length
+                              else Marker'Length);
+                           Encoded_Value : constant String := Search_Trim
+                             (if Line_Text_Value'Length = Prefix_Length then ""
+                              else Line_Text_Value
+                                (Prefix_Length + 1 .. Line_Text_Value'Last));
+                           Value : constant String :=
+                             (if Is_Enum_Hex then
+                                Decode_Enum_Hex (Encoded_Value)
+                              else Encoded_Value);
+                           Candidate : constant String :=
+                             (if To_Lower (Type_Name) in
+                                   "boolean" | "standard.boolean"
+                              then To_Upper (Value)
+                              else Value);
+                        begin
+                           if Is_Enum_Hex /= (Kind = "Enumeration") then
+                              Valid := False;
+                              return;
+                           end if;
+                           if not Is_Formal_Candidate
+                             (Candidate, Kind, Type_Name)
+                           then
+                              Valid := False;
+                              return;
+                           end if;
+                           if not (for some Existing of Values =>
+                                     Existing = Candidate)
+                           then
+                              Values.Append (Candidate);
+                           end if;
+                        end;
+                     end if;
+                  end;
                end;
                First := Last + 1;
             end;

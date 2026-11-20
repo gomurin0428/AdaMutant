@@ -1683,7 +1683,7 @@ def check_survivor_input_search():
         temp_root = Path(tmp)
 
         def write_project(work, packages, source_dirs=("src", "tests"),
-                          extra_ada_switches=()):
+                          extra_ada_switches=(), search_binder_switches=()):
             (work / "src").mkdir(parents=True)
             (work / "tests").mkdir()
             for directory in source_dirs:
@@ -1705,6 +1705,15 @@ def check_survivor_input_search():
                 switches = ", ".join(
                     f'"{item}"' for item in
                     ("-gnat2022", "-gnata", *extra_ada_switches))
+                binder = ""
+                if project == "Search" and search_binder_switches:
+                    binder_switches = ", ".join(
+                        f'"{item}"' for item in search_binder_switches)
+                    binder = (
+                        "   package Binder is\n"
+                        "      for Default_Switches (\"Ada\") use "
+                        f"({binder_switches});\n"
+                        "   end Binder;\n")
                 (work / filename).write_text(
                     f"project {project} is\n"
                     f"   for Source_Dirs use ({dirs});\n"
@@ -1715,14 +1724,16 @@ def check_survivor_input_search():
                     "      for Default_Switches (\"Ada\") use ("
                     f"{switches});\n"
                     "   end Compiler;\n"
-                    f"end {project};\n")
+                    + binder
+                    + f"end {project};\n")
         def run_case(name, packages, mutate_packages, mutators,
                      test_source=None, search_dirs=("src", "tests"),
                      budget=None, timeout_ms=250, slow_search_build=False,
-                     extra_ada_switches=()):
+                     extra_ada_switches=(), search_binder_switches=()):
             work = temp_root / name
             work.mkdir()
-            write_project(work, packages, search_dirs, extra_ada_switches)
+            write_project(work, packages, search_dirs, extra_ada_switches,
+                          search_binder_switches)
             if test_source is not None:
                 (work / "tests" / "test_search.adb").write_text(test_source)
             mutation_files = [
@@ -2154,8 +2165,9 @@ def check_survivor_input_search():
 
         enum_packages = {
             "Search_Enums": (
-                "   type Shade is (Red, Green, Blue, Yellow);\n"
-                "   for Shade use (Red => 1, Green => 4, Blue => 9, Yellow => 16);\n"
+                "   type Shade is (Red, Green, Blue, Yellow, Éte);\n"
+                "   for Shade use (Red => 1, Green => 4, Blue => 9, "
+                "Yellow => 16, Éte => 25);\n"
                 "   subtype Valid_Shade is Shade range Green .. Yellow\n"
                 "     with Dynamic_Predicate => Valid_Shade /= Blue;\n"
                 "   subtype Inherited_Valid_Shade is Valid_Shade;\n"
@@ -2164,6 +2176,7 @@ def check_survivor_input_search():
                 "   type Private_Shade is private;\n"
                 "   function Boolean_Target (Flag : Boolean) return Integer;\n"
                 "   function Interior (X : Shade) return Integer;\n"
+                "   function Identifier_Target (X : Shade) return Integer;\n"
                 "   function Mixed (X : Integer; Y : Shade; Flag : Boolean)\n"
                 "     return Integer;\n"
                 "   function Invalid_Only (X : Valid_Shade) return Integer;\n"
@@ -2187,6 +2200,10 @@ def check_survivor_input_search():
                 "   begin\n"
                 "      return Boolean'Pos (X = Green) * 201;\n"
                 "   end Interior;\n"
+                "   function Identifier_Target (X : Shade) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = Éte) * 713;\n"
+                "   end Identifier_Target;\n"
                 "   function Mixed (X : Integer; Y : Shade; Flag : Boolean)\n"
                 "     return Integer is\n"
                 "   begin\n"
@@ -2347,6 +2364,20 @@ def check_survivor_input_search():
                         "non-ASCII character enum witness was malformed: "
                         f"{search}")
 
+            identifier = expect_search(
+                enum_report, "src/search_enums.adb", "714",
+                "Survived", "Found")
+            if identifier is not None:
+                search = identifier["inputSearch"]
+                if search.get("input") != (
+                        "Search_Enums.Identifier_Target "
+                        "(Search_Enums.Shade'Value (\"éTE\"))") \
+                        or search.get("originalOutput") != "713" \
+                        or search.get("mutantOutput") != "714":
+                    errors.append(
+                        "non-ASCII enum identifier witness was malformed: "
+                        f"{search}")
+
             boolean_result = expect_search(
                 enum_report, "src/search_enums.adb", "True",
                 "Survived", "Inconclusive")
@@ -2355,6 +2386,74 @@ def check_survivor_input_search():
                 errors.append(
                     "non-integer function result produced a search witness: "
                     f"{boolean_result['inputSearch']}")
+
+        non_utf8_packages = {
+            "Search_Non_UTF8": (
+                "   type Shade is (Plain, Café);\n"
+                "   type Letter is ('A', 'é');\n"
+                "   function Identifier_Target (X : Shade) return Integer;\n"
+                "   function Ascii_Target (X : Letter) return Integer;\n"
+                "   function Character_Target (X : Letter) return Integer;\n",
+                "   function Identifier_Target (X : Shade) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = Café) * 713;\n"
+                "   end Identifier_Target;\n"
+                "   function Ascii_Target (X : Letter) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = 'A') * 919;\n"
+                "   end Ascii_Target;\n"
+                "   function Character_Target (X : Letter) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = 'é') * 811;\n"
+                "   end Character_Target;\n"),
+        }
+        non_utf8_report, _ = run_case(
+            "non_utf8_enumerations", non_utf8_packages,
+            list(non_utf8_packages), ["NumericLiteral"],
+            extra_ada_switches=("-gnatW8",),
+            search_binder_switches=("-Wb",))
+        if non_utf8_report is not None:
+            ascii_character = expect_search(
+                non_utf8_report, "src/search_non_utf8.adb", "920",
+                "Survived", "Found")
+            if ascii_character is not None:
+                search = ascii_character["inputSearch"]
+                if search.get("input") != (
+                        "Search_Non_UTF8.Ascii_Target "
+                        "(Search_Non_UTF8.Letter'Value (\"'A'\"))") \
+                        or search.get("originalOutput") != "919" \
+                        or search.get("mutantOutput") != "920":
+                    errors.append(
+                        "ASCII witness in the non-UTF8 enum pool was malformed: "
+                        f"{search}")
+
+            identifier = expect_search(
+                non_utf8_report, "src/search_non_utf8.adb", "714",
+                "Survived", "Found")
+            if identifier is not None:
+                search = identifier["inputSearch"]
+                if search.get("input") != (
+                        "Search_Non_UTF8.Identifier_Target "
+                        "(Search_Non_UTF8.Shade'Value (\"CAFé\"))") \
+                        or search.get("originalOutput") != "713" \
+                        or search.get("mutantOutput") != "714":
+                    errors.append(
+                        "non-UTF-8 enum identifier witness was malformed: "
+                        f"{search}")
+
+            character = expect_search(
+                non_utf8_report, "src/search_non_utf8.adb", "812",
+                "Survived", "Found")
+            if character is not None:
+                search = character["inputSearch"]
+                if search.get("input") != (
+                        "Search_Non_UTF8.Character_Target "
+                        "(Search_Non_UTF8.Letter'Value (\"'é'\"))") \
+                        or search.get("originalOutput") != "811" \
+                        or search.get("mutantOutput") != "812":
+                    errors.append(
+                        "non-UTF-8 character enum witness was malformed: "
+                        f"{search}")
 
         build_failure_report, _ = run_case(
             "build_failure",
