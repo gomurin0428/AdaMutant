@@ -11,6 +11,24 @@ package body AdaMutant.Results is
          when Runtime_Error => "RuntimeError",
          when Ignored       => "Ignored");
 
+   function Name (S : Suggestion_Status) return String is
+     (case S is
+         when No_Suggestion => "none",
+         when Ineligible   => "ineligible",
+         when Unsupported  => "unsupported",
+         when Failed       => "failed",
+         when Verified     => "verified");
+
+   function Name (S : Verification_Outcome) return String is
+     (case S is
+         when Not_Run       => "not_run",
+         when Passed        => "passed",
+         when Failed        => "failed",
+         when Build_Failed  => "build_failed",
+         when Timed_Out     => "timed_out",
+         when Spawn_Failed  => "spawn_failed",
+         when Invalid_Output => "invalid_output");
+
    function Count (R : Report) return Status_Counts is
       C : Status_Counts := [others => 0];
    begin

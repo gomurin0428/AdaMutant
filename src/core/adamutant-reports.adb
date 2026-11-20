@@ -199,6 +199,46 @@ package body AdaMutant.Reports is
                   if M.Tests_Run > 0 then
                      Add (",""testsCompleted"":" & Image (M.Tests_Run));
                   end if;
+                  if M.Has_Suggestion then
+                     Add (",""suggestion"":{""status"":"
+                          & Json_String (Name (M.Suggestion.Status)));
+                     if Length (M.Suggestion.Reason) > 0 then
+                        Add (",""reason"":"
+                             & Json_String (To_String (M.Suggestion.Reason)));
+                     end if;
+                     if Length (M.Suggestion.Call) > 0 then
+                        Add (",""call"":"
+                             & Json_String (To_String (M.Suggestion.Call)));
+                     end if;
+                     if Length (M.Suggestion.Assertion) > 0 then
+                        Add (",""assertion"":"
+                             & Json_String (To_String (M.Suggestion.Assertion)));
+                     end if;
+                     if Length (M.Suggestion.Artifact_Path) > 0 then
+                        Add (",""artifactPath"":"
+                             & Json_String (To_String (M.Suggestion.Artifact_Path)));
+                     end if;
+                     if Length (M.Suggestion.Project_Path) > 0 then
+                        Add (",""projectPath"":"
+                             & Json_String (To_String (M.Suggestion.Project_Path)));
+                     end if;
+                     if Length (M.Suggestion.Command) > 0 then
+                        Add (",""command"":"
+                             & Json_String (To_String (M.Suggestion.Command)));
+                     end if;
+                     Add (",""verification"":{""probeBuild"":"
+                          & Json_String (Name (M.Suggestion.Probe_Build))
+                          & ",""probeRun"":"
+                          & Json_String (Name (M.Suggestion.Probe_Run))
+                          & ",""assertionBuild"":"
+                          & Json_String (Name (M.Suggestion.Assertion_Build))
+                          & ",""originalRun"":"
+                          & Json_String (Name (M.Suggestion.Original_Run))
+                          & ",""mutantBuild"":"
+                          & Json_String (Name (M.Suggestion.Mutant_Build))
+                          & ",""mutantRun"":"
+                          & Json_String (Name (M.Suggestion.Mutant_Run)) & "}}");
+                  end if;
                   Add (",""duration"":"
                        & Image (Integer (M.Elapsed * 1000.0)) & "}");
                end if;
@@ -266,7 +306,11 @@ package body AdaMutant.Reports is
      & ".slice(m.location.start.column-1,m.location.start.line==m.location.end"
      & ".line?m.location.end.column-1:undefined))+'</code> &rarr; <code>'+"
      & "esc(m.replacement)+'</code>'+(m.statusReason?' ('+esc(m.statusReason)"
-     & "+')':'')+'</div>').join('')+'</div>'});h+='</pre>'}"
+     & "+')':'')+(m.suggestion?'<div>Suggestion: '+esc(m.suggestion.status)"
+     & "+(m.suggestion.assertion?' <code>'+esc(m.suggestion.assertion)"
+     & "+'</code>':'')+(m.suggestion.reason?' — '+esc(m.suggestion.reason):'')"
+     & "+(m.suggestion.command?'<div>Run: <code>'+esc(m.suggestion.command)"
+     & "+'</code></div>':'')+'</div>':'')+'</div>').join('')+'</div>'});h+='</pre>'}"
      & "app.innerHTML=h;"
      & "function t(n,f){const e=document.getElementById('d'+n+'_'+f);"
      & "if(e)e.hidden=!e.hidden}"
@@ -440,6 +484,21 @@ package body AdaMutant.Reports is
            ("    - " & One_Line (To_String (M.Original)));
          Ada.Text_IO.Put_Line
            ("    + " & One_Line (To_String (M.Mutation.Replacement)));
+         if M.Has_Suggestion then
+            Ada.Text_IO.Put_Line
+              ("    suggestion: " & Name (M.Suggestion.Status)
+               & (if Length (M.Suggestion.Assertion) = 0 then ""
+                  else " — " & To_String (M.Suggestion.Assertion)));
+            if Length (M.Suggestion.Reason) > 0 then
+               Ada.Text_IO.Put_Line
+                 ("      " & To_String (M.Suggestion.Reason));
+            end if;
+            if Length (M.Suggestion.Command) > 0 then
+               Ada.Text_IO.Put_Line
+                 ("      run from project root: "
+                  & To_String (M.Suggestion.Command));
+            end if;
+         end if;
       end Put_Mutant;
 
       function Base_Name (Path : String) return String is

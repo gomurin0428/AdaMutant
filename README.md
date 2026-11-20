@@ -155,6 +155,47 @@ The "original time" is the slowest run when the tests (proofs) of the unmutated 
 
 `build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report) and the mutated line in `ADAMUTANT_MUTANT_LINE` (both are empty in the baseline runs). The prove command receives a directory for a cache of proof results in `ADAMUTANT_PROVE_CACHE` (see [Speeding up the proof of the mutants](#speeding-up-the-proof-of-the-mutants)) and switches for GNATprove in `ADAMUTANT_PROVE_SWITCHES` (see [Where the proof proves anything](#where-the-proof-proves-anything)). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
 
+### Verified regression-test suggestions
+
+Set suggestion_project to an existing GPR project used to build the test
+harnesses to opt in, for example:
+
+~~~toml
+suggestion_project = "tests.gpr"
+~~~
+
+When enabled, after the proof workers finish, AdaMutant considers proof-only
+mutants separately from mutation scoring. It can suggest a test only when a
+Confirmed mutant is inside a public, non-overloaded package-level function
+whose formal parameters are all in-mode integer scalar values and whose result
+is an integer scalar. Its counterexample must be a strict GNATprove binding
+list such as “e.g. when A = 0 and B = 1”; every formal must have exactly one
+case-insensitive binding to an integer literal. Nested functions, procedures,
+generic subprograms, unsupported signatures, and malformed or incomplete
+counterexamples are reported as unsupported instead of guessed. Weak_Contract
+and Undecided evidence is never verified.
+
+AdaMutant first compiles and runs a probe against a copy of the original source
+with assertions and overflow checks enabled. The probe's scalar result becomes
+the suggested expected value; it is an observation of this original program,
+not a claim that the value is specified or correct. AdaMutant then builds the
+explicit call-and-comparison harness against both the original and the exact
+mutant. A suggestion is verified only if the harness exits successfully on
+the original and emits its unique failure marker with the expected failure
+exit status on the mutant, with no build failure or timeout. This check is
+independent of killedBy and does not modify or install the project's tests.
+
+Verified Ada and GPR files are saved under
+.adamutant/reports/suggestions/. The suggestion record in the JSON report
+contains the assertion, verification outcomes, artifact paths, and a command
+that can be run from the project root to rebuild and run the harness. The
+console and HTML reports show the same suggestion status and command. Leaving
+suggestion_project unset performs no suggestion builds or runs.
+
+The saved project extends the configured project by its absolute path, so
+artifacts are runnable from the original project location but are not portable
+when that project is moved.
+
 ### Reusing the results of an earlier run
 
 With `--baseline FILE`, where FILE is the JSON report of an earlier run (`mutation-report.json`), a mutant on lines that have not changed takes its result from that report. A mutant whose result is reused is not run. Its `statusReason` ends with `(from the baseline report)`.

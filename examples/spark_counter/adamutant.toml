@@ -13,6 +13,7 @@
 # reached (--proof-warnings).
 mutate = ["src/**/*.adb"]
 build = "gprbuild -p -q -P counters_tests.gpr"
+suggestion_project = "counters_tests.gpr"
 test = '"bin/test_counters"'
 prove = 'gnatprove -P counters.gpr --level=1 --steps=2000 --report=fail --checks-as-errors=on --counterexamples=on -j1 $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'
 concurrency = 2
