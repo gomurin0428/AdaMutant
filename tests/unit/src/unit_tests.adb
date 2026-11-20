@@ -2124,6 +2124,36 @@ procedure Unit_Tests is
          M : AdaMutant.Results.Mutant;
       begin
          Generate_Fixture
+           (Name => "public-result-private-body-subtype",
+            Spec_Source =>
+              "package P is" & LF
+              & "   function Add (A, B : Integer) return Integer;" & LF
+              & "private" & LF
+              & "   subtype Hidden is Integer;" & LF
+              & "end P;" & LF,
+            Body_Source =>
+              "package body P is" & LF
+              & "   function Add (A, B : Integer) return Hidden is" & LF
+              & "   begin" & LF
+              & "      return A + B;" & LF
+              & "   end Add;" & LF
+              & "end P;" & LF,
+            Example => "e.g. when A = 0 and B = 1",
+            M => M);
+         Check (M.Suggestion.Status = AdaMutant.Results.Verified
+                and then M.Suggestion.Probe_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Probe_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Assertion_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Original_Run = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Build = AdaMutant.Results.Passed
+                and then M.Suggestion.Mutant_Run = AdaMutant.Results.Passed,
+                "suggestion integration: use the public function result subtype",
+                To_String (M.Suggestion.Reason));
+      end;
+      declare
+         M : AdaMutant.Results.Mutant;
+      begin
+         Generate_Fixture
            (Name => "external-result-type",
             Spec_Source =>
               "with Types;" & LF

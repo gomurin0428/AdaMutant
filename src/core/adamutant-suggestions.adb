@@ -678,10 +678,9 @@ package body AdaMutant.Suggestions is
       end if;
 
       Subp_Spec := Candidate_Node.As_Subp_Body.F_Subp_Spec;
-      if Subp_Spec.F_Subp_Returns.Is_Null
-        or else not Integer_Type_Info
-          (Subp_Spec.F_Subp_Returns,
-           Info.Result_Type_Name, Info.Result_Type_Package)
+      if not Integer_Type_Info
+        (Found_Visible.As_Classic_Subp_Decl.F_Subp_Spec.F_Subp_Returns,
+         Info.Result_Type_Name, Info.Result_Type_Package)
       then
          Reason := To_Unbounded_String
            ("the function return type is not a supported integer scalar type");
