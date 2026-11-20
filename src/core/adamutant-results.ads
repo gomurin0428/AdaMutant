@@ -43,6 +43,18 @@ package AdaMutant.Results is
       Mutant_Run      : Verification_Outcome := Not_Run;
    end record;
 
+   type Input_Search_Status is
+     (Search_Not_Run, Search_Inconclusive, Search_Found);
+
+   type Input_Search_Record is record
+      Status          : Input_Search_Status := Search_Not_Run;
+      Reason          : Unbounded_String;
+      Input           : Unbounded_String;
+      Original_Output : Unbounded_String;
+      Mutant_Output   : Unbounded_String;
+      Attempts        : Natural := 0;
+   end record;
+
    type Proof_Evidence is (None, Confirmed, Weak_Contract, Undecided);
    --  For a mutant that only the proof detects, what GNATprove gives with
    --  the failure.  Confirmed: a message of severity high (GNATprove ran
@@ -77,6 +89,7 @@ package AdaMutant.Results is
       --  when H = 51", or "".
       Has_Suggestion : Boolean := False;
       Suggestion     : Suggestion_Record;
+      Input_Search   : Input_Search_Record;
       Reached       : Coverage := Unknown;
       Covered_By    : AdaMutant.Config.String_Vector;
       --  With Reached = Covered: the names of the tests that execute the

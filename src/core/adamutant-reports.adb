@@ -239,6 +239,36 @@ package body AdaMutant.Reports is
                           & ",""mutantRun"":"
                           & Json_String (Name (M.Suggestion.Mutant_Run)) & "}}");
                   end if;
+                  if M.Input_Search.Status /= Search_Not_Run then
+                     Add (",""inputSearch"":{""status"":"
+                          & Json_String
+                            (case M.Input_Search.Status is
+                               when Search_Not_Run => "NotRun",
+                               when Search_Inconclusive => "Inconclusive",
+                               when Search_Found => "Found"));
+                     if Length (M.Input_Search.Reason) > 0 then
+                        Add (",""reason"":"
+                             & Json_String
+                               (To_String (M.Input_Search.Reason)));
+                     end if;
+                     if Length (M.Input_Search.Input) > 0 then
+                        Add (",""input"":"
+                             & Json_String
+                               (To_String (M.Input_Search.Input)));
+                     end if;
+                     if Length (M.Input_Search.Original_Output) > 0 then
+                        Add (",""originalOutput"":"
+                             & Json_String
+                               (To_String (M.Input_Search.Original_Output)));
+                     end if;
+                     if Length (M.Input_Search.Mutant_Output) > 0 then
+                        Add (",""mutantOutput"":"
+                             & Json_String
+                               (To_String (M.Input_Search.Mutant_Output)));
+                     end if;
+                     Add (",""attempts"":"
+                          & Image (M.Input_Search.Attempts) & "}");
+                  end if;
                   Add (",""duration"":"
                        & Image (Integer (M.Elapsed * 1000.0)) & "}");
                end if;
@@ -499,6 +529,34 @@ package body AdaMutant.Reports is
                   & To_String (M.Suggestion.Command));
             end if;
          end if;
+         case M.Input_Search.Status is
+            when Search_Not_Run =>
+               null;
+            when Search_Inconclusive =>
+               Ada.Text_IO.Put_Line ("    input search: inconclusive");
+               if Length (M.Input_Search.Reason) > 0 then
+                  Ada.Text_IO.Put_Line
+                    ("      " & To_String (M.Input_Search.Reason));
+               end if;
+               if M.Input_Search.Attempts > 0 then
+                  Ada.Text_IO.Put_Line
+                    ("      candidates attempted:"
+                     & M.Input_Search.Attempts'Image);
+               end if;
+            when Search_Found =>
+               Ada.Text_IO.Put_Line ("    input search: witness found");
+               Ada.Text_IO.Put_Line
+                 ("      call: " & To_String (M.Input_Search.Input));
+               Ada.Text_IO.Put_Line
+                 ("      observed original output: "
+                  & To_String (M.Input_Search.Original_Output));
+               Ada.Text_IO.Put_Line
+                 ("      observed mutant output: "
+                  & To_String (M.Input_Search.Mutant_Output));
+               Ada.Text_IO.Put_Line
+                 ("      candidates attempted:"
+                  & M.Input_Search.Attempts'Image);
+         end case;
       end Put_Mutant;
 
       function Base_Name (Path : String) return String is

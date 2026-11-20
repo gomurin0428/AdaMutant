@@ -28,4 +28,11 @@ package AdaMutant.Suggestions is
       M : in out AdaMutant.Results.Mutant;
       Memory_Limit_Mb : Natural := 0);
 
+   procedure Search
+     (Root, File_Path, Source, Search_Project : String;
+      Skip_Dirs : AdaMutant.Files.String_Vectors.Vector;
+      Build_Timeout, Run_Timeout, Budget : Duration;
+      M : in out AdaMutant.Results.Mutant;
+      Memory_Limit_Mb : Natural := 0);
+
 end AdaMutant.Suggestions;

@@ -241,6 +241,7 @@ package body AdaMutant.Config is
                  | "exclude_mutators" | "include_mutators" | "mutate_contracts"
                  | "sandbox_exclude"
                  | "report_dir" | "reporters" | "suggestion_project"
+                 | "search_project" | "search_budget_ms"
             then
                Fail ("'" & Key & "' is a setting, not a test: write the"
                      & " settings before the tables");
@@ -321,6 +322,10 @@ package body AdaMutant.Config is
             C.Report_Dir := To_Unbounded_String (String_Value);
          elsif Full = "suggestion_project" then
             C.Suggestion_Project := To_Unbounded_String (String_Value);
+         elsif Full = "search_project" then
+            C.Search_Project := To_Unbounded_String (String_Value);
+         elsif Full = "search_budget_ms" then
+            C.Search_Budget_Ms := Integer_Value;
          elsif Full = "reporters" then
             Reporters := Array_Value;
             C.Console_Report := False;
@@ -530,6 +535,11 @@ package body AdaMutant.Config is
       & "sandbox_exclude = ["".git"", ""obj"", ""bin""]" & LF
       & "# Optional GPR project for verified test suggestions." & LF
       & "# suggestion_project = ""tests/tests.gpr""" & LF
+      & "# Optional GPR project for bounded distinguishing-input searches." & LF
+      & "# Search runs only for surviving mutants; it needs no counterexample." & LF
+      & "# search_project = ""tests/tests.gpr""" & LF
+      & "# Total search budget per mutant in ms; 0 disables searching." & LF
+      & "search_budget_ms = 10000" & LF
       & "reporters = [""console"", ""html"", ""json""]" & LF
       & LF
       & "[thresholds]" & LF

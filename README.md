@@ -139,6 +139,9 @@ exclude_mutators = ["StringLiteral"]        # left out of the mutators above, al
 include_mutators = ["LoopDirection"]        # added to them
 sandbox_exclude = [".git", "obj", "bin"]    # not copied into the sandboxes
 report_dir = ".adamutant/reports"
+# Optional bounded distinguishing-input search for survivors
+# search_project = "tests.gpr"
+# search_budget_ms = 10000
 
 [thresholds]
 high = 80
@@ -154,6 +157,39 @@ break = 0
 The "original time" is the slowest run when the tests (proofs) of the unmutated project run in all the sandboxes at the same time. It is measured under the same load as the parallel runs of the mutants, so tests that become slower in parallel are not reported as Timeout by mistake.
 
 `build`, the tests (`test` or `[tests]`) and `prove` are required. Each mutant goes to the tests first, and only the mutants that pass the tests go on to the proof. The commands run with `/bin/sh -c` on POSIX and with `cmd.exe /c` on Windows, and receive the environment variable `ADAMUTANT_MUTANT_ID`. The build, the tests and the proof of a mutant also receive the path of the mutated file in `ADAMUTANT_MUTANT_FILE` (relative to the project root, exactly as it appears under `files` in the JSON report) and the mutated line in `ADAMUTANT_MUTANT_LINE` (both are empty in the baseline runs). The prove command receives a directory for a cache of proof results in `ADAMUTANT_PROVE_CACHE` (see [Speeding up the proof of the mutants](#speeding-up-the-proof-of-the-mutants)) and switches for GNATprove in `ADAMUTANT_PROVE_SWITCHES` (see [Where the proof proves anything](#where-the-proof-proves-anything)). cmd.exe takes what follows the `/` of `bin/test` as a switch, so quote a path that contains `/`, as in `test = '"bin/test"'` (this also works as it is with `/bin/sh`). An unknown key is an error.
+
+### Bounded distinguishing-input search
+
+Set `search_project` to an existing GPR project to opt in:
+
+~~~toml
+search_project = "tests.gpr"
+search_budget_ms = 10000
+~~~
+
+AdaMutant searches only final `Survived` mutants, independently of proof
+counterexamples and generated-test suggestions. The search uses the configured
+project to compile matching probes for the original and exact mutant; it does
+not rerun GNATprove. `search_budget_ms` is a monotonic per-mutant search
+deadline used to check candidate generation and cap probe build/run timeouts.
+It defaults to 10000 ms; set it to `0` to disable searching. Identification,
+project copying, cleanup, and other synchronous operations cannot be
+preempted, so a slow operation there can make total wall-clock time exceed the
+configured budget.
+
+Currently supported targets are public, non-overloaded package functions with
+an integer scalar result and one or more `in` integer scalar parameters. The
+search tries small integers and each formal subtype's bounds and adjacent
+values, then bounded argument combinations (at most 256), with contracts and
+assertions enabled. Unsupported signatures, rejected inputs, exceptions,
+timeouts, malformed output, build failures, and exhaustion without a witness
+are reported as inconclusive. No witness never means equivalent and does not
+change mutation status, score, or killers.
+
+A found result records the concrete function call and the outputs observed
+from the original and mutant programs. These are observations of program
+behavior, not a specification or a claim that either output is correct. The
+search does not install or generate a regression test.
 
 ### Verified regression-test suggestions
 

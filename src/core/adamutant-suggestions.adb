@@ -1,10 +1,12 @@
 with Ada.Characters.Handling; use Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Exceptions;
+with Ada.Real_Time;
 with Ada.Strings.Fixed;
 with Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with GNATCOLL.JSON;
+with GNATCOLL.GMP.Integers;
 with GNATCOLL.VFS;
 with Langkit_Support.Slocs;
 with Libadalang.Analysis;
@@ -328,6 +330,189 @@ package body AdaMutant.Suggestions is
         & "end " & Procedure_Name & ";" & LF;
    end Probe_Source;
 
+   function Small_Integer (Index : Positive) return String is
+   begin
+      case Index is
+         when 1 => return "0";
+         when 2 => return "1";
+         when 3 => return "-1";
+         when 4 => return "2";
+         when 5 => return "-2";
+         when 6 => return "3";
+         when 7 => return "-3";
+         when others => return "";
+      end case;
+   end Small_Integer;
+
+   function Search_Id_Text (Value : Natural) return String is
+     (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
+
+   function Search_Probe_Source
+     (Procedure_Name, Package_Name, Function_Name, Result_Type : String;
+      Formal_Types, Type_Packages, Type_Constraints,
+        Formal_Type_Ranges : String_Vectors.Vector)
+      return String
+   is
+      Result : Unbounded_String;
+      Withs  : String_Vectors.Vector;
+
+      procedure Add_With (Name : String) is
+      begin
+         if Name'Length > 0
+           and then (for all Existing of Withs =>
+                       To_Lower (Existing) /= To_Lower (Name))
+         then
+            Withs.Append (Name);
+         end if;
+      end Add_With;
+
+   begin
+      Add_With (Package_Name);
+      for Name of Type_Packages loop
+         Add_With (Name);
+      end loop;
+      Append (Result, "with Ada.Assertions;" & LF
+              & "with Ada.Command_Line;" & LF
+              & "with Ada.Text_IO;" & LF);
+      for Name of Withs loop
+         Append (Result, "with " & Name & ";" & LF);
+      end loop;
+      Append (Result, "procedure " & Procedure_Name & " is" & LF);
+      for I in 1 .. Natural (Formal_Types.Length) loop
+         declare
+            Suffix : constant String := Search_Id_Text (I);
+            Formal_Type : constant String := Formal_Types (I);
+            Constraint  : constant String := Type_Constraints (I);
+            Range_Constraint : constant String := Formal_Type_Ranges (I);
+         begin
+            Append (Result, "   subtype Search_Argument_" & Suffix & " is "
+                    & Formal_Type
+                    & (if Constraint'Length = 0 then ""
+                       else " " & Constraint) & ";" & LF
+                    & "   use type Search_Argument_" & Suffix & ";" & LF
+                    & "   subtype Search_Declared_Bounds_" & Suffix & " is "
+                    & "Search_Argument_" & Suffix & "'Base "
+                    & Range_Constraint & ";" & LF
+                    & "   subtype Search_Bounds_" & Suffix & " is "
+                    & "Search_Declared_Bounds_" & Suffix
+                    & (if Constraint'Length = 0 then ""
+                       else " " & Constraint) & ";" & LF
+                    & "   type Search_Values_" & Suffix
+                    & " is array (Positive range 1 .. 11) of Search_Argument_"
+                    & Suffix & ";" & LF
+                    & "   procedure List_" & Suffix & " is" & LF
+                    & "      Values : Search_Values_" & Suffix & ";" & LF
+                    & "      Count : Natural := 0;" & LF
+                    & "      procedure Add (Value : Search_Argument_" & Suffix
+                    & ") is" & LF
+                    & "      begin" & LF
+                    & "         for K in 1 .. Count loop" & LF
+                    & "            if Values (K) = Value then" & LF
+                    & "               return;" & LF
+                    & "            end if;" & LF
+                    & "         end loop;" & LF
+                    & "         Count := Count + 1;" & LF
+                    & "         Values (Count) := Value;" & LF
+                    & "      end Add;" & LF
+                    & "      procedure Add_Text (Value : String) is" & LF
+                    & "      begin" & LF
+                    & "         Add (Search_Argument_" & Suffix
+                    & "'Value (Value));" & LF
+                    & "      exception" & LF
+                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                    & LF
+                    & "      end Add_Text;" & LF
+                    & "      procedure Add_First is" & LF
+                    & "      begin" & LF
+                    & "         Add (Search_Bounds_" & Suffix & "'First);" & LF
+                    & "      exception" & LF
+                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                    & LF
+                    & "      end Add_First;" & LF
+                    & "      procedure Add_Last is" & LF
+                    & "      begin" & LF
+                    & "         Add (Search_Bounds_" & Suffix & "'Last);" & LF
+                    & "      exception" & LF
+                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                    & LF
+                    & "      end Add_Last;" & LF
+                    & "      procedure Add_Succ_First is" & LF
+                    & "      begin" & LF
+                    & "         if Search_Bounds_" & Suffix & "'First < Search_Bounds_"
+                    & Suffix & "'Last then" & LF
+                    & "            Add (Search_Bounds_" & Suffix
+                    & "'Succ (Search_Bounds_" & Suffix & "'First));" & LF
+                    & "         end if;" & LF
+                    & "      exception" & LF
+                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                    & LF
+                    & "      end Add_Succ_First;" & LF
+                    & "      procedure Add_Pred_Last is" & LF
+                    & "      begin" & LF
+                    & "         if Search_Bounds_" & Suffix & "'First < Search_Bounds_"
+                    & Suffix & "'Last then" & LF
+                    & "            Add (Search_Bounds_" & Suffix
+                    & "'Pred (Search_Bounds_" & Suffix & "'Last));" & LF
+                    & "         end if;" & LF
+                    & "      exception" & LF
+                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                    & LF
+                    & "      end Add_Pred_Last;" & LF
+                    & "   begin" & LF);
+            for Value_Index in 1 .. 7 loop
+               declare
+                  Value : constant String := Small_Integer (Value_Index);
+               begin
+                  Append (Result, "      Add_Text (""" & Value & """);" & LF);
+               end;
+            end loop;
+            Append (Result, "      Add_First;" & LF
+                    & "      Add_Last;" & LF
+                    & "      Add_Succ_First;" & LF
+                    & "      Add_Pred_Last;" & LF
+                    & "      for K in 1 .. Count loop" & LF
+                    & "         Ada.Text_IO.Put_Line" & LF
+                    & "           (""ADAMUTANT_SEARCH_VALUE:""" & LF
+                    & "            & Search_Argument_" & Suffix
+                    & "'Image (Values (K)));" & LF
+                    & "      end loop;" & LF
+                    & "   end List_" & Suffix & ";" & LF);
+         end;
+      end loop;
+      Append (Result, "begin" & LF
+              & "   if Ada.Command_Line.Argument_Count = 2" & LF
+              & "     and then Ada.Command_Line.Argument (1) = ""--values""" & LF
+              & "   then" & LF
+              & "      case Positive'Value (Ada.Command_Line.Argument (2)) is" & LF);
+      for I in 1 .. Natural (Formal_Types.Length) loop
+         Append (Result, "         when " & Search_Id_Text (I) & " => List_"
+                 & Search_Id_Text (I) & ";" & LF);
+      end loop;
+      Append (Result, "         when others =>" & LF
+              & "            Ada.Command_Line.Set_Exit_Status" & LF
+              & "              (Ada.Command_Line.Failure);" & LF
+              & "      end case;" & LF
+              & "      return;" & LF
+              & "   end if;" & LF
+              & "   if Ada.Command_Line.Argument_Count /= "
+              & Search_Id_Text (Natural (Formal_Types.Length)) & " then" & LF
+              & "      Ada.Command_Line.Set_Exit_Status" & LF
+              & "        (Ada.Command_Line.Failure);" & LF
+              & "      return;" & LF
+              & "   end if;" & LF
+              & "   Ada.Text_IO.Put_Line" & LF
+              & "     (""ADAMUTANT_SEARCH_RESULT:"" & " & Result_Type
+              & "'Image (" & Package_Name & "." & Function_Name & " (" & LF);
+      for I in 1 .. Natural (Formal_Types.Length) loop
+         Append (Result, "        Search_Argument_" & Search_Id_Text (I)
+                 & "'Value (Ada.Command_Line.Argument (" & Search_Id_Text (I) & "))"
+                 & (if I = Natural (Formal_Types.Length) then ")));" & LF
+                    else "," & LF));
+      end loop;
+      Append (Result, "end " & Procedure_Name & ";" & LF);
+      return To_String (Result);
+   end Search_Probe_Source;
+
    function Text_Of (Node : LAL.Ada_Node'Class) return String is
      (Ada.Strings.UTF_Encoding.Wide_Wide_Strings.Encode (LAL.Text (Node)));
 
@@ -372,7 +557,9 @@ package body AdaMutant.Suggestions is
       Name : LAL.Name;
       Decl : LAL.Basic_Decl;
    begin
-      if Type_Expr.Is_Null or else Type_Expr.Kind /= LC.Ada_Subtype_Indication
+      if Type_Expr.Is_Null
+        or else Type_Expr.Kind not in LC.Ada_Subtype_Indication
+                                      | LC.Ada_Constrained_Subtype_Indication
       then
          return False;
       end if;
@@ -395,7 +582,8 @@ package body AdaMutant.Suggestions is
 
    function Integer_Type_Info
      (Type_Expr : LAL.Type_Expr;
-      Type_Name, Type_Package : out Unbounded_String) return Boolean
+      Type_Name, Type_Package : out Unbounded_String;
+      Range_Constraint : out Unbounded_String) return Boolean
    is
       Name : LAL.Name;
       Decl : LAL.Basic_Decl;
@@ -403,10 +591,15 @@ package body AdaMutant.Suggestions is
       Current : LAL.Ada_Node;
       Package_Path : Unbounded_String;
       Simple_Name : Unbounded_String;
+      Bounds : LAL.Discrete_Range;
+      Low, High : LAL.Expr;
    begin
       Type_Name := Null_Unbounded_String;
       Type_Package := Null_Unbounded_String;
-      if Type_Expr.Is_Null or else Type_Expr.Kind /= LC.Ada_Subtype_Indication
+      Range_Constraint := Null_Unbounded_String;
+      if Type_Expr.Is_Null
+        or else Type_Expr.Kind not in LC.Ada_Subtype_Indication
+                                      | LC.Ada_Constrained_Subtype_Indication
       then
          return False;
       end if;
@@ -421,6 +614,20 @@ package body AdaMutant.Suggestions is
          return False;
       end if;
       Type_Decl := Decl.As_Base_Type_Decl;
+      Bounds := Type_Decl.P_Discrete_Range;
+      Low := LAL.Low_Bound (Bounds).As_Expr;
+      High := LAL.High_Bound (Bounds).As_Expr;
+      if Low.Is_Null or else High.Is_Null
+        or else not Low.P_Is_Static_Expr
+        or else not High.P_Is_Static_Expr
+      then
+         return False;
+      end if;
+      Range_Constraint := To_Unbounded_String
+        ("range "
+         & Trimmed (GNATCOLL.GMP.Integers.Image (Low.P_Eval_As_Int))
+         & " .. "
+         & Trimmed (GNATCOLL.GMP.Integers.Image (High.P_Eval_As_Int)));
       if Type_Decl.F_Name.Is_Null
         or else Type_Decl.F_Name.F_Name.Is_Null
       then
@@ -465,6 +672,10 @@ package body AdaMutant.Suggestions is
       Result_Type_Name    : Unbounded_String;
       Result_Type_Package : Unbounded_String;
       Formals             : String_Vectors.Vector;
+      Formal_Type_Names   : String_Vectors.Vector;
+      Formal_Type_Packages : String_Vectors.Vector;
+      Formal_Type_Constraints : String_Vectors.Vector;
+      Formal_Type_Ranges : String_Vectors.Vector;
       Actuals             : String_Vectors.Vector;
    end record;
 
@@ -473,7 +684,8 @@ package body AdaMutant.Suggestions is
       Skip_Dirs : String_Vectors.Vector;
       M : Mutant;
       Info : out Function_Info;
-      Reason : out Unbounded_String) return Boolean
+      Reason : out Unbounded_String;
+      Require_Bindings : Boolean := True) return Boolean
    is
       Files : constant String_Vectors.Vector :=
         AdaMutant.Files.Find_Files (Root, Skip_Dirs);
@@ -490,6 +702,9 @@ package body AdaMutant.Suggestions is
       Package_Name : Unbounded_String;
       Function_Name : Unbounded_String;
       Subp_Spec : LAL.Subp_Spec;
+      Result_Type_Range : Unbounded_String;
+      Body_Formals : String_Vectors.Vector;
+      Formal_Index : Natural := 0;
       Visible_Count : Natural := 0;
       All_Count : Natural := 0;
       Found_Visible : LAL.Ada_Node := LAL.No_Ada_Node;
@@ -677,10 +892,11 @@ package body AdaMutant.Suggestions is
          return False;
       end if;
 
-      Subp_Spec := Candidate_Node.As_Subp_Body.F_Subp_Spec;
+      Subp_Spec := Found_Visible.As_Classic_Subp_Decl.F_Subp_Spec;
       if not Integer_Type_Info
-        (Found_Visible.As_Classic_Subp_Decl.F_Subp_Spec.F_Subp_Returns,
-         Info.Result_Type_Name, Info.Result_Type_Package)
+         (Found_Visible.As_Classic_Subp_Decl.F_Subp_Spec.F_Subp_Returns,
+         Info.Result_Type_Name, Info.Result_Type_Package,
+         Result_Type_Range)
       then
          Reason := To_Unbounded_String
            ("the function return type is not a supported integer scalar type");
@@ -690,6 +906,35 @@ package body AdaMutant.Suggestions is
          Reason := To_Unbounded_String
            ("functions without explicit integer parameters are unsupported");
          return False;
+      end if;
+      if Require_Bindings then
+         declare
+            Body_Spec : constant LAL.Subp_Spec :=
+              Candidate_Node.As_Base_Subp_Body.F_Subp_Spec;
+         begin
+            if Body_Spec.Is_Null or else Body_Spec.F_Subp_Params.Is_Null then
+               Reason := To_Unbounded_String
+                 ("the function body has no matching formal parameters");
+               return False;
+            end if;
+            declare
+               Body_Params : constant LAL.Param_Spec_List :=
+                 Body_Spec.F_Subp_Params.F_Params;
+            begin
+               for K in 1 .. LAL.Children_Count (Body_Params) loop
+                  declare
+                     Ids : constant LAL.Defining_Name_List :=
+                       LAL.Child (Body_Params, K).As_Param_Spec.F_Ids;
+                  begin
+                     for J in 1 .. LAL.Children_Count (Ids) loop
+                        Body_Formals.Append
+                          (Text_Of
+                             (LAL.Child (Ids, J).As_Defining_Name.F_Name));
+                     end loop;
+                  end;
+               end loop;
+            end;
+         end;
       end if;
       declare
          Params : constant LAL.Params := Subp_Spec.F_Subp_Params;
@@ -701,6 +946,10 @@ package body AdaMutant.Suggestions is
                  LAL.Child (Param_List, K).As_Param_Spec;
                Mode  : constant LAL.Mode := Param.F_Mode;
                Type_Expr : constant LAL.Type_Expr := Param.F_Type_Expr;
+               Type_Name : Unbounded_String;
+               Type_Package : Unbounded_String;
+               Type_Constraint : Unbounded_String;
+               Type_Range : Unbounded_String;
             begin
                if not Mode.Is_Null
                  and then Mode.Kind not in LC.Ada_Mode_Default | LC.Ada_Mode_In
@@ -709,26 +958,63 @@ package body AdaMutant.Suggestions is
                     ("only in-mode integer parameters are supported");
                   return False;
                end if;
-               if not Is_Integer_Type (Type_Expr) then
+               if not Is_Integer_Type (Type_Expr)
+                 or else not Integer_Type_Info
+                   (Type_Expr, Type_Name, Type_Package, Type_Range)
+               then
                   Reason := To_Unbounded_String
                     ("a formal parameter is not a supported integer scalar type");
                   return False;
+               end if;
+               if Type_Expr.Kind in LC.Ada_Subtype_Indication
+                                      | LC.Ada_Constrained_Subtype_Indication
+                 and then not Type_Expr.As_Subtype_Indication.F_Constraint.Is_Null
+               then
+                  Type_Constraint := To_Unbounded_String
+                    (Text_Of
+                       (Type_Expr.As_Subtype_Indication.F_Constraint));
                end if;
                declare
                   Ids : constant LAL.Defining_Name_List := Param.F_Ids;
                begin
                   for J in 1 .. LAL.Children_Count (Ids) loop
-                     Info.Formals.Append
-                       (Text_Of (LAL.Child (Ids, J).As_Defining_Name.F_Name));
+                     Formal_Index := Formal_Index + 1;
+                     if Require_Bindings then
+                        if Formal_Index > Natural (Body_Formals.Length) then
+                           Reason := To_Unbounded_String
+                             ("the public declaration and function body have different formal parameters");
+                           return False;
+                        end if;
+                        Info.Formals.Append (Body_Formals (Formal_Index));
+                     else
+                        Info.Formals.Append
+                          (Text_Of
+                             (LAL.Child (Ids, J).As_Defining_Name.F_Name));
+                     end if;
+                     Info.Formal_Type_Names.Append (To_String (Type_Name));
+                     Info.Formal_Type_Packages.Append
+                       (To_String (Type_Package));
+                     Info.Formal_Type_Constraints.Append
+                       (To_String (Type_Constraint));
+                     Info.Formal_Type_Ranges.Append
+                       (To_String (Type_Range));
                   end loop;
                end;
             end;
          end loop;
       end;
+      if Require_Bindings
+        and then Formal_Index /= Natural (Body_Formals.Length)
+      then
+         Reason := To_Unbounded_String
+           ("the public declaration and function body have different formal parameters");
+         return False;
+      end if;
       Info.Package_Name := Package_Name;
       Info.Function_Name := Function_Name;
-      if not Parse_Bindings
-        (To_String (M.Example), Info.Formals, Info.Actuals, Reason)
+      if Require_Bindings
+        and then not Parse_Bindings
+          (To_String (M.Example), Info.Formals, Info.Actuals, Reason)
       then
          return False;
       end if;
@@ -1019,6 +1305,678 @@ package body AdaMutant.Suggestions is
 
    function Build_Command (Project_File : String) return String is
      ("gprbuild -p -f -q -P " & Shell_Quote (Native_Path (Project_File)));
+
+   procedure Search
+     (Root, File_Path, Source, Search_Project : String;
+      Skip_Dirs : String_Vectors.Vector;
+      Build_Timeout, Run_Timeout, Budget : Duration;
+      M : in out Mutant;
+      Memory_Limit_Mb : Natural := 0)
+   is
+      use type Ada.Real_Time.Time;
+
+      Started : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+      Deadline : constant Ada.Real_Time.Time :=
+        Started + Ada.Real_Time.To_Time_Span (Duration'Max (0.0, Budget));
+      Work : Unbounded_String;
+      Original_Dir : Unbounded_String;
+      Mutant_Dir : Unbounded_String;
+      Project_Path : Unbounded_String;
+      Project_Name : Unbounded_String;
+      Probe_Name : Unbounded_String;
+      Probe_Source : Unbounded_String;
+      Original_Project : Unbounded_String;
+      Mutant_Project : Unbounded_String;
+      Original_Executable : Unbounded_String;
+      Mutant_Executable : Unbounded_String;
+      Type_Packages : String_Vectors.Vector;
+      Skip : String_Vectors.Vector := Skip_Dirs;
+      Info : Function_Info;
+      Reason : Unbounded_String;
+      Expired : Boolean := False;
+      Original_Successes : Natural := 0;
+      Mutant_Successes : Natural := 0;
+      Same_Outputs : Natural := 0;
+      Mutant_Failures : Natural := 0;
+      Max_Combinations : constant Natural := 256;
+      Id : constant String := Id_Text (M.Id);
+
+      function Remaining return Duration is
+        (Duration'Max
+           (0.0,
+            Ada.Real_Time.To_Duration (Deadline - Ada.Real_Time.Clock)));
+
+      function Search_Trim (Text : String) return String is
+         First : Natural := Text'First;
+         Last  : Natural := Text'Last;
+      begin
+         while First <= Last and then Is_Space (Text (First)) loop
+            First := First + 1;
+         end loop;
+         while Last >= First and then Is_Space (Text (Last)) loop
+            Last := Last - 1;
+         end loop;
+         return (if First > Last then "" else Text (First .. Last));
+      end Search_Trim;
+
+      function Is_Static_Range (Constraint : String) return Boolean is
+         Text : constant String := Search_Trim (Constraint);
+         Lower : constant String := To_Lower (Text);
+         Bounds : Unbounded_String;
+         Separator : Natural;
+      begin
+         if Text = "" then
+            return True;
+         elsif Lower'Length < 5 or else Lower (Lower'First .. Lower'First + 4)
+           /= "range"
+         then
+            return False;
+         end if;
+         Bounds := To_Unbounded_String
+           (Search_Trim (Text (Text'First + 5 .. Text'Last)));
+         Separator := Ada.Strings.Fixed.Index (To_String (Bounds), "..");
+         if Separator = 0 then
+            return False;
+         end if;
+         declare
+            Range_Text : constant String := To_String (Bounds);
+            Left : constant String := Search_Trim
+              (Range_Text (Range_Text'First .. Separator - 1));
+            Right : constant String := Search_Trim
+              (Range_Text (Separator + 2 .. Range_Text'Last));
+         begin
+            return Is_Integer_Literal (Left) and then Is_Integer_Literal (Right);
+         end;
+      end Is_Static_Range;
+
+      function Bounded_Timeout (Configured : Duration) return Duration is
+         Left : constant Duration := Remaining;
+      begin
+         if Configured <= 0.0 then
+            return Left;
+         end if;
+         return Duration'Min (Left, Configured);
+      end Bounded_Timeout;
+
+      function Run_Child
+        (Command, Directory, Log : String; Configured : Duration)
+         return AdaMutant.Processes.Run_Result
+      is
+         Timeout : constant Duration := Bounded_Timeout (Configured);
+      begin
+         if Timeout < 0.001 then
+            return (Exit_Code => -1, Timed_Out => True, Elapsed => 0.0);
+         end if;
+         return AdaMutant.Processes.Run
+           (Command => Command,
+            Directory => Directory,
+            Log_File => Log,
+            Mutant_Id => 0,
+            Timeout => Timeout,
+            Memory_Limit_Mb => Memory_Limit_Mb,
+            Mutant_File => File_Path,
+            Mutant_Line => M.Start_Pos.Line);
+      exception
+         when AdaMutant.Processes.Spawn_Error =>
+            return (Exit_Code => -1, Timed_Out => False, Elapsed => 0.0);
+      end Run_Child;
+
+      function Marked_Result (Path : String) return String is
+         Text : constant String := AdaMutant.Files.Read (Path);
+         Marker : constant String := "ADAMUTANT_SEARCH_RESULT:";
+         First : Natural := Text'First;
+         Count : Natural := 0;
+         Value : Unbounded_String;
+      begin
+         while First <= Text'Last loop
+            declare
+               Last : Natural := First;
+               Line : Unbounded_String;
+            begin
+               while Last <= Text'Last and then Text (Last) /= ASCII.LF loop
+                  Last := Last + 1;
+               end loop;
+               Line := To_Unbounded_String
+                 (Search_Trim
+                    (if Last = First then ""
+                     else Text (First .. Last - 1)));
+               declare
+                  Line_Text_Value : constant String := To_String (Line);
+               begin
+                  if Line_Text_Value'Length >= Marker'Length
+                    and then Line_Text_Value
+                      (1 .. Marker'Length) = Marker
+                  then
+                     declare
+                        Found : constant String := Search_Trim
+                          (if Line_Text_Value'Length = Marker'Length then ""
+                           else Line_Text_Value
+                             (Marker'Length + 1 .. Line_Text_Value'Last));
+                     begin
+                        if Count > 0 or else not Is_Integer_Literal (Found) then
+                           return "";
+                        end if;
+                        Count := Count + 1;
+                        Value := To_Unbounded_String (Found);
+                     end;
+                  end if;
+               end;
+               First := Last + 1;
+            end;
+         end loop;
+         return (if Count = 1 then To_String (Value) else "");
+      exception
+         when others =>
+            return "";
+      end Marked_Result;
+
+      procedure Read_Candidate_Values
+        (Path : String; Values : out String_Vectors.Vector;
+         Valid : out Boolean)
+      is
+         Text : constant String := AdaMutant.Files.Read (Path);
+         Marker : constant String := "ADAMUTANT_SEARCH_VALUE:";
+         First : Natural := Text'First;
+      begin
+         Values := String_Vectors.Empty_Vector;
+         Valid := True;
+         while First <= Text'Last loop
+            declare
+               Last : Natural := First;
+               Line : Unbounded_String;
+            begin
+               while Last <= Text'Last and then Text (Last) /= ASCII.LF loop
+                  Last := Last + 1;
+               end loop;
+               Line := To_Unbounded_String
+                 (Search_Trim
+                    (if Last = First then ""
+                     else Text (First .. Last - 1)));
+               declare
+                  Line_Text_Value : constant String := To_String (Line);
+               begin
+                  if Line_Text_Value'Length >= Marker'Length
+                    and then Line_Text_Value
+                      (1 .. Marker'Length) = Marker
+                  then
+                     declare
+                        Value : constant String := Search_Trim
+                          (if Line_Text_Value'Length = Marker'Length then ""
+                           else Line_Text_Value
+                             (Marker'Length + 1 .. Line_Text_Value'Last));
+                     begin
+                        if not Is_Integer_Literal (Value) then
+                           Valid := False;
+                           return;
+                        end if;
+                        if not (for some Existing of Values => Existing = Value) then
+                           Values.Append (Value);
+                        end if;
+                     end;
+                  end if;
+               end;
+               First := Last + 1;
+            end;
+         end loop;
+         Valid := not Values.Is_Empty;
+      exception
+         when others =>
+            Values := String_Vectors.Empty_Vector;
+            Valid := False;
+      end Read_Candidate_Values;
+
+      procedure Inconclusive (Text : String) is
+      begin
+         M.Input_Search.Status := Search_Inconclusive;
+         M.Input_Search.Reason := To_Unbounded_String (Text);
+      end Inconclusive;
+
+      procedure Clean_Work is
+      begin
+         if Length (Work) > 0 then
+            AdaMutant.Files.Delete_Tree (To_String (Work));
+         end if;
+      exception
+         when others =>
+            null;
+      end Clean_Work;
+
+   begin
+      M.Input_Search := (others => <>);
+      if M.Status /= Survived then
+         return;
+      elsif Budget <= 0.0 then
+         return;
+      elsif Search_Project = "" then
+         Inconclusive ("search_project is not configured");
+         return;
+      elsif Is_Absolute (Search_Project) then
+         Inconclusive ("search_project must be relative to the project root");
+         return;
+      end if;
+
+      Project_Path := To_Unbounded_String
+        (AdaMutant.Files.Join (Root, Search_Project));
+      if not Ada.Directories.Exists (To_String (Project_Path))
+        or else not Is_Within (Root, To_String (Project_Path))
+      then
+         Inconclusive ("the configured search_project does not exist inside the project root");
+         return;
+      end if;
+      Project_Path := To_Unbounded_String
+        (Ada.Directories.Full_Name (To_String (Project_Path)));
+      Project_Name := To_Unbounded_String
+        (GPR_Project_Name (AdaMutant.Files.Read (To_String (Project_Path))));
+      if Length (Project_Name) = 0 then
+         Inconclusive ("the configured search_project has no simple project declaration");
+         return;
+      end if;
+      Skip.Append (".adamutant");
+      Skip.Append ("**/.adamutant");
+      Skip.Append (".git");
+      Skip.Append ("**/.git");
+      Skip.Append ("obj");
+      Skip.Append ("bin");
+      Skip.Append ("**/obj");
+      Skip.Append ("**/bin");
+      Skip.Append ("gnatprove");
+      Skip.Append ("**/gnatprove");
+      if not Identify (Root, File_Path, Skip, M, Info, Reason,
+                       Require_Bindings => False)
+      then
+         Inconclusive (To_String (Reason));
+         return;
+      end if;
+      if Info.Formals.Is_Empty then
+         Inconclusive ("functions without integer inputs are unsupported");
+         return;
+      elsif Natural (Info.Formals.Length) > 16 then
+         Inconclusive ("functions with more than 16 integer inputs are unsupported");
+         return;
+      end if;
+      for Constraint of Info.Formal_Type_Constraints loop
+         if not Is_Static_Range (Constraint) then
+            Inconclusive ("a formal parameter has an unsupported non-static range constraint");
+            return;
+         end if;
+      end loop;
+      for Formal_Range of Info.Formal_Type_Ranges loop
+         if Formal_Range = "" then
+            Inconclusive
+              ("a formal parameter has an unsupported non-static declared range");
+            return;
+         end if;
+      end loop;
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired during function identification");
+         return;
+      end if;
+
+      Work := To_Unbounded_String
+        (AdaMutant.Files.Join
+           (Root, ".adamutant/input-search/mutant-" & Id));
+      Original_Dir := To_Unbounded_String
+        (AdaMutant.Files.Join (To_String (Work), "original"));
+      Mutant_Dir := To_Unbounded_String
+        (AdaMutant.Files.Join (To_String (Work), "mutant"));
+      Clean_Work;
+      Ada.Directories.Create_Path (To_String (Work));
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired before copying the project");
+         Clean_Work;
+         return;
+      end if;
+      AdaMutant.Files.Copy_Tree (Root, To_String (Original_Dir), Skip);
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired while copying the project");
+         Clean_Work;
+         return;
+      end if;
+      AdaMutant.Files.Copy_Tree (Root, To_String (Mutant_Dir), Skip);
+      AdaMutant.Files.Write
+        (AdaMutant.Files.Join (To_String (Mutant_Dir), File_Path),
+         AdaMutant.Mutators.Apply (Source, M.Mutation));
+
+      for Package_Name of Info.Formal_Type_Packages loop
+         Type_Packages.Append (Package_Name);
+      end loop;
+      Type_Packages.Append (To_String (Info.Result_Type_Package));
+      Probe_Name := To_Unbounded_String ("adamutant_search_probe_" & Id);
+      Probe_Source := To_Unbounded_String
+        (Search_Probe_Source
+           (To_String (Probe_Name),
+            To_String (Info.Package_Name),
+            To_String (Info.Function_Name),
+            To_String (Info.Result_Type_Name),
+            Info.Formal_Type_Names,
+            Type_Packages,
+            Info.Formal_Type_Constraints,
+            Info.Formal_Type_Ranges));
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired while creating probe sources");
+         Clean_Work;
+         return;
+      end if;
+      Ada.Directories.Create_Path
+        (AdaMutant.Files.Join (To_String (Original_Dir), "search-source"));
+      AdaMutant.Files.Write
+        (AdaMutant.Files.Join
+           (To_String (Original_Dir),
+            "search-source/" & To_String (Probe_Name) & ".adb"),
+         To_String (Probe_Source));
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired while creating probe sources");
+         Clean_Work;
+         return;
+      end if;
+      Ada.Directories.Create_Path
+        (AdaMutant.Files.Join (To_String (Mutant_Dir), "search-source"));
+      AdaMutant.Files.Write
+        (AdaMutant.Files.Join
+           (To_String (Mutant_Dir),
+            "search-source/" & To_String (Probe_Name) & ".adb"),
+         To_String (Probe_Source));
+
+      Original_Project := To_Unbounded_String
+        (AdaMutant.Files.Join
+           (".", "adamutant_search_original_" & Id & ".gpr"));
+      Mutant_Project := To_Unbounded_String
+        (AdaMutant.Files.Join
+           (".", "adamutant_search_mutant_" & Id & ".gpr"));
+      AdaMutant.Files.Write
+        (AdaMutant.Files.Join
+           (To_String (Original_Dir), To_String (Original_Project)),
+         GPR_Source
+           ("AdaMutant_Search_Original_" & Id,
+            Search_Project,
+            To_String (Project_Name),
+            "search-source",
+            To_String (Probe_Name) & ".adb",
+            "obj/search-original-" & Id,
+            "bin/search-original-" & Id));
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired while creating probe projects");
+         Clean_Work;
+         return;
+      end if;
+      AdaMutant.Files.Write
+        (AdaMutant.Files.Join
+           (To_String (Mutant_Dir), To_String (Mutant_Project)),
+         GPR_Source
+           ("AdaMutant_Search_Mutant_" & Id,
+            Search_Project,
+            To_String (Project_Name),
+            "search-source",
+            To_String (Probe_Name) & ".adb",
+            "obj/search-mutant-" & Id,
+            "bin/search-mutant-" & Id));
+      Original_Executable := To_Unbounded_String
+        (Executable (To_String (Probe_Name), "bin/search-original-" & Id));
+      Mutant_Executable := To_Unbounded_String
+        (Executable (To_String (Probe_Name), "bin/search-mutant-" & Id));
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired before compiling the input probes");
+         Clean_Work;
+         return;
+      end if;
+      declare
+         Built : constant AdaMutant.Processes.Run_Result := Run_Child
+           (Build_Command (To_String (Original_Project)),
+            To_String (Original_Dir),
+            AdaMutant.Files.Join (To_String (Original_Dir), "search-build.log"),
+            Build_Timeout);
+      begin
+         if Built.Timed_Out or else Built.Exit_Code /= 0 then
+            Inconclusive
+              ("the original input probe did not build"
+               & (if Built.Timed_Out then " before its time limit"
+                  else " (exit status" & Built.Exit_Code'Image & ")"));
+            Expired := Remaining < 0.001;
+            Clean_Work;
+            return;
+         end if;
+      end;
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired before compiling the mutant probe");
+         Clean_Work;
+         return;
+      end if;
+      declare
+         Built : constant AdaMutant.Processes.Run_Result := Run_Child
+           (Build_Command (To_String (Mutant_Project)),
+            To_String (Mutant_Dir),
+            AdaMutant.Files.Join (To_String (Mutant_Dir), "search-build.log"),
+            Build_Timeout);
+      begin
+         if Built.Timed_Out or else Built.Exit_Code /= 0 then
+            Inconclusive
+              ("the mutant input probe did not build"
+               & (if Built.Timed_Out then " before its time limit"
+                  else " (exit status" & Built.Exit_Code'Image & ")"));
+            Expired := Remaining < 0.001;
+            Clean_Work;
+            return;
+         end if;
+      end;
+      if Remaining < 0.001 then
+         Expired := True;
+         Inconclusive ("the search budget expired before enumerating input values");
+         Clean_Work;
+         return;
+      end if;
+
+      declare
+         Formal_Count : constant Positive := Positive (Info.Formals.Length);
+         type Pool_Array is array (Positive range <>) of String_Vectors.Vector;
+         type Index_Array is array (Positive range <>) of Natural;
+         Pools : Pool_Array (1 .. Formal_Count);
+         Indices : Index_Array (1 .. Formal_Count) := [others => 1];
+         Attempts : Natural := 0;
+         Found : Boolean := False;
+
+         procedure Try_Combination is
+            Arguments : Unbounded_String;
+            Input : Unbounded_String;
+            Original_Result : Unbounded_String;
+            Mutant_Result : Unbounded_String;
+            Original_Run : AdaMutant.Processes.Run_Result;
+            Mutant_Run : AdaMutant.Processes.Run_Result;
+            Original_Log : constant String :=
+              AdaMutant.Files.Join (To_String (Original_Dir), "search-run.log");
+            Mutant_Log : constant String :=
+              AdaMutant.Files.Join (To_String (Mutant_Dir), "search-run.log");
+         begin
+            if Attempts >= Max_Combinations then
+               return;
+            elsif Remaining < 0.001 then
+               Expired := True;
+               return;
+            end if;
+            Attempts := Attempts + 1;
+            M.Input_Search.Attempts := Attempts;
+            for I in 1 .. Formal_Count loop
+               declare
+                  Value : constant String := Pools (I) (Positive (Indices (I)));
+               begin
+                  if I > 1 then
+                     Append (Arguments, " ");
+                     Append (Input, ", ");
+                  end if;
+                  Append (Arguments, Shell_Quote (Value));
+                  Append (Input, Value);
+               end;
+            end loop;
+            Original_Run := Run_Child
+              (To_String (Original_Executable) & " " & To_String (Arguments),
+               To_String (Original_Dir), Original_Log, Run_Timeout);
+            if Original_Run.Timed_Out then
+               Expired := Remaining < 0.001;
+               return;
+            elsif Original_Run.Exit_Code /= 0 then
+               return;
+            end if;
+            declare
+               Observed : constant String := Marked_Result (Original_Log);
+            begin
+               if Observed = "" then
+                  return;
+               end if;
+               Original_Successes := Original_Successes + 1;
+               Original_Result := To_Unbounded_String (Observed);
+            end;
+            if Remaining < 0.001 then
+               Expired := True;
+               return;
+            end if;
+            Mutant_Run := Run_Child
+              (To_String (Mutant_Executable) & " " & To_String (Arguments),
+               To_String (Mutant_Dir), Mutant_Log, Run_Timeout);
+            if Mutant_Run.Timed_Out then
+               Mutant_Failures := Mutant_Failures + 1;
+               Expired := Remaining < 0.001;
+               return;
+            elsif Mutant_Run.Exit_Code /= 0 then
+               Mutant_Failures := Mutant_Failures + 1;
+               return;
+            end if;
+            declare
+               Observed : constant String := Marked_Result (Mutant_Log);
+            begin
+               if Observed = "" then
+                  Mutant_Failures := Mutant_Failures + 1;
+                  return;
+               end if;
+               Mutant_Successes := Mutant_Successes + 1;
+               Mutant_Result := To_Unbounded_String (Observed);
+            end;
+            if To_String (Original_Result) /= To_String (Mutant_Result) then
+               M.Input_Search.Status := Search_Found;
+               M.Input_Search.Input := To_Unbounded_String
+                 (To_String (Info.Package_Name) & "."
+                  & To_String (Info.Function_Name) & " ("
+                  & To_String (Input) & ")");
+               M.Input_Search.Original_Output := Original_Result;
+               M.Input_Search.Mutant_Output := Mutant_Result;
+               M.Input_Search.Reason := To_Unbounded_String
+                 ("the original and mutant returned different integer values");
+               Found := True;
+            else
+               Same_Outputs := Same_Outputs + 1;
+            end if;
+         end Try_Combination;
+
+         function Next_Combination return Boolean is
+         begin
+            for I in reverse 1 .. Formal_Count loop
+               if Indices (I) < Natural (Pools (I).Length) then
+                  Indices (I) := Indices (I) + 1;
+                  for J in I + 1 .. Formal_Count loop
+                     Indices (J) := 1;
+                  end loop;
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Next_Combination;
+
+         function Changed_Arguments return Natural is
+            Count : Natural := 0;
+         begin
+            for Index of Indices loop
+               if Index > 1 then
+                  Count := Count + 1;
+               end if;
+            end loop;
+            return Count;
+         end Changed_Arguments;
+      begin
+         for I in 1 .. Formal_Count loop
+            if Remaining < 0.001 then
+               Expired := True;
+               exit;
+            end if;
+            declare
+               Values_Log : constant String := AdaMutant.Files.Join
+                 (To_String (Original_Dir), "search-values.log");
+               Listed : constant AdaMutant.Processes.Run_Result := Run_Child
+                 (To_String (Original_Executable) & " --values " & Id_Text (I),
+                  To_String (Original_Dir), Values_Log, Run_Timeout);
+               Valid : Boolean;
+            begin
+               if Listed.Timed_Out or else Listed.Exit_Code /= 0 then
+                  Expired := Remaining < 0.001;
+                  Inconclusive
+                    (if Expired then "the search budget expired while generating candidate values"
+                     else "the original input probe could not generate candidate values");
+                  exit;
+               end if;
+               Read_Candidate_Values (Values_Log, Pools (I), Valid);
+               if not Valid then
+                  Inconclusive ("the input probe produced no valid integer candidates");
+                  exit;
+               end if;
+            end;
+         end loop;
+         if not Expired and then M.Input_Search.Status /= Search_Inconclusive then
+            Try_Combination;
+            for I in 1 .. Formal_Count loop
+               exit when Found or else Expired or else Attempts >= Max_Combinations;
+               for J in 2 .. Natural (Pools (I).Length) loop
+                  exit when Found or else Expired or else Attempts >= Max_Combinations;
+                  Indices := [others => 1];
+                  Indices (I) := J;
+                  Try_Combination;
+               end loop;
+            end loop;
+            Indices := [others => 1];
+            while not Found and then not Expired and then Attempts < Max_Combinations
+              and then Next_Combination
+            loop
+               if Changed_Arguments > 1 then
+                  Try_Combination;
+               end if;
+            end loop;
+         end if;
+         if not Found and then M.Input_Search.Status /= Search_Inconclusive then
+            if Expired or else Remaining < 0.001 then
+               Inconclusive
+                 ("search budget exhausted after" & Attempts'Image
+                  & " candidate combinations");
+            elsif Attempts >= Max_Combinations then
+               Inconclusive
+                 ("no distinguishing input found within 256 candidate combinations");
+            elsif Original_Successes = 0 then
+               Inconclusive
+                 ("no candidate input completed successfully on the original program");
+            elsif Mutant_Successes = 0 then
+               Inconclusive
+                 ("no candidate input produced successful outputs from both programs");
+            elsif Mutant_Failures > 0 then
+               Inconclusive
+                 ("no distinguishing input found; some mutant executions did not complete successfully");
+            else
+               Inconclusive
+                 ("no distinguishing input found among" & Attempts'Image
+                  & " bounded candidate combinations");
+            end if;
+         end if;
+      end;
+      Clean_Work;
+   exception
+      when E : others =>
+         Clean_Work;
+         Inconclusive
+           ("input search could not complete: "
+            & Ada.Exceptions.Exception_Message (E));
+   end Search;
 
    procedure Generate
      (Root, File_Path, Source, Suggestion_Project, Report_Dir : String;
