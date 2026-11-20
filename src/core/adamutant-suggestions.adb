@@ -311,14 +311,20 @@ package body AdaMutant.Suggestions is
    end Is_Explicit_Mutant_Failure;
 
    function Probe_Source
-     (Procedure_Name, Package_Name, Call : String) return String
+     (Procedure_Name, Package_Name, Result_Type, Type_Package, Call : String)
+      return String
    is
    begin
       return "with Ada.Text_IO;" & LF
         & "with " & Package_Name & ";" & LF
+        & (if Type_Package'Length = 0
+             or else To_Lower (Type_Package) = To_Lower (Package_Name)
+           then ""
+           else "with " & Type_Package & ";" & LF)
         & "procedure " & Procedure_Name & " is" & LF
         & "begin" & LF
-        & "   Ada.Text_IO.Put_Line (" & Call & "'Image);" & LF
+        & "   Ada.Text_IO.Put_Line (" & Result_Type & "'Image (" & Call & "));"
+        & LF
         & "end " & Procedure_Name & ";" & LF;
    end Probe_Source;
 
@@ -1312,7 +1318,8 @@ package body AdaMutant.Suggestions is
       AdaMutant.Files.Write
         (To_String (Probe_Source_Path),
          Probe_Source (To_String (Probe_Name), To_String (Info.Package_Name),
-                       To_String (Call)));
+                       To_String (Info.Result_Type_Name),
+                       To_String (Info.Result_Type_Package), To_String (Call)));
       Probe_GPR := To_Unbounded_String
         (AdaMutant.Files.Join (To_String (Work_Original), "suggestion_probe_" & Id & ".gpr"));
       Work_Project := To_Unbounded_String (Suggestion_Project);
