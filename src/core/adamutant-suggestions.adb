@@ -494,6 +494,24 @@ package body AdaMutant.Suggestions is
       All_Count : Natural := 0;
       Found_Visible : LAL.Ada_Node := LAL.No_Ada_Node;
 
+      function In_Candidate_Package_Scope
+        (N : LAL.Ada_Node'Class) return Boolean
+      is
+         Current : LAL.Ada_Node := N.Parent;
+      begin
+         while not Current.Is_Null loop
+            if Current.Kind = LC.Ada_Package_Decl then
+               return LAL."=" (Current, Package_Decl.As_Ada_Node);
+            elsif Current.Kind in LC.Ada_Subp_Body | LC.Ada_Expr_Function
+              | LC.Ada_Generic_Subp_Internal | LC.Ada_Package_Body
+            then
+               return False;
+            end if;
+            Current := Current.Parent;
+         end loop;
+         return False;
+      end In_Candidate_Package_Scope;
+
       function Ada_Source (Path : String) return Boolean is
          Name : constant String := To_Lower (Ada.Directories.Simple_Name (Path));
       begin
@@ -506,7 +524,8 @@ package body AdaMutant.Suggestions is
         (N : LAL.Ada_Node'Class) return LC.Visit_Status
       is
       begin
-         if To_Lower (Subprogram_Name (N)) = To_Lower (To_String (Function_Name))
+         if In_Candidate_Package_Scope (N)
+           and then To_Lower (Subprogram_Name (N)) = To_Lower (To_String (Function_Name))
            and then Subprogram_Name (N) /= ""
          then
             All_Count := All_Count + 1;
@@ -518,7 +537,8 @@ package body AdaMutant.Suggestions is
         (N : LAL.Ada_Node'Class) return LC.Visit_Status
       is
       begin
-         if To_Lower (Subprogram_Name (N)) = To_Lower (To_String (Function_Name))
+         if In_Candidate_Package_Scope (N)
+           and then To_Lower (Subprogram_Name (N)) = To_Lower (To_String (Function_Name))
            and then Subprogram_Name (N) /= ""
          then
             Visible_Count := Visible_Count + 1;
