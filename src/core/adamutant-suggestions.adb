@@ -583,7 +583,8 @@ package body AdaMutant.Suggestions is
    function Integer_Type_Info
      (Type_Expr : LAL.Type_Expr;
       Type_Name, Type_Package : out Unbounded_String;
-      Range_Constraint : out Unbounded_String) return Boolean
+      Range_Constraint : out Unbounded_String;
+      Need_Range : Boolean := False) return Boolean
    is
       Name : LAL.Name;
       Decl : LAL.Basic_Decl;
@@ -614,20 +615,22 @@ package body AdaMutant.Suggestions is
          return False;
       end if;
       Type_Decl := Decl.As_Base_Type_Decl;
-      Bounds := Type_Decl.P_Discrete_Range;
-      Low := LAL.Low_Bound (Bounds).As_Expr;
-      High := LAL.High_Bound (Bounds).As_Expr;
-      if Low.Is_Null or else High.Is_Null
-        or else not Low.P_Is_Static_Expr
-        or else not High.P_Is_Static_Expr
-      then
-         return False;
+      if Need_Range then
+         Bounds := Type_Decl.P_Discrete_Range;
+         Low := LAL.Low_Bound (Bounds).As_Expr;
+         High := LAL.High_Bound (Bounds).As_Expr;
+         if Low.Is_Null or else High.Is_Null
+           or else not Low.P_Is_Static_Expr
+           or else not High.P_Is_Static_Expr
+         then
+            return False;
+         end if;
+         Range_Constraint := To_Unbounded_String
+           ("range "
+            & Trimmed (GNATCOLL.GMP.Integers.Image (Low.P_Eval_As_Int))
+            & " .. "
+            & Trimmed (GNATCOLL.GMP.Integers.Image (High.P_Eval_As_Int)));
       end if;
-      Range_Constraint := To_Unbounded_String
-        ("range "
-         & Trimmed (GNATCOLL.GMP.Integers.Image (Low.P_Eval_As_Int))
-         & " .. "
-         & Trimmed (GNATCOLL.GMP.Integers.Image (High.P_Eval_As_Int)));
       if Type_Decl.F_Name.Is_Null
         or else Type_Decl.F_Name.F_Name.Is_Null
       then
@@ -960,7 +963,8 @@ package body AdaMutant.Suggestions is
                end if;
                if not Is_Integer_Type (Type_Expr)
                  or else not Integer_Type_Info
-                   (Type_Expr, Type_Name, Type_Package, Type_Range)
+                   (Type_Expr, Type_Name, Type_Package, Type_Range,
+                    Need_Range => not Require_Bindings)
                then
                   Reason := To_Unbounded_String
                     ("a formal parameter is not a supported integer scalar type");
