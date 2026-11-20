@@ -1286,7 +1286,15 @@ package body AdaMutant.Suggestions is
            ("the configured suggestion_project has no simple project declaration");
          return;
       end if;
-      if not Identify (Root, File_Path, Skip_Dirs, M, Info, Reason) then
+      Skip.Append (".adamutant/suggestion-work");
+      Skip.Append ("**/.adamutant/suggestion-work");
+      Skip.Append ("obj");
+      Skip.Append ("bin");
+      Skip.Append ("**/obj");
+      Skip.Append ("**/bin");
+      Skip.Append ("gnatprove");
+      Skip.Append ("**/gnatprove");
+      if not Identify (Root, File_Path, Skip, M, Info, Reason) then
          M.Suggestion.Status := Unsupported;
          M.Suggestion.Reason := Reason;
          return;
@@ -1312,12 +1320,6 @@ package body AdaMutant.Suggestions is
         (AdaMutant.Files.Join (To_String (Work), "original"));
       Work_Mutant := To_Unbounded_String
         (AdaMutant.Files.Join (To_String (Work), "mutant"));
-      Skip.Append ("obj");
-      Skip.Append ("bin");
-      Skip.Append ("**/obj");
-      Skip.Append ("**/bin");
-      Skip.Append ("gnatprove");
-      Skip.Append ("**/gnatprove");
       Clean_Work;
       Ada.Directories.Create_Path (To_String (Work));
       AdaMutant.Files.Copy_Tree (Root, To_String (Work_Original), Skip);
