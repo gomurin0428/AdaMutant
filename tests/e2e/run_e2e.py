@@ -2147,6 +2147,190 @@ def check_survivor_input_search():
                     f"mutant exception was treated as a witness: "
                     f"{product['inputSearch']}")
 
+        enum_packages = {
+            "Search_Enums": (
+                "   type Shade is (Red, Green, Blue, Yellow);\n"
+                "   for Shade use (Red => 1, Green => 4, Blue => 9, Yellow => 16);\n"
+                "   subtype Valid_Shade is Shade range Green .. Yellow\n"
+                "     with Dynamic_Predicate => Valid_Shade /= Blue;\n"
+                "   subtype Inherited_Valid_Shade is Valid_Shade;\n"
+                "   type Derived_Shade is new Shade;\n"
+                "   type Letter is ('A', 'B', 'C');\n"
+                "   type Private_Shade is private;\n"
+                "   function Boolean_Target (Flag : Boolean) return Integer;\n"
+                "   function Interior (X : Shade) return Integer;\n"
+                "   function Mixed (X : Integer; Y : Shade; Flag : Boolean)\n"
+                "     return Integer;\n"
+                "   function Invalid_Only (X : Valid_Shade) return Integer;\n"
+                "   function Valid_Target (X : Valid_Shade) return Integer;\n"
+                "   function Inherited_Target (X : Inherited_Valid_Shade)\n"
+                "     return Integer;\n"
+                "   function Preconditioned (X : Shade) return Integer\n"
+                "     with Pre => X = Green;\n"
+                "   function Derived_Target (X : Derived_Shade) return Integer;\n"
+                "   function Letter_Target (X : Letter) return Integer;\n"
+                "   function Private_Target (X : Private_Shade) return Integer;\n"
+                "   function Boolean_Result (X : Shade) return Boolean;\n"
+                "private\n"
+                "   type Private_Shade is (Hidden, Visible);\n",
+                "   function Boolean_Target (Flag : Boolean) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (Flag) * 101;\n"
+                "   end Boolean_Target;\n"
+                "   function Interior (X : Shade) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = Green) * 201;\n"
+                "   end Interior;\n"
+                "   function Mixed (X : Integer; Y : Shade; Flag : Boolean)\n"
+                "     return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos\n"
+                "        (X = 0 and then Y = Green and then Flag) * 301;\n"
+                "   end Mixed;\n"
+                "   function Invalid_Only (X : Valid_Shade) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = Blue) * 401;\n"
+                "   end Invalid_Only;\n"
+                "   function Valid_Target (X : Valid_Shade) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = Yellow) * 901;\n"
+                "   end Valid_Target;\n"
+                "   function Inherited_Target (X : Inherited_Valid_Shade)\n"
+                "     return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = Yellow) * 1001;\n"
+                "   end Inherited_Target;\n"
+                "   function Preconditioned (X : Shade) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = Blue) * 501;\n"
+                "   end Preconditioned;\n"
+                "   function Derived_Target (X : Derived_Shade) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos\n"
+                "        (X = Derived_Shade'Value (\"GREEN\")) * 601;\n"
+                "   end Derived_Target;\n"
+                "   function Letter_Target (X : Letter) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = 'B') * 701;\n"
+                "   end Letter_Target;\n"
+                "   function Private_Target (X : Private_Shade) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = Hidden) * 801;\n"
+                "   end Private_Target;\n"
+                "   function Boolean_Result (X : Shade) return Boolean is\n"
+                "   begin\n"
+                "      return X = Red and then False;\n"
+                "   end Boolean_Result;\n"),
+        }
+        enum_report, _ = run_case(
+            "enumerations", enum_packages, list(enum_packages),
+            ["NumericLiteral", "BooleanLiteral"])
+        if enum_report is not None:
+            boolean_witness = expect_search(
+                enum_report, "src/search_enums.adb", "102",
+                "Survived", "Found")
+            if boolean_witness is not None:
+                search = boolean_witness["inputSearch"]
+                if search.get("input") != "Search_Enums.Boolean_Target (TRUE)" \
+                        or search.get("originalOutput") != "101" \
+                        or search.get("mutantOutput") != "102" \
+                        or search.get("attempts") != 2:
+                    errors.append(f"Boolean witness was malformed: {search}")
+
+            interior = expect_search(
+                enum_report, "src/search_enums.adb", "202",
+                "Survived", "Found")
+            if interior is not None:
+                search = interior["inputSearch"]
+                if search.get("input") != (
+                        "Search_Enums.Interior "
+                        "(Search_Enums.Shade'Value (\"GREEN\"))") \
+                        or search.get("originalOutput") != "201" \
+                        or search.get("mutantOutput") != "202":
+                    errors.append(f"interior enum witness was malformed: {search}")
+
+            mixed = expect_search(
+                enum_report, "src/search_enums.adb", "302",
+                "Survived", "Found")
+            if mixed is not None:
+                search = mixed["inputSearch"]
+                if search.get("input") != (
+                        "Search_Enums.Mixed "
+                        "(0, Search_Enums.Shade'Value (\"GREEN\"), TRUE)") \
+                        or search.get("originalOutput") != "301" \
+                        or search.get("mutantOutput") != "302":
+                    errors.append(f"mixed witness was malformed: {search}")
+
+            for replacement in ("402", "502"):
+                rejected = expect_search(
+                    enum_report, "src/search_enums.adb", replacement,
+                    "Survived", "Inconclusive")
+                if rejected is not None:
+                    search = rejected["inputSearch"]
+                    reason = search.get("reason", "").lower()
+                    if search.get("input") \
+                            or search.get("attempts", 0) < 1 \
+                            or any(fragment in reason for fragment in
+                                   ("unsupported", "did not build",
+                                    "could not generate")):
+                        errors.append(
+                            "constrained/predicate or precondition enum search "
+                            f"did not execute valid candidates: {search}")
+
+            for replacement, function_name, subtype_name, original, mutant in (
+                    ("902", "Valid_Target", "Valid_Shade", "901", "902"),
+                    ("1002", "Inherited_Target", "Inherited_Valid_Shade",
+                     "1001", "1002")):
+                valid_witness = expect_search(
+                    enum_report, "src/search_enums.adb", replacement,
+                    "Survived", "Found")
+                if valid_witness is not None:
+                    search = valid_witness["inputSearch"]
+                    expected_call = (
+                        f"Search_Enums.{function_name} "
+                        f"(Search_Enums.{subtype_name}'Value (\"YELLOW\"))")
+                    if search.get("input") != expected_call \
+                            or search.get("originalOutput") != original \
+                            or search.get("mutantOutput") != mutant:
+                        errors.append(
+                            "valid constrained/inherited enum witness was "
+                            f"malformed: {search}")
+
+            private = expect_search(
+                enum_report, "src/search_enums.adb", "802",
+                "Survived", "Inconclusive")
+            if private is not None and private["inputSearch"].get("input"):
+                errors.append(
+                    f"private enum input produced a witness: "
+                    f"{private['inputSearch']}")
+
+            derived = expect_search(
+                enum_report, "src/search_enums.adb", "602",
+                "Survived", "Found")
+            if derived is not None and "Derived_Shade'Value (\"GREEN\")" \
+                    not in derived["inputSearch"].get("input", ""):
+                errors.append(
+                    f"derived enum input was not reconstructable: "
+                    f"{derived['inputSearch']}")
+
+            letter = expect_search(
+                enum_report, "src/search_enums.adb", "702",
+                "Survived", "Found")
+            if letter is not None and "Letter'Value (\"'B'\")" \
+                    not in letter["inputSearch"].get("input", ""):
+                errors.append(
+                    f"character enum input was not reconstructable: "
+                    f"{letter['inputSearch']}")
+
+            boolean_result = expect_search(
+                enum_report, "src/search_enums.adb", "True",
+                "Survived", "Inconclusive")
+            if boolean_result is not None \
+                    and boolean_result["inputSearch"].get("input"):
+                errors.append(
+                    "non-integer function result produced a search witness: "
+                    f"{boolean_result['inputSearch']}")
+
         build_failure_report, _ = run_case(
             "build_failure",
             {"Search_Build_Failure": numeric_packages["Search_Half"]},

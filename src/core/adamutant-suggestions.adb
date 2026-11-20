@@ -349,7 +349,7 @@ package body AdaMutant.Suggestions is
 
    function Search_Probe_Source
      (Procedure_Name, Package_Name, Function_Name, Result_Type : String;
-      Formal_Types, Type_Packages, Type_Constraints,
+      Formal_Types, Formal_Kinds, Type_Packages, Type_Constraints,
         Formal_Type_Ranges : String_Vectors.Vector)
       return String
    is
@@ -380,25 +380,48 @@ package body AdaMutant.Suggestions is
       Append (Result, "procedure " & Procedure_Name & " is" & LF);
       for I in 1 .. Natural (Formal_Types.Length) loop
          declare
+            Kind : constant String := Formal_Kinds (I);
+            Constraint : constant String := Type_Constraints (I);
+            Package_Name : constant String := Type_Packages (I);
+         begin
+            if Kind = "Enumeration"
+              and then Constraint'Length > 0
+              and then Package_Name'Length > 0
+            then
+               Append (Result, "   use " & Package_Name & ";" & LF);
+            end if;
+         end;
+      end loop;
+      for I in 1 .. Natural (Formal_Types.Length) loop
+         declare
             Suffix : constant String := Search_Id_Text (I);
             Formal_Type : constant String := Formal_Types (I);
+            Formal_Kind : constant String := Formal_Kinds (I);
             Constraint  : constant String := Type_Constraints (I);
             Range_Constraint : constant String := Formal_Type_Ranges (I);
+            Capacity : constant String :=
+              (if Formal_Kind = "Enumeration" then "256" else "11");
          begin
             Append (Result, "   subtype Search_Argument_" & Suffix & " is "
                     & Formal_Type
                     & (if Constraint'Length = 0 then ""
                        else " " & Constraint) & ";" & LF
-                    & "   use type Search_Argument_" & Suffix & ";" & LF
-                    & "   subtype Search_Declared_Bounds_" & Suffix & " is "
-                    & "Search_Argument_" & Suffix & "'Base "
-                    & Range_Constraint & ";" & LF
-                    & "   subtype Search_Bounds_" & Suffix & " is "
-                    & "Search_Declared_Bounds_" & Suffix
-                    & (if Constraint'Length = 0 then ""
-                       else " " & Constraint) & ";" & LF
-                    & "   type Search_Values_" & Suffix
-                    & " is array (Positive range 1 .. 11) of Search_Argument_"
+                    & "   use type Search_Argument_" & Suffix & ";" & LF);
+            if Formal_Kind = "Integer" then
+               Append (Result, "   subtype Search_Declared_Bounds_" & Suffix
+                       & " is Search_Argument_" & Suffix & "'Base "
+                       & Range_Constraint & ";" & LF
+                       & "   subtype Search_Bounds_" & Suffix
+                       & " is Search_Declared_Bounds_" & Suffix
+                       & (if Constraint'Length = 0 then ""
+                          else " " & Constraint) & ";" & LF);
+            else
+               Append (Result, "   subtype Search_Enum_Base_" & Suffix
+                       & " is Search_Argument_" & Suffix & "'Base;" & LF);
+            end if;
+            Append (Result, "   type Search_Values_" & Suffix
+                    & " is array (Positive range 1 .. " & Capacity
+                    & ") of Search_Argument_"
                     & Suffix & ";" & LF
                     & "   procedure List_" & Suffix & " is" & LF
                     & "      Values : Search_Values_" & Suffix & ";" & LF
@@ -421,56 +444,67 @@ package body AdaMutant.Suggestions is
                     & "      exception" & LF
                     & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
                     & LF
-                    & "      end Add_Text;" & LF
-                    & "      procedure Add_First is" & LF
-                    & "      begin" & LF
-                    & "         Add (Search_Bounds_" & Suffix & "'First);" & LF
-                    & "      exception" & LF
-                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
-                    & LF
-                    & "      end Add_First;" & LF
-                    & "      procedure Add_Last is" & LF
-                    & "      begin" & LF
-                    & "         Add (Search_Bounds_" & Suffix & "'Last);" & LF
-                    & "      exception" & LF
-                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
-                    & LF
-                    & "      end Add_Last;" & LF
-                    & "      procedure Add_Succ_First is" & LF
-                    & "      begin" & LF
-                    & "         if Search_Bounds_" & Suffix & "'First < Search_Bounds_"
-                    & Suffix & "'Last then" & LF
-                    & "            Add (Search_Bounds_" & Suffix
-                    & "'Succ (Search_Bounds_" & Suffix & "'First));" & LF
-                    & "         end if;" & LF
-                    & "      exception" & LF
-                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
-                    & LF
-                    & "      end Add_Succ_First;" & LF
-                    & "      procedure Add_Pred_Last is" & LF
-                    & "      begin" & LF
-                    & "         if Search_Bounds_" & Suffix & "'First < Search_Bounds_"
-                    & Suffix & "'Last then" & LF
-                    & "            Add (Search_Bounds_" & Suffix
-                    & "'Pred (Search_Bounds_" & Suffix & "'Last));" & LF
-                    & "         end if;" & LF
-                    & "      exception" & LF
-                    & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
-                    & LF
-                    & "      end Add_Pred_Last;" & LF
-                    & "   begin" & LF);
-            for Value_Index in 1 .. 7 loop
-               declare
-                  Value : constant String := Small_Integer (Value_Index);
-               begin
-                  Append (Result, "      Add_Text (""" & Value & """);" & LF);
-               end;
-            end loop;
-            Append (Result, "      Add_First;" & LF
-                    & "      Add_Last;" & LF
-                    & "      Add_Succ_First;" & LF
-                    & "      Add_Pred_Last;" & LF
-                    & "      for K in 1 .. Count loop" & LF
+                    & "      end Add_Text;" & LF);
+            if Formal_Kind = "Integer" then
+               Append (Result, "      procedure Add_First is" & LF
+                       & "      begin" & LF
+                       & "         Add (Search_Bounds_" & Suffix & "'First);" & LF
+                       & "      exception" & LF
+                       & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                       & LF
+                       & "      end Add_First;" & LF
+                       & "      procedure Add_Last is" & LF
+                       & "      begin" & LF
+                       & "         Add (Search_Bounds_" & Suffix & "'Last);" & LF
+                       & "      exception" & LF
+                       & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                       & LF
+                       & "      end Add_Last;" & LF
+                       & "      procedure Add_Succ_First is" & LF
+                       & "      begin" & LF
+                       & "         if Search_Bounds_" & Suffix
+                       & "'First < Search_Bounds_" & Suffix & "'Last then" & LF
+                       & "            Add (Search_Bounds_" & Suffix
+                       & "'Succ (Search_Bounds_" & Suffix & "'First));" & LF
+                       & "         end if;" & LF
+                       & "      exception" & LF
+                       & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                       & LF
+                       & "      end Add_Succ_First;" & LF
+                       & "      procedure Add_Pred_Last is" & LF
+                       & "      begin" & LF
+                       & "         if Search_Bounds_" & Suffix
+                       & "'First < Search_Bounds_" & Suffix & "'Last then" & LF
+                       & "            Add (Search_Bounds_" & Suffix
+                       & "'Pred (Search_Bounds_" & Suffix & "'Last));" & LF
+                       & "         end if;" & LF
+                       & "      exception" & LF
+                       & "         when Constraint_Error | Ada.Assertions.Assertion_Error => null;"
+                       & LF
+                       & "      end Add_Pred_Last;" & LF);
+            end if;
+            Append (Result, "   begin" & LF);
+            if Formal_Kind = "Integer" then
+               for Value_Index in 1 .. 7 loop
+                  declare
+                     Value : constant String := Small_Integer (Value_Index);
+                  begin
+                     Append (Result, "      Add_Text (""" & Value & """);" & LF);
+                  end;
+               end loop;
+               Append (Result, "      Add_First;" & LF
+                       & "      Add_Last;" & LF
+                       & "      Add_Succ_First;" & LF
+                       & "      Add_Pred_Last;" & LF);
+            else
+               Append (Result, "      for Base_Value in Search_Enum_Base_"
+                       & Suffix & " loop" & LF
+                       & "         Add_Text (Search_Enum_Base_" & Suffix
+                       & "'Image (Base_Value));" & LF
+                       & "         exit when Count = 256;" & LF
+                       & "      end loop;" & LF);
+            end if;
+            Append (Result, "      for K in 1 .. Count loop" & LF
                     & "         Ada.Text_IO.Put_Line" & LF
                     & "           (""ADAMUTANT_SEARCH_VALUE:""" & LF
                     & "            & Search_Argument_" & Suffix
@@ -669,6 +703,119 @@ package body AdaMutant.Suggestions is
          return False;
    end Integer_Type_Info;
 
+   function Enumeration_Type_Info
+     (Type_Expr : LAL.Type_Expr;
+      Type_Name, Type_Package : out Unbounded_String) return Boolean
+   is
+      Name : LAL.Name;
+      Decl : LAL.Basic_Decl;
+      Type_Decl : LAL.Base_Type_Decl;
+      Current : LAL.Ada_Node;
+      Package_Path : Unbounded_String;
+      Simple_Name : Unbounded_String;
+
+      function Has_Private_View
+        (Candidate : LAL.Base_Type_Decl) return Boolean
+      is
+         Base : LAL.Base_Type_Decl;
+      begin
+         if Candidate.Is_Null then
+            return True;
+         elsif Candidate.Kind = LC.Ada_Subtype_Decl then
+            Base := Candidate.P_Base_Subtype;
+            return Has_Private_View (Base);
+         elsif Candidate.Kind in LC.Ada_Type_Decl then
+            declare
+               Definition : constant LAL.Type_Def :=
+                 Candidate.As_Type_Decl.F_Type_Def;
+            begin
+               if Definition.Kind = LC.Ada_Private_Type_Def then
+                  return True;
+               elsif Definition.Kind = LC.Ada_Derived_Type_Def then
+                  Base := Candidate.P_Base_Type;
+                  return Has_Private_View (Base);
+               end if;
+            end;
+         end if;
+         return False;
+      end Has_Private_View;
+
+      function Is_Public_Declaration return Boolean is
+      begin
+         Current := Type_Decl.Parent;
+         while not Current.Is_Null loop
+            if Current.Kind = LC.Ada_Private_Part then
+               return False;
+            elsif Current.Kind = LC.Ada_Public_Part then
+               return True;
+            end if;
+            Current := Current.Parent;
+         end loop;
+         return False;
+      end Is_Public_Declaration;
+   begin
+      Type_Name := Null_Unbounded_String;
+      Type_Package := Null_Unbounded_String;
+      if Type_Expr.Is_Null
+        or else Type_Expr.Kind not in LC.Ada_Subtype_Indication
+                                      | LC.Ada_Constrained_Subtype_Indication
+      then
+         return False;
+      end if;
+      Name := Type_Expr.As_Subtype_Indication.F_Name;
+      if Name.Kind not in LC.Ada_Identifier | LC.Ada_Dotted_Name then
+         return False;
+      end if;
+      Decl := Name.P_Referenced_Decl;
+      if Decl.Is_Null
+        or else Decl.Kind not in LC.Ada_Type_Decl | LC.Ada_Subtype_Decl
+      then
+         return False;
+      end if;
+      Type_Decl := Decl.As_Base_Type_Decl;
+      if not Type_Decl.P_Is_Enum_Type (Origin => Name)
+        or else Has_Private_View (Type_Decl)
+        or else Type_Decl.F_Name.Is_Null
+        or else Type_Decl.F_Name.F_Name.Is_Null
+      then
+         return False;
+      end if;
+      Simple_Name := To_Unbounded_String (Text_Of (Type_Decl.F_Name.F_Name));
+      Current := Type_Decl.Parent;
+      while not Current.Is_Null loop
+         if Current.Kind = LC.Ada_Package_Decl then
+            declare
+               Name_Text : constant String :=
+                 Text_Of (Current.As_Package_Decl.F_Package_Name.F_Name);
+            begin
+               if Length (Package_Path) = 0 then
+                  Package_Path := To_Unbounded_String (Name_Text);
+               elsif Ada.Strings.Fixed.Index (Name_Text, ".") = 0 then
+                  Package_Path := To_Unbounded_String
+                    (Name_Text & "." & To_String (Package_Path));
+               end if;
+            end;
+         end if;
+         Current := Current.Parent;
+      end loop;
+      if Length (Package_Path) = 0 then
+         return False;
+      elsif To_Lower (To_String (Package_Path)) = "standard" then
+         Type_Name := Simple_Name;
+      else
+         if Has_Private_View (Type_Decl) or else not Is_Public_Declaration then
+            return False;
+         end if;
+         Type_Package := Package_Path;
+         Type_Name := To_Unbounded_String
+           (To_String (Package_Path) & "." & To_String (Simple_Name));
+      end if;
+      return True;
+   exception
+      when others =>
+         return False;
+   end Enumeration_Type_Info;
+
    type Function_Info is record
       Package_Name        : Unbounded_String;
       Function_Name       : Unbounded_String;
@@ -679,6 +826,7 @@ package body AdaMutant.Suggestions is
       Formal_Type_Packages : String_Vectors.Vector;
       Formal_Type_Constraints : String_Vectors.Vector;
       Formal_Type_Ranges : String_Vectors.Vector;
+      Formal_Type_Kinds : String_Vectors.Vector;
       Actuals             : String_Vectors.Vector;
    end record;
 
@@ -953,21 +1101,37 @@ package body AdaMutant.Suggestions is
                Type_Package : Unbounded_String;
                Type_Constraint : Unbounded_String;
                Type_Range : Unbounded_String;
+               Type_Kind : Unbounded_String;
             begin
                if not Mode.Is_Null
                  and then Mode.Kind not in LC.Ada_Mode_Default | LC.Ada_Mode_In
                then
                   Reason := To_Unbounded_String
-                    ("only in-mode integer parameters are supported");
+                    (if Require_Bindings
+                     then "only in-mode integer parameters are supported"
+                     else "only in-mode integer or enumeration parameters are supported");
                   return False;
                end if;
-               if not Is_Integer_Type (Type_Expr)
-                 or else not Integer_Type_Info
-                   (Type_Expr, Type_Name, Type_Package, Type_Range,
-                    Need_Range => not Require_Bindings)
+               if Is_Integer_Type (Type_Expr) then
+                  if not Integer_Type_Info
+                    (Type_Expr, Type_Name, Type_Package, Type_Range,
+                     Need_Range => not Require_Bindings)
+                  then
+                     Reason := To_Unbounded_String
+                       ("a formal parameter is not a supported integer scalar type");
+                     return False;
+                  end if;
+                  Type_Kind := To_Unbounded_String ("Integer");
+               elsif not Require_Bindings
+                 and then Enumeration_Type_Info
+                   (Type_Expr, Type_Name, Type_Package)
                then
+                  Type_Kind := To_Unbounded_String ("Enumeration");
+               else
                   Reason := To_Unbounded_String
-                    ("a formal parameter is not a supported integer scalar type");
+                    (if Require_Bindings
+                     then "a formal parameter is not a supported integer scalar type"
+                     else "a formal parameter is not a supported integer or enumeration scalar type");
                   return False;
                end if;
                if Type_Expr.Kind in LC.Ada_Subtype_Indication
@@ -1002,6 +1166,7 @@ package body AdaMutant.Suggestions is
                        (To_String (Type_Constraint));
                      Info.Formal_Type_Ranges.Append
                        (To_String (Type_Range));
+                     Info.Formal_Type_Kinds.Append (To_String (Type_Kind));
                   end loop;
                end;
             end;
@@ -1397,6 +1562,114 @@ package body AdaMutant.Suggestions is
          end;
       end Is_Static_Range;
 
+      function Is_Enum_Image (Value : String) return Boolean is
+         function Is_Identifier return Boolean is
+            Previous_Underscore : Boolean := False;
+            C : Character;
+         begin
+            if Value'Length = 0 then
+               return False;
+            end if;
+            C := Value (Value'First);
+            if C not in 'A' .. 'Z' | 'a' .. 'z'
+              and then Character'Pos (C) < 128
+            then
+               return False;
+            end if;
+            for I in Value'First + 1 .. Value'Last loop
+               C := Value (I);
+               if C = '_' then
+                  if Previous_Underscore or else I = Value'Last then
+                     return False;
+                  end if;
+                  Previous_Underscore := True;
+               elsif C in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9'
+                 or else Character'Pos (C) >= 128
+               then
+                  Previous_Underscore := False;
+               else
+                  return False;
+               end if;
+            end loop;
+            return not Previous_Underscore;
+         end Is_Identifier;
+
+         function Is_Character_Literal return Boolean is
+         begin
+            if Value'Length < 3
+              or else Value (Value'First) /= Character'Val (39)
+              or else Value (Value'Last) /= Character'Val (39)
+            then
+               return False;
+            end if;
+            declare
+               First : constant Natural := Value'First + 1;
+               Last : constant Natural := Value'Last - 1;
+               Codepoints : Natural := 0;
+               I : Natural := First;
+            begin
+               while I <= Last loop
+                  declare
+                     Byte : constant Natural := Character'Pos (Value (I));
+                     Width : Natural := 1;
+                  begin
+                     if Byte < 32 or else Byte = 127 then
+                        return False;
+                     elsif Byte in 16#C2# .. 16#DF# then
+                        Width := 2;
+                     elsif Byte in 16#E0# .. 16#EF# then
+                        Width := 3;
+                     elsif Byte in 16#F0# .. 16#F4# then
+                        Width := 4;
+                     elsif Byte >= 16#80# then
+                        return False;
+                     end if;
+                     if I + Width - 1 > Last then
+                        return False;
+                     end if;
+                     for J in I + 1 .. I + Width - 1 loop
+                        if Character'Pos (Value (J)) not in 16#80# .. 16#BF# then
+                           return False;
+                        end if;
+                     end loop;
+                     Codepoints := Codepoints + 1;
+                     I := I + Width;
+                  end;
+               end loop;
+               return Codepoints = 1;
+            end;
+         end Is_Character_Literal;
+      begin
+         return Is_Identifier or else Is_Character_Literal;
+      end Is_Enum_Image;
+
+      function Is_Formal_Candidate
+        (Value, Kind, Type_Name : String) return Boolean
+      is
+      begin
+         if Kind = "Integer" then
+            return Is_Integer_Literal (Value);
+         elsif To_Lower (Type_Name) in "boolean" | "standard.boolean" then
+            return To_Lower (Value) in "false" | "true";
+         else
+            return Is_Enum_Image (Value);
+         end if;
+      end Is_Formal_Candidate;
+
+      function Ada_String_Literal (Value : String) return String is
+         Result : Unbounded_String;
+      begin
+         Append (Result, """");
+         for C of Value loop
+            Append (Result, C);
+            if C = '"' then
+               Append (Result, C);
+            end if;
+         end loop;
+         Append (Result, """");
+         return To_String (Result);
+      end Ada_String_Literal;
+
       function Bounded_Timeout (Configured : Duration) return Duration is
          Left : constant Duration := Remaining;
       begin
@@ -1479,7 +1752,8 @@ package body AdaMutant.Suggestions is
       end Marked_Result;
 
       procedure Read_Candidate_Values
-        (Path : String; Values : out String_Vectors.Vector;
+        (Path, Kind, Type_Name : String;
+         Values : out String_Vectors.Vector;
          Valid : out Boolean)
       is
          Text : constant String := AdaMutant.Files.Read (Path);
@@ -1512,13 +1786,22 @@ package body AdaMutant.Suggestions is
                           (if Line_Text_Value'Length = Marker'Length then ""
                            else Line_Text_Value
                              (Marker'Length + 1 .. Line_Text_Value'Last));
+                        Candidate : constant String :=
+                          (if To_Lower (Type_Name) in
+                                "boolean" | "standard.boolean"
+                           then To_Upper (Value)
+                           else Value);
                      begin
-                        if not Is_Integer_Literal (Value) then
+                        if not Is_Formal_Candidate
+                          (Candidate, Kind, Type_Name)
+                        then
                            Valid := False;
                            return;
                         end if;
-                        if not (for some Existing of Values => Existing = Value) then
-                           Values.Append (Value);
+                        if not (for some Existing of Values =>
+                                  Existing = Candidate)
+                        then
+                           Values.Append (Candidate);
                         end if;
                      end;
                   end if;
@@ -1596,23 +1879,23 @@ package body AdaMutant.Suggestions is
          return;
       end if;
       if Info.Formals.Is_Empty then
-         Inconclusive ("functions without integer inputs are unsupported");
+         Inconclusive ("functions without supported scalar inputs are unsupported");
          return;
       elsif Natural (Info.Formals.Length) > 16 then
-         Inconclusive ("functions with more than 16 integer inputs are unsupported");
+         Inconclusive ("functions with more than 16 supported scalar inputs are unsupported");
          return;
       end if;
-      for Constraint of Info.Formal_Type_Constraints loop
-         if not Is_Static_Range (Constraint) then
-            Inconclusive ("a formal parameter has an unsupported non-static range constraint");
-            return;
-         end if;
-      end loop;
-      for Formal_Range of Info.Formal_Type_Ranges loop
-         if Formal_Range = "" then
-            Inconclusive
-              ("a formal parameter has an unsupported non-static declared range");
-            return;
+      for I in 1 .. Natural (Info.Formal_Type_Kinds.Length) loop
+         if Info.Formal_Type_Kinds (I) = "Integer" then
+            if not Is_Static_Range (Info.Formal_Type_Constraints (I)) then
+               Inconclusive
+                 ("a formal parameter has an unsupported non-static range constraint");
+               return;
+            elsif Info.Formal_Type_Ranges (I) = "" then
+               Inconclusive
+                 ("a formal parameter has an unsupported non-static declared range");
+               return;
+            end if;
          end if;
       end loop;
       if Remaining < 0.001 then
@@ -1660,6 +1943,7 @@ package body AdaMutant.Suggestions is
             To_String (Info.Function_Name),
             To_String (Info.Result_Type_Name),
             Info.Formal_Type_Names,
+            Info.Formal_Type_Kinds,
             Type_Packages,
             Info.Formal_Type_Constraints,
             Info.Formal_Type_Ranges));
@@ -1819,7 +2103,17 @@ package body AdaMutant.Suggestions is
                      Append (Input, ", ");
                   end if;
                   Append (Arguments, Shell_Quote (Value));
-                  Append (Input, Value);
+                  if Info.Formal_Type_Kinds (I) = "Enumeration"
+                    and then To_Lower (Info.Formal_Type_Names (I)) not in
+                      "boolean" | "standard.boolean"
+                  then
+                     Append
+                       (Input,
+                        Info.Formal_Type_Names (I) & "'Value ("
+                        & Ada_String_Literal (Value) & ")");
+                  else
+                     Append (Input, Value);
+                  end if;
                end;
             end loop;
             Original_Run := Run_Child
@@ -1926,9 +2220,11 @@ package body AdaMutant.Suggestions is
                      else "the original input probe could not generate candidate values");
                   exit;
                end if;
-               Read_Candidate_Values (Values_Log, Pools (I), Valid);
+               Read_Candidate_Values
+                 (Values_Log, Info.Formal_Type_Kinds (I),
+                  Info.Formal_Type_Names (I), Pools (I), Valid);
                if not Valid then
-                  Inconclusive ("the input probe produced no valid integer candidates");
+                  Inconclusive ("the input probe produced no valid typed candidates");
                   exit;
                end if;
             end;
