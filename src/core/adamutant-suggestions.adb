@@ -371,6 +371,10 @@ package body AdaMutant.Suggestions is
       for Name of Type_Packages loop
          Add_With (Name);
       end loop;
+      if (for some Kind of Formal_Kinds => Kind = "Enumeration") then
+         Add_With ("Ada.Strings.UTF_Encoding.Wide_Wide_Strings");
+         Add_With ("Ada.Wide_Wide_Text_IO");
+      end if;
       Append (Result, "with Ada.Assertions;" & LF
               & "with Ada.Command_Line;" & LF
               & "with Ada.Text_IO;" & LF);
@@ -504,13 +508,23 @@ package body AdaMutant.Suggestions is
                        & "         exit when Count = 256;" & LF
                        & "      end loop;" & LF);
             end if;
-            Append (Result, "      for K in 1 .. Count loop" & LF
-                    & "         Ada.Text_IO.Put_Line" & LF
-                    & "           (""ADAMUTANT_SEARCH_VALUE:""" & LF
-                    & "            & Search_Argument_" & Suffix
-                    & "'Image (Values (K)));" & LF
-                    & "      end loop;" & LF
-                    & "   end List_" & Suffix & ";" & LF);
+            if Formal_Kind = "Enumeration" then
+               Append (Result, "      for K in 1 .. Count loop" & LF
+                       & "         Ada.Wide_Wide_Text_IO.Put_Line" & LF
+                       & "           (""ADAMUTANT_SEARCH_VALUE:""" & LF
+                       & "            & Search_Argument_" & Suffix
+                       & "'Wide_Wide_Image (Values (K)));" & LF
+                       & "      end loop;" & LF
+                       & "   end List_" & Suffix & ";" & LF);
+            else
+               Append (Result, "      for K in 1 .. Count loop" & LF
+                       & "         Ada.Text_IO.Put_Line" & LF
+                       & "           (""ADAMUTANT_SEARCH_VALUE:""" & LF
+                       & "            & Search_Argument_" & Suffix
+                       & "'Image (Values (K)));" & LF
+                       & "      end loop;" & LF
+                       & "   end List_" & Suffix & ";" & LF);
+            end if;
          end;
       end loop;
       Append (Result, "begin" & LF
@@ -538,10 +552,21 @@ package body AdaMutant.Suggestions is
               & "     (""ADAMUTANT_SEARCH_RESULT:"" & " & Result_Type
               & "'Image (" & Package_Name & "." & Function_Name & " (" & LF);
       for I in 1 .. Natural (Formal_Types.Length) loop
-         Append (Result, "        Search_Argument_" & Search_Id_Text (I)
-                 & "'Value (Ada.Command_Line.Argument (" & Search_Id_Text (I) & "))"
+         declare
+            Suffix : constant String := Search_Id_Text (I);
+            Argument_Expression : constant String :=
+              (if Formal_Kinds (I) = "Enumeration" then
+                 "Search_Argument_" & Suffix & "'Wide_Wide_Value "
+                 & "(Ada.Strings.UTF_Encoding.Wide_Wide_Strings.Decode "
+                 & "(Ada.Command_Line.Argument (" & Suffix & ")))"
+               else
+                 "Search_Argument_" & Suffix
+                 & "'Value (Ada.Command_Line.Argument (" & Suffix & "))");
+         begin
+            Append (Result, "        " & Argument_Expression
                  & (if I = Natural (Formal_Types.Length) then ")));" & LF
-                    else "," & LF));
+                       else "," & LF));
+         end;
       end loop;
       Append (Result, "end " & Procedure_Name & ";" & LF);
       return To_String (Result);

@@ -1682,7 +1682,8 @@ def check_survivor_input_search():
     with tempfile.TemporaryDirectory() as tmp:
         temp_root = Path(tmp)
 
-        def write_project(work, packages, source_dirs=("src", "tests")):
+        def write_project(work, packages, source_dirs=("src", "tests"),
+                          extra_ada_switches=()):
             (work / "src").mkdir(parents=True)
             (work / "tests").mkdir()
             for directory in source_dirs:
@@ -1701,6 +1702,9 @@ def check_survivor_input_search():
                 project_dirs = (
                     ("src", "tests") if filename == "tests.gpr" else source_dirs)
                 dirs = ", ".join(f'"{item}"' for item in project_dirs)
+                switches = ", ".join(
+                    f'"{item}"' for item in
+                    ("-gnat2022", "-gnata", *extra_ada_switches))
                 (work / filename).write_text(
                     f"project {project} is\n"
                     f"   for Source_Dirs use ({dirs});\n"
@@ -1708,16 +1712,17 @@ def check_survivor_input_search():
                     "   for Exec_Dir use \"bin\";\n"
                     "   for Main use (\"test_search.adb\");\n"
                     "   package Compiler is\n"
-                    "      for Default_Switches (\"Ada\") use "
-                    "(\"-gnat2022\", \"-gnata\");\n"
+                    "      for Default_Switches (\"Ada\") use ("
+                    f"{switches});\n"
                     "   end Compiler;\n"
                     f"end {project};\n")
         def run_case(name, packages, mutate_packages, mutators,
                      test_source=None, search_dirs=("src", "tests"),
-                     budget=None, timeout_ms=250, slow_search_build=False):
+                     budget=None, timeout_ms=250, slow_search_build=False,
+                     extra_ada_switches=()):
             work = temp_root / name
             work.mkdir()
-            write_project(work, packages, search_dirs)
+            write_project(work, packages, search_dirs, extra_ada_switches)
             if test_source is not None:
                 (work / "tests" / "test_search.adb").write_text(test_source)
             mutation_files = [
@@ -2155,7 +2160,7 @@ def check_survivor_input_search():
                 "     with Dynamic_Predicate => Valid_Shade /= Blue;\n"
                 "   subtype Inherited_Valid_Shade is Valid_Shade;\n"
                 "   type Derived_Shade is new Shade;\n"
-                "   type Letter is ('A', 'B', 'C');\n"
+                "   type Letter is ('A', 'B', 'é');\n"
                 "   type Private_Shade is private;\n"
                 "   function Boolean_Target (Flag : Boolean) return Integer;\n"
                 "   function Interior (X : Shade) return Integer;\n"
@@ -2169,6 +2174,7 @@ def check_survivor_input_search():
                 "     with Pre => X = Green;\n"
                 "   function Derived_Target (X : Derived_Shade) return Integer;\n"
                 "   function Letter_Target (X : Letter) return Integer;\n"
+                "   function Non_Ascii_Target (X : Letter) return Integer;\n"
                 "   function Private_Target (X : Private_Shade) return Integer;\n"
                 "   function Boolean_Result (X : Shade) return Boolean;\n"
                 "private\n"
@@ -2213,6 +2219,10 @@ def check_survivor_input_search():
                 "   begin\n"
                 "      return Boolean'Pos (X = 'B') * 701;\n"
                 "   end Letter_Target;\n"
+                "   function Non_Ascii_Target (X : Letter) return Integer is\n"
+                "   begin\n"
+                "      return Boolean'Pos (X = 'é') * 711;\n"
+                "   end Non_Ascii_Target;\n"
                 "   function Private_Target (X : Private_Shade) return Integer is\n"
                 "   begin\n"
                 "      return Boolean'Pos (X = Hidden) * 801;\n"
@@ -2224,7 +2234,8 @@ def check_survivor_input_search():
         }
         enum_report, _ = run_case(
             "enumerations", enum_packages, list(enum_packages),
-            ["NumericLiteral", "BooleanLiteral"])
+            ["NumericLiteral", "BooleanLiteral"],
+            extra_ada_switches=("-gnatW8",))
         if enum_report is not None:
             boolean_witness = expect_search(
                 enum_report, "src/search_enums.adb", "102",
@@ -2321,6 +2332,20 @@ def check_survivor_input_search():
                 errors.append(
                     f"character enum input was not reconstructable: "
                     f"{letter['inputSearch']}")
+
+            non_ascii = expect_search(
+                enum_report, "src/search_enums.adb", "712",
+                "Survived", "Found")
+            if non_ascii is not None:
+                search = non_ascii["inputSearch"]
+                if search.get("input") != (
+                        "Search_Enums.Non_Ascii_Target "
+                        "(Search_Enums.Letter'Value (\"'é'\"))") \
+                        or search.get("originalOutput") != "711" \
+                        or search.get("mutantOutput") != "712":
+                    errors.append(
+                        "non-ASCII character enum witness was malformed: "
+                        f"{search}")
 
             boolean_result = expect_search(
                 enum_report, "src/search_enums.adb", "True",
