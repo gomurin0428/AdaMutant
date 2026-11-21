@@ -7,6 +7,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 with AdaMutant.Changes;
+with AdaMutant.Finite_Domain_Equivalence;
 with AdaMutant.Lexer;
 with AdaMutant.Mutators; use AdaMutant.Mutators;
 with AdaMutant.Positions;
@@ -44,6 +45,8 @@ package body AdaMutant.Runner is
    use AdaMutant.Config;
    use AdaMutant.Files;
    use AdaMutant.Results;
+
+   function Image (N : Natural) return String;
 
    function Discover
      (Settings : Configuration; Only : String_Vectors.Vector;
@@ -182,7 +185,21 @@ package body AdaMutant.Runner is
                        Since /= ""
                        and then not AdaMutant.Changes.Touches
                          (Changes, Path, Start_Pos.Line, End_Pos.Line);
+                     Equivalent : Boolean := False;
+                     Combinations : Natural := 0;
                   begin
+                     if not Unchanged and then not M.Contract
+                       and then M.Kind in Logical_Operator | Equality_Operator
+                         | Unary_Operator | Boolean_Literal
+                     then
+                        Equivalent :=
+                          AdaMutant.Finite_Domain_Equivalence.Proves_Equivalent
+                            (Source        => Source,
+                             File_Name     => Join (Root, Path),
+                             Mutation      => M,
+                             Project_Files => Project_Files,
+                             Combinations  => Combinations);
+                     end if;
                      R.Mutants.Append
                        (Mutant'
                           (Id            => Next,
@@ -192,12 +209,17 @@ package body AdaMutant.Runner is
                            End_Pos       => End_Pos,
                            Original      => To_Unbounded_String
                              (Source (M.First .. M.Last)),
-                           Status        => (if Unchanged
-                                             then Ignored else Pending),
+                           Status        =>
+                             (if Unchanged or else Equivalent
+                              then Ignored else Pending),
                            Status_Reason =>
                              (if Unchanged then
                                 To_Unbounded_String
                                   ("unchanged since " & Since)
+                              elsif Equivalent then
+                                To_Unbounded_String
+                                  ("equivalent mutant: exhaustive Boolean domain ("
+                                   & Image (Combinations) & " combinations)")
                               else Null_Unbounded_String),
                            Killed_By     => None,
                            Failed_Checks => String_Vectors.Empty_Vector,
@@ -210,7 +232,7 @@ package body AdaMutant.Runner is
                            Covered_By    => String_Vectors.Empty_Vector,
                            Killers       => String_Vectors.Empty_Vector,
                            Tests_Run     => 0,
-                           Equivalent    => False,
+                           Equivalent    => Equivalent,
                            Unchanged     => Unchanged,
                            Reused        => False,
                            Elapsed       => 0.0));

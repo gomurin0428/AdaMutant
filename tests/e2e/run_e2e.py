@@ -2497,6 +2497,86 @@ def check_survivor_input_search():
     return errors
 
 
+def check_finite_domain_equivalence():
+    errors = []
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        (work / "src").mkdir()
+        (work / "tests").mkdir()
+        (work / "src" / "logic.ads").write_text(
+            "package Logic is\n"
+            "   function Identity (A, B : Boolean) return Boolean;\n"
+            "end Logic;\n")
+        (work / "src" / "logic.adb").write_text(
+            "package body Logic is\n"
+            "   function Identity (A, B : Boolean) return Boolean is\n"
+            "     (A and then (B or else not B));\n"
+            "end Logic;\n")
+        (work / "tests" / "test_logic.adb").write_text(
+            "with Ada.Command_Line;\n"
+            "with Logic;\n"
+            "procedure Test_Logic is\n"
+            "begin\n"
+            "   for A in Boolean loop\n"
+            "      for B in Boolean loop\n"
+            "         if Logic.Identity (A, B) /= A then\n"
+            "            Ada.Command_Line.Set_Exit_Status\n"
+            "              (Ada.Command_Line.Failure);\n"
+            "         end if;\n"
+            "      end loop;\n"
+            "   end loop;\n"
+            "end Test_Logic;\n")
+        (work / "tests.gpr").write_text(
+            "project Tests is\n"
+            "   for Source_Dirs use (\"src\", \"tests\");\n"
+            "   for Object_Dir use \"obj\";\n"
+            "   for Exec_Dir use \"bin\";\n"
+            "   for Main use (\"test_logic.adb\");\n"
+            "   package Compiler is\n"
+            "      for Default_Switches (\"Ada\") use (\"-gnat2022\");\n"
+            "   end Compiler;\n"
+            "end Tests;\n")
+        python = (f'"{sys.executable}"' if " " in sys.executable
+                  else sys.executable).replace("\\", "/")
+        (work / "adamutant.toml").write_text(
+            'mutate = ["src/logic.adb"]\n'
+            'build = "gprbuild -p -q -P tests.gpr"\n'
+            "test = '\"bin/test_logic\"'\n"
+            f"prove = '{python} -c \"pass\"'\n"
+            'coverage_analysis = false\n'
+            'mutators = ["LogicalOperator"]\n'
+            'reporters = ["console", "json"]\n')
+        proc = subprocess.run(
+            [str(EXE), "run"], cwd=work, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if proc.returncode != 0:
+            errors.append(f"exit status {proc.returncode}, expected 0\n{proc.stdout}")
+        if "equivalence_build" in (work / "adamutant.toml").read_text():
+            errors.append("fixture unexpectedly configures equivalence_build")
+        report_path = work / ".adamutant" / "reports" / "mutation-report.json"
+        if not report_path.exists():
+            return errors + ["finite-domain fixture produced no JSON report"]
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        mutants = [m for f in report["files"].values() for m in f["mutants"]]
+        equivalent = [
+            m for m in mutants
+            if m["status"] == "Ignored"
+            and m.get("statusReason", "") ==
+                "equivalent mutant: exhaustive Boolean domain (4 combinations)"]
+        if not equivalent:
+            errors.append(
+                "no mutant was ignored by the exhaustive four-combination check")
+        if not any(m["status"] == "Killed" for m in mutants):
+            errors.append("fixture did not kill a non-equivalent logical mutant")
+        if any(m["status"] not in ("Killed", "Ignored") for m in mutants):
+            errors.append(
+                "unexpected fixture statuses: "
+                + ", ".join(sorted({m["status"] for m in mutants})))
+        if not re.search(r"^All files\s+\|\s+100\.00\s+\|", proc.stdout, re.M):
+            errors.append("score did not exclude ignored mutants:\n" + proc.stdout)
+    return errors
+
+
 def main():
     update = "--update" in sys.argv
     if not EXE.exists():
@@ -2507,6 +2587,7 @@ def main():
               ("baseline", check_baseline), ("library", check_library),
               ("prove_cache", check_prove_cache),
               ("survivor_input_search", check_survivor_input_search),
+              ("finite_domain_equivalence", check_finite_domain_equivalence),
               ("assertions", check_assertions))
     unknown = [a for a in only if a not in EXAMPLES and a not in dict(checks)]
     if unknown:
