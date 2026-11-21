@@ -1025,6 +1025,7 @@ package body AdaMutant.Runner is
 
       protected Queue is
          procedure Next (Index : out Natural);
+         procedure Start_Combined (First, Last : Positive);
          procedure Next_Combined (Index : out Natural);
          procedure Finished (Done_Now : out Natural);
          procedure Fail (Message : String);
@@ -1032,6 +1033,7 @@ package body AdaMutant.Runner is
       private
          Cursor  : Natural := 0;
          Cursor_Combined : Natural := 0;
+         Combined_Last : Natural := 0;
          Done    : Natural := 0;
          Problem : Unbounded_String;
       end Queue;
@@ -1052,13 +1054,19 @@ package body AdaMutant.Runner is
             end loop;
          end Next;
 
+         procedure Start_Combined (First, Last : Positive) is
+         begin
+            Cursor_Combined := First - 1;
+            Combined_Last := Last;
+         end Start_Combined;
+
          procedure Next_Combined (Index : out Natural) is
          begin
             Index := 0;
             if Length (Problem) > 0 then
                return;
             end if;
-            while Cursor_Combined < Work_Items'Last loop
+            while Cursor_Combined < Combined_Last loop
                Cursor_Combined := Cursor_Combined + 1;
                if Combined (Cursor_Combined)
                  and then not Tested (Cursor_Combined)
@@ -1487,16 +1495,23 @@ package body AdaMutant.Runner is
          end if;
       end Run_Workers;
 
-      procedure Run_Combined is
-         --  Build the project once with as many of the pending mutants as
-         --  a schema can hold, and run the tests once for each of them.
+      procedure Run_Combined_Batch
+        (Window_First, Window_Last, Batch_Number : Positive;
+         Batched : Boolean)
+      is
+         Coverage_Analysis_Active : Boolean := S.Coverage_Analysis;
+         --  Build the current window with as many pending mutants as a
+         --  schema can hold, and run the tests once for each of them.
          Mains : constant String_Vectors.Vector :=
            Main_Sources (Slot_Dir (1));
          Main_Texts : String_Vectors.Vector;
          --  The sources of the mains as they are in the sandbox, which is
          --  a copy made when the run started.  The project itself may have
          --  been edited since.
-         Log   : constant String := Join (Logs, "combined-build.log");
+         Batch_Suffix : constant String :=
+           (if Batched then "-batch-" & Image (Batch_Number) else "");
+         Log : constant String :=
+           Join (Logs, "combined-build" & Batch_Suffix & ".log");
 
          type Schema_Array is
            array (R.Files.First_Index .. R.Files.Last_Index)
@@ -1511,6 +1526,11 @@ package body AdaMutant.Runner is
 
          function Is_Main (Path : String) return Boolean is
            (Mains.Contains (Path));
+
+         function Coverage_Log (T : Positive) return String is
+           (Join (Logs,
+                  (if S.Named_Tests then "coverage-" & Test_Name (T)
+                   else "coverage") & Batch_Suffix & ".txt"));
 
          --  The files other than the mains that hold the text of a schema
          --  in the first sandbox.
@@ -1527,22 +1547,26 @@ package body AdaMutant.Runner is
             --  alternative: the mutant would do what the original does.
             --  With coverage analysis the build still watches whether the
             --  statement is executed.
-            for M of Work_Items.all loop
-               if M.File = F and then M.Status = Pending
-                 and then
-                   (M.Mutation.Kind /= Statement_Deletion
-                    or else (S.Coverage_Analysis
-                             and then not Unwatched (M.Id)))
-               then
-                  Candidates.Append
-                    (AdaMutant.Schemata.Candidate'
-                       (Id          => M.Id,
-                        First       => M.Mutation.First,
-                        Last        => M.Mutation.Last,
-                        Replacement => M.Mutation.Replacement,
-                        Probe       =>
-                          M.Mutation.Kind = Statement_Deletion));
-               end if;
+            for K in Window_First .. Window_Last loop
+               declare
+                  M : Mutant renames Work_Items (K);
+               begin
+                  if M.File = F and then M.Status = Pending
+                    and then
+                      (M.Mutation.Kind /= Statement_Deletion
+                       or else (Coverage_Analysis_Active
+                                and then not Unwatched (M.Id)))
+                  then
+                     Candidates.Append
+                       (AdaMutant.Schemata.Candidate'
+                          (Id          => M.Id,
+                           First       => M.Mutation.First,
+                           Last        => M.Mutation.Last,
+                           Replacement => M.Mutation.Replacement,
+                           Probe       =>
+                             M.Mutation.Kind = Statement_Deletion));
+                  end if;
+               end;
             end loop;
             begin
                Schemas (F) := AdaMutant.Schemata.Build
@@ -1618,7 +1642,7 @@ package body AdaMutant.Runner is
                             AdaMutant.Schemata.Support_Body
                               (Last_Site    => Natural (R.Mutants.Length),
                                Coverage_Dir =>
-                                 (if S.Coverage_Analysis then Coverage_Dir
+                                 (if Coverage_Analysis_Active then Coverage_Dir
                                   else "")));
                   end if;
                end;
@@ -1709,6 +1733,29 @@ package body AdaMutant.Runner is
          --  executed.
          Stale : Boolean := False;
 
+         procedure Prepare_Coverage is
+         begin
+            if not Coverage_Analysis_Active
+              or else not Ada.Directories.Exists (Coverage_Dir)
+            then
+               return;
+            end if;
+            begin
+               Delete_Tree (Coverage_Dir);
+            exception
+               when others =>
+                  Coverage_Analysis_Active := False;
+            end;
+            if Ada.Directories.Exists (Coverage_Dir) then
+               Coverage_Analysis_Active := False;
+            end if;
+            if not Coverage_Analysis_Active and then Warn /= null then
+               Warn ("coverage records from the preceding combined build"
+                     & " could not be cleared; coverage analysis is off for"
+                     & " this batch");
+            end if;
+         end Prepare_Coverage;
+
          procedure Collect (T : Positive) is
             --  Test T has just run in the combined build with no mutant
             --  active: read what its programs recorded.
@@ -1750,11 +1797,7 @@ package body AdaMutant.Runner is
                   Append (Merged, Image (K) & ASCII.LF);
                end if;
             end loop;
-            Write (Join (Logs,
-                         (if S.Named_Tests
-                          then "coverage-" & Test_Name (T) & ".txt"
-                          else "coverage.txt")),
-                   To_String (Merged));
+            Write (Coverage_Log (T), To_String (Merged));
             --  A program that the test command left running may still
             --  hold its file open, which stops the deletion on Windows.
             --  After the last test the directory does no harm where it
@@ -1802,9 +1845,11 @@ package body AdaMutant.Runner is
                Free (Hit);
                return;
             end if;
-            Covers := new Cover_Matrix'
-              [1 .. N_Tests => [1 .. Work_Items'Last => False]];
-            for K in Work_Items'Range loop
+            if Covers = null then
+               Covers := new Cover_Matrix'
+                 [1 .. N_Tests => [1 .. Work_Items'Last => False]];
+            end if;
+            for K in Window_First .. Window_Last loop
                declare
                   M : Mutant renames Work_Items (K);
                begin
@@ -1829,7 +1874,12 @@ package body AdaMutant.Runner is
          end Skip_Uncovered;
 
          Any : Boolean;
+         Sources_Written : Boolean := False;
       begin
+         Prepare_Coverage;
+         for K in Window_First .. Window_Last loop
+            Place (K) := 0;
+         end loop;
          for Main of Mains loop
             Main_Texts.Append (Read (Join (Slot_Dir (1), Main)));
          end loop;
@@ -1849,6 +1899,7 @@ package body AdaMutant.Runner is
                Any := Any or else Length (Schemas (F).Text) > 0;
             end loop;
             exit when not Any;
+            Sources_Written := True;
             Write_Sources (1, Restore => False);
             Wait_For_Libraries (1);
             declare
@@ -1887,7 +1938,7 @@ package body AdaMutant.Runner is
             end loop;
             --  With no mutant switched on the tests must pass as before.
             --  This run also measures them: the combined build is slower.
-            if S.Coverage_Analysis then
+            if Coverage_Analysis_Active then
                Hit := new Cover_Matrix'
                  [1 .. N_Tests => [1 .. Work_Items'Last => False]];
             end if;
@@ -1895,28 +1946,70 @@ package body AdaMutant.Runner is
                declare
                   Elapsed : Duration;
                begin
-                  if S.Coverage_Analysis then
+                  if Coverage_Analysis_Active then
                      Ada.Directories.Create_Path (Coverage_Dir);
                   end if;
-                  Baseline_Step ("combined-" & Test_Step (T),
+                  Baseline_Step ("combined" & Batch_Suffix & "-"
+                                 & Test_Step (T),
                                  Test_Command (T), 0.0,
                                  Elapsed, S.Test_Memory_Limit_Mb, Slots);
                   Combined_Test_TO (T) :=
                     Elapsed * Duration (S.Timeout_Factor) + Ms (S.Timeout_Ms);
-                  if S.Coverage_Analysis then
+                  if Coverage_Analysis_Active then
                      Collect (T);
                   end if;
                end;
             end loop;
-            if S.Coverage_Analysis then
+            if Coverage_Analysis_Active then
                Skip_Uncovered;
             end if;
+            Queue.Start_Combined (Window_First, Window_Last);
             Run_Workers (Combined_Build => True);
          end if;
          for Slot in 1 .. Slots loop
             Write_Sources (Slot, Restore => True);
          end loop;
+         Sources_Written := False;
          Free (Schemas);
+      exception
+         when others =>
+            if Sources_Written then
+               for Slot in 1 .. Slots loop
+                  Write_Sources (Slot, Restore => True);
+               end loop;
+            end if;
+            if Schemas /= null then
+               Free (Schemas);
+            end if;
+            raise;
+      end Run_Combined_Batch;
+
+      procedure Run_Combined is
+         First : Positive := 1;
+         Batch_Number : Positive := 1;
+         Batched : constant Boolean := S.Build_Batch_Size > 0;
+      begin
+         loop
+            declare
+               Remaining : constant Natural := Work_Items'Last - First + 1;
+               Width : constant Natural :=
+                 (if Batched then Natural'Min (S.Build_Batch_Size, Remaining)
+                  else Remaining);
+               Last : constant Positive := First + (Width - 1);
+            begin
+               if Batched and then Note /= null then
+                  Note ("Combined build batch " & Image (Batch_Number)
+                        & ": mutant IDs "
+                        & Image (Work_Items (First).Id) & "-"
+                        & Image (Work_Items (Last).Id));
+               end if;
+               Run_Combined_Batch
+                 (First, Last, Batch_Number, Batched);
+               exit when Last = Work_Items'Last;
+               First := Last + 1;
+               Batch_Number := Batch_Number + 1;
+            end;
+         end loop;
       end Run_Combined;
       procedure Find_Equivalent is
          --  A survivor that the equivalence_build command compiles to the

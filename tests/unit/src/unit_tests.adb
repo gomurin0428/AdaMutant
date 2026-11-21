@@ -3104,6 +3104,28 @@ procedure Unit_Tests is
              "config: independent input-search project and disabled budget");
       Check (C.Concurrency = 3 and then C.Timeout_Factor = 2.5,
              "config numbers");
+      declare
+         Base : constant String :=
+           "build = ""b""" & LF & "prove = ""p""" & LF
+           & "test = ""t""" & LF;
+         Zero : constant Configuration :=
+           Parse (Base & "build_batch_size = 0" & LF, "/r");
+         Positive_Size : constant Configuration :=
+           Parse (Base & "build_batch_size = 3" & LF, "/r");
+      begin
+         Check (C.Build_Batch_Size = 0 and then Zero.Build_Batch_Size = 0,
+                "config batch build defaults to zero");
+         Check (Positive_Size.Build_Batch_Size = 3,
+                "config positive batch build size");
+         Check (Ada.Strings.Fixed.Index (Template, "build_batch_size") > 0,
+                "config template batch build size");
+         Rejects (Base & "build_batch_size = -1" & LF,
+                  "config batch build size is non-negative");
+         Rejects (Base & "build_batch_size = 1.5" & LF,
+                  "config batch build size is an integer");
+         Rejects (Base & "build_batch_size = 999999999999999999999999" & LF,
+                  "config batch build size overflow");
+      end;
       Check (C.Scan.Enabled (Arithmetic_Operator)
              and then not C.Scan.Enabled (Numeric_Literal), "config mutators");
       declare

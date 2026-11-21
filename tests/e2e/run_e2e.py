@@ -5,6 +5,7 @@ Each example is copied to a temporary directory first, so the checked-in
 example stays untouched. Expected statuses live in tests/e2e/expected/.
 Run with --update to rewrite them after a reviewed behaviour change.
 """
+from collections import Counter
 import json
 import os
 import re
@@ -303,6 +304,7 @@ EXAMPLES = {
     # are equivalent mutants become Ignored.
     "calculator": {
         "exit": 0, "min_timeout": 1, "min_uncovered": 1, "equivalent": 2,
+        "batch_sizes": [1, 7, 13, 10000],
         # Most mutants are tested in the one build that contains them all;
         # only a few are built on their own.
         "max_single_builds": 10,
@@ -334,6 +336,8 @@ EXAMPLES = {
     # with a counterexample (Confirmed), a postcondition on the model
     # without one (Undecided).
     "spark_model": {"exit": 0, "killed_by": "proof",
+                    "batch_sizes": [29, 10000],
+                    "batch_test_command": '"exit 0"',
                     "proof_checks": ["postcondition", "refined postcondition",
                                      "array index check", "range check",
                                      "precondition"],
@@ -350,6 +354,7 @@ EXAMPLES = {
     # below the example's break threshold (exit status 2).
     "compile_error": {
         "exit": 2, "example": "calculator", "max_single_builds": 12,
+        "batch_sizes": [13, 10000],
         "extra": {
             "src/powers.ads":
                 "package Powers is\n"
@@ -501,6 +506,8 @@ EXAMPLES = {
     # Copy, which is built on its own, is still built before it is proved.
     "prove_and_test": {
         "exit": 0, "example": "spark_counter", "killed_by": "proof",
+        "batch_sizes": [5, 10000],
+        "batch_test_command": '"exit 0"',
         "min_uncovered": 1,
         "uncovered_built": "src/copies.adb:5:7 StatementDeletion null;",
         "config": "build = 'gprbuild -p -q -P counters_tests.gpr'\n"
@@ -547,6 +554,7 @@ EXAMPLES = {
     # its code.  The first test that detects a mutant ends its run.
     "named_tests": {
         "exit": 0, "example": "calculator", "extra": NAMED_TESTS,
+        "batch_sizes": [13, 10000],
         "remove": ["tests/test_calculator.adb"], "drop_keys": ["test"],
         "config_tail": NAMED_TESTS_TABLE,
         "tests": {"arith": {"kills": True}, "misc": {"kills": True},
@@ -808,6 +816,176 @@ def statuses(report):
             for p, f in report["files"].items() for m in f["mutants"]}
 
 
+def batch_signature(report):
+    mutants = [
+        (m["id"], path, json.dumps(m["location"], sort_keys=True),
+         m["mutatorName"], m["replacement"],
+         json.dumps(m.get("coveredBy"), sort_keys=True),
+         json.dumps(m.get("killedBy"), sort_keys=True),
+         m.get("testsCompleted", 0), m["status"])
+        for path, file in report["files"].items()
+        for m in file["mutants"]
+    ]
+    counts = tuple(sorted(Counter(m[-1] for m in mutants).items()))
+    equivalent_skips = (
+        report.get("provenEquivalentComparisonSkips", 0),
+        report.get("provenEquivalentArithmeticSkips", 0),
+    )
+    return mutants, counts, equivalent_skips
+
+
+def report_mutants(report):
+    return [m for file in report["files"].values() for m in file["mutants"]]
+
+
+def batch_summary(report):
+    mutants = report_mutants(report)
+    counts = dict(sorted(Counter(m["status"] for m in mutants).items()))
+    return len(mutants), counts
+
+
+def batch_identities(report):
+    return [
+        (m["id"], path, json.dumps(m["location"], sort_keys=True),
+         m["mutatorName"], m["replacement"])
+        for path, file in report["files"].items()
+        for m in file["mutants"]
+    ]
+
+
+def set_config_setting(config, setting, value):
+    lines = [line for line in config.read_text(encoding="utf-8").splitlines(True)
+             if line.split("=", 1)[0].strip() != setting]
+    insert = next((i for i, line in enumerate(lines)
+                   if line.lstrip().startswith("[")), len(lines))
+    lines.insert(insert, f"{setting} = {value}\n")
+    config.write_text("".join(lines), encoding="utf-8")
+
+
+def compare_batch_variants(name, source, tmp, spec, baseline, label, exit_code):
+    errors = []
+    expected = batch_signature(baseline)
+    report_dir = Path(spec.get("report_dir", ".adamutant/reports"))
+    ignore = shutil.ignore_patterns(".adamutant", "obj", "bin", "lib")
+    for size in spec["batch_sizes"]:
+        error_start = len(errors)
+        prefix = f"{name}-{label}" if label else name
+        variant = Path(tmp) / f"{prefix}-batch-{size}"
+        shutil.copytree(source, variant, ignore=ignore)
+        set_config_setting(variant / "adamutant.toml", "build_batch_size",
+                           str(size))
+        proc = subprocess.run([str(EXE), "run"], cwd=variant, text=True,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT)
+        if proc.returncode != exit_code:
+            errors.append(
+                f"batch size {size}: exit status {proc.returncode}, "
+                f"expected {exit_code}\n{proc.stdout}")
+        if "Combined build batch 1: mutant IDs" not in proc.stdout:
+            errors.append(f"batch size {size}: no batch ID-range note")
+        report_path = variant / report_dir / "mutation-report.json"
+        if not report_path.exists():
+            errors.append(f"batch size {size}: no JSON report")
+            continue
+        actual = json.loads(report_path.read_text(encoding="utf-8"))
+        mutants = report_mutants(actual)
+        ids = [m["id"] for m in mutants]
+        if len(ids) != len(set(ids)):
+            errors.append(f"batch size {size}: duplicate mutant IDs")
+        pending = [m["id"] for m in mutants if m["status"] == "Pending"]
+        if pending:
+            errors.append(f"batch size {size}: Pending mutants {pending}")
+        if batch_signature(actual) != expected:
+            errors.append(
+                f"batch size {size}: mutant IDs, locations, replacements, "
+                "statuses, score counts, coverage, test killers, or test counts "
+                "differ from the unbatched run")
+        logs = variant / ".adamutant" / "logs"
+        builds = list(logs.glob("combined-build-batch-*.log"))
+        baselines = list(logs.glob("baseline-combined-batch-*.log"))
+        if not builds or len(baselines) < len(builds):
+            errors.append(f"batch size {size}: batch build/baseline logs are missing")
+        if label == "" and "uncovered_built" in spec:
+            fallback = [
+                m for path, file in actual["files"].items()
+                for m in file["mutants"]
+                if key(path, m) == spec["uncovered_built"]
+            ]
+            if len(fallback) != 1 or not (
+                    logs / f"mutant-{fallback[0]['id']}-build.log").exists() \
+                    or not (logs / f"mutant-{fallback[0]['id']}-prove.log").exists():
+                errors.append(
+                    f"batch size {size}: statement-deletion fallback was not built and proved")
+        if size > len(expected[0]) and len(builds) != 1:
+            errors.append(f"batch size {size}: expected exactly one combined build")
+        if size < len(expected[0]) and len(builds) < 2:
+            errors.append(f"batch size {size}: expected multiple combined builds")
+        if label == "test-exit-0":
+            untested = [
+                m for f in actual["files"].values() for m in f["mutants"]
+                if m["status"] != "CompileError"
+                and m.get("testsCompleted", 0) == 0
+            ]
+            if untested:
+                errors.append(
+                    f"test={label}: {len(untested)} mutants were not tested")
+        if "tests" in spec and not list(logs.glob("coverage-*-batch-*.txt")):
+            errors.append(f"batch size {size}: named-test coverage logs are missing")
+        total, counts = batch_summary(actual)
+        base_total, base_counts = batch_summary(baseline)
+        print(f"batch parity {prefix} size={size}: {total} mutants {counts}; "
+              f"unbatched {base_total} mutants {base_counts}; "
+              f"checks={'PASS' if len(errors) == error_start else 'FAIL'}")
+    return errors
+
+
+def compare_batch_runs(name, work, tmp, spec, baseline):
+    errors = compare_batch_variants(name, work, tmp, spec, baseline, "",
+                                    spec["exit"])
+    command = spec.get("batch_test_command")
+    if command is None:
+        return errors
+
+    proof_only = Path(tmp) / f"{name}-test-exit-0"
+    shutil.copytree(work, proof_only,
+                    ignore=shutil.ignore_patterns(".adamutant", "obj", "bin", "lib"))
+    set_config_setting(proof_only / "adamutant.toml", "test", command)
+    proc = subprocess.run([str(EXE), "run"], cwd=proof_only, text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    exit_code = proc.returncode
+    if exit_code not in (0, 2):
+        errors.append(
+            f"test={command}: exit status {proc.returncode}, "
+            "expected a completed run (status 0 or threshold status 2)\n"
+            f"{proc.stdout}")
+    report_path = proof_only / Path(spec.get("report_dir", ".adamutant/reports")) \
+        / "mutation-report.json"
+    if not report_path.exists():
+        return errors + [f"test={command}: no JSON report"]
+    proof_report = json.loads(report_path.read_text(encoding="utf-8"))
+    proof_mutants = report_mutants(proof_report)
+    proof_ids = [m["id"] for m in proof_mutants]
+    if len(proof_ids) != len(set(proof_ids)):
+        errors.append(f"test={command}: duplicate mutant IDs")
+    proof_signature = batch_signature(proof_report)
+    if batch_identities(proof_report) != batch_identities(baseline):
+        errors.append(f"test={command}: mutant identities differ from the original run")
+    if any(mutant[-1] == "Pending" for mutant in proof_signature[0]):
+        errors.append(f"test={command}: some mutants were not evaluated")
+    untested = [
+        m for f in proof_report["files"].values() for m in f["mutants"]
+        if m["status"] != "CompileError" and m.get("testsCompleted", 0) == 0
+    ]
+    if untested:
+        errors.append(f"test={command}: {len(untested)} mutants were not tested")
+    total, counts = batch_summary(proof_report)
+    print(f"proof-only {name}: {total} mutants {counts}; all non-compile-error "
+          "mutants must have testsCompleted > 0")
+    errors.extend(compare_batch_variants(
+        name, proof_only, tmp, spec, proof_report, "test-exit-0", exit_code))
+    return errors
+
+
 def suggestion_targets(report):
     found = []
     for path, file in report["files"].items():
@@ -885,8 +1063,18 @@ def run_example(name, spec, update):
             errors.append("no HTML report")
         if report.get("schemaVersion") != "2":
             errors.append("schemaVersion is not 2")
+        if "batch_sizes" in spec:
+            errors.extend(compare_batch_runs(name, work, tmp, spec, report))
         actual = statuses(report)
-        mutants = [m for f in report["files"].values() for m in f["mutants"]]
+        mutants = report_mutants(report)
+        ids = [m["id"] for m in mutants]
+        if len(ids) != len(set(ids)):
+            errors.append("report has duplicate mutant IDs")
+        pending = [m["id"] for m in mutants if m["status"] == "Pending"]
+        if pending:
+            errors.append(f"report has Pending mutants: {pending}")
+        total, counts = batch_summary(report)
+        print(f"mutants {name}: {total} statuses {counts}")
         if "mutant_count" in spec and len(mutants) != spec["mutant_count"]:
             errors.append(f"{len(mutants)} mutants, expected {spec['mutant_count']}")
         for setting, field in (
