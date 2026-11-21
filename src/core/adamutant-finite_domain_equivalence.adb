@@ -18,6 +18,10 @@ package body AdaMutant.Finite_Domain_Equivalence is
 
    Max_Parameters : constant Positive := 8;
 
+   Provider_Files : AdaMutant.Mutators.Name_Sets.Set;
+   Providers      : array (Boolean) of LAL.Unit_Provider_Reference;
+   Provided       : array (Boolean) of Boolean := [others => False];
+
    function Same (Left, Right : LAL.Ada_Node'Class) return Boolean
      renames LAL."=";
 
@@ -32,24 +36,48 @@ package body AdaMutant.Finite_Domain_Equivalence is
       Unit    : LAL.Analysis_Unit;
    end record;
 
+   function Project_Provider
+     (Project_Files : AdaMutant.Mutators.Name_Sets.Set;
+      Charset       : String) return LAL.Unit_Provider_Reference
+   is
+      UTF_8 : constant Boolean := Charset = "utf-8";
+   begin
+      if not AdaMutant.Mutators.Name_Sets."="
+        (Project_Files, Provider_Files)
+      then
+         Provider_Files := Project_Files;
+         Provided := [others => False];
+      end if;
+      if not Provided (UTF_8) then
+         declare
+            Paths : GNATCOLL.VFS.File_Array
+              (1 .. Natural (Project_Files.Length));
+            Last : Natural := 0;
+         begin
+            for Path of Project_Files loop
+               Last := Last + 1;
+               Paths (Last) := GNATCOLL.VFS.Create
+                 (GNATCOLL.VFS."+" (Path));
+            end loop;
+            Providers (UTF_8) :=
+              Libadalang.Auto_Provider.Create_Auto_Provider_Reference
+                (Paths, Charset);
+            Provided (UTF_8) := True;
+         end;
+      end if;
+      return Providers (UTF_8);
+   end Project_Provider;
+
    function Parse
      (Source, File_Name, Charset : String;
       Project_Files : AdaMutant.Mutators.Name_Sets.Set)
       return Parsed_Source
    is
-      Paths : GNATCOLL.VFS.File_Array
-        (1 .. Natural (Project_Files.Length));
-      Last : Natural := 0;
       Provider : LAL.Unit_Provider_Reference;
       Context  : LAL.Analysis_Context;
       Unit     : LAL.Analysis_Unit;
    begin
-      for Path of Project_Files loop
-         Last := Last + 1;
-         Paths (Last) := GNATCOLL.VFS.Create (GNATCOLL.VFS."+" (Path));
-      end loop;
-      Provider := Libadalang.Auto_Provider.Create_Auto_Provider_Reference
-        (Paths, Charset);
+      Provider := Project_Provider (Project_Files, Charset);
       Context := LAL.Create_Context
         (Charset => Charset, Unit_Provider => Provider, Tab_Stop => 1);
       Unit := Context.Get_From_Buffer

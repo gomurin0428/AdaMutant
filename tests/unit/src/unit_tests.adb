@@ -4117,6 +4117,9 @@ procedure Unit_Tests is
          Check (First > 0 and then not Actual and then Combinations = 0,
                 "finite equivalence: contract pragma rejected");
       end;
+
+      Expect ("B xor not B", "B or not B", True, 4,
+              "finite equivalence: provider cache resets after project switch");
    end Test_Finite_Domain_Equivalence;
 
 begin
