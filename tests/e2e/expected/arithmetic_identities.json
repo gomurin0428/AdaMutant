@@ -1,0 +1,7 @@
+{
+ "src/arithmetic_cases.ads:21:58 ArithmeticOperator -": "Killed",
+ "src/arithmetic_cases.ads:22:56 ArithmeticOperator -": "Killed",
+ "src/arithmetic_cases.ads:23:61 ArithmeticOperator /": "Killed",
+ "src/arithmetic_cases.ads:24:59 ArithmeticOperator *": "Killed",
+ "src/arithmetic_cases.ads:26:65 ArithmeticOperator -": "Killed"
+}

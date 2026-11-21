@@ -312,6 +312,19 @@ prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --c
 
 ## Mutators
 
+Four arithmetic-operator replacements are omitted only when the operands
+resolve to the same built-in integer type before and after replacement and
+the right operand is statically known to be the identity value: `X + 0` to
+`X - 0`, `X - 0` to `X + 0`, `X * 1` to `X / 1`, and `X / 1` to `X * 1`.
+This applies to signed and modular integer types, including parenthesized
+static expressions and named static constants. Real and fixed-point types,
+unknown types, and user-defined original or replacement operators retain
+their mutants. Other arithmetic forms, including powers, `mod`, and `rem`,
+are not suppressed. The scan statistic `Proven_Equivalent_Arithmetic_Skips`
+is shown separately from comparison skips in the CLI summary, JSON metadata,
+and HTML summary; suppressed candidates are not mutants and do not affect IDs
+or scores.
+
 | Name | Examples |
 |---|---|
 | ArithmeticOperator | `+`↔`-`, `*`↔`/`, `mod`,`rem`→`*` (`mod`↔`rem` differ only when the signs differ, so that would almost always be an equivalent mutant), `**`→`*`. `&` is not mutated |

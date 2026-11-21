@@ -28,6 +28,8 @@ package body AdaMutant.Mutators is
    use type LC.Token_Kind;
    use type LC.Token_Reference;
    use type LC.Grammar_Rule;
+   use type Langkit_Support.Slocs.Line_Number;
+   use type Langkit_Support.Slocs.Column_Number;
 
    function Name (Kind : Mutator_Kind) return String is
      (case Kind is
@@ -818,7 +820,8 @@ package body AdaMutant.Mutators is
       T : constant Syntax_Tree :=
         Parse_Tree (Source, Tolerant => False,
                     Whole_Units => Options.Whole_Units,
-                    Resolve     => Options.Enabled (Equality_Operator)
+                    Resolve     => Options.Enabled (Arithmetic_Operator)
+                                   or else Options.Enabled (Equality_Operator)
                                    or else Options.Enabled (Logical_Operator)
                                    or else (Options.Enabled (Unary_Operator)
                                             and then Ada.Strings.Fixed.Index
@@ -1940,13 +1943,171 @@ package body AdaMutant.Mutators is
          end case;
       end Mutate_Relation;
 
+      function Bin_Op_At
+        (Tree : Syntax_Tree; N : LAL.Ada_Node; Operator_Offset : Positive)
+         return LAL.Ada_Node
+      is
+         Found : LAL.Ada_Node;
+      begin
+         if N.Is_Null then
+            return LAL.No_Ada_Node;
+         elsif N.Kind = Ada_Bin_Op
+           and then First (Tree, N.As_Bin_Op.F_Op.Token_Start) = Operator_Offset
+         then
+            return N;
+         end if;
+         for I in 1 .. N.Children_Count loop
+            Found := Bin_Op_At (Tree, N.Child (I), Operator_Offset);
+            if not Found.Is_Null then
+               return Found;
+            end if;
+         end loop;
+         return LAL.No_Ada_Node;
+      end Bin_Op_At;
+
+      function Proven_Equivalent_Arithmetic
+        (B : LAL.Bin_Op; Replacement : String) return Boolean
+      is
+         function Same_Type
+           (Left, Right : LAL.Base_Type_Decl) return Boolean
+         is
+            Left_Sloc  : constant Langkit_Support.Slocs.Source_Location_Range :=
+              Left.Sloc_Range;
+            Right_Sloc : constant Langkit_Support.Slocs.Source_Location_Range :=
+              Right.Sloc_Range;
+         begin
+            return not Left.Is_Null and then not Right.Is_Null
+              and then Left.Kind = Right.Kind
+              and then LAL.Get_Filename (Left.Unit)
+                = LAL.Get_Filename (Right.Unit)
+              and then Left_Sloc.Start_Line = Right_Sloc.Start_Line
+              and then Left_Sloc.Start_Column = Right_Sloc.Start_Column
+              and then Left_Sloc.End_Line = Right_Sloc.End_Line
+              and then Left_Sloc.End_Column = Right_Sloc.End_Column;
+         end Same_Type;
+
+         function Known_Integer (E : LAL.Expr) return Boolean is
+            T : constant LAL.Base_Type_Decl := E.P_Expression_Type;
+         begin
+            return not T.Is_Null and then not Universal (T)
+              and then T.P_Is_Int_Type (Origin => E);
+         end Known_Integer;
+
+         function Known_Integer (B : LAL.Bin_Op) return Boolean is
+            T : constant LAL.Base_Type_Decl := B.P_Expression_Type;
+         begin
+            return not T.Is_Null and then not Universal (T)
+              and then T.P_Is_Int_Type (Origin => B.As_Ada_Node);
+         end Known_Integer;
+
+         function Integer_Expression (E : LAL.Expr) return Boolean is
+            T : constant LAL.Base_Type_Decl := E.P_Expression_Type;
+         begin
+            return not T.Is_Null
+              and then (T.P_Is_Int_Type (Origin => E)
+                        or else Same (T, T.P_Universal_Int_Type));
+         end Integer_Expression;
+
+         Value : Big.Big_Integer;
+      begin
+         case LC.Ada_Op'(B.F_Op) is
+            when Ada_Op_Plus =>
+               if Replacement /= "-" then
+                  return False;
+               end if;
+            when Ada_Op_Minus =>
+               if Replacement /= "+" then
+                  return False;
+               end if;
+            when Ada_Op_Mult =>
+               if Replacement /= "/" then
+                  return False;
+               end if;
+            when Ada_Op_Div =>
+               if Replacement /= "*" then
+                  return False;
+               end if;
+            when others =>
+               return False;
+         end case;
+
+         if not Static_Value (B.F_Right, Value)
+           or else not Integer_Expression (B.F_Right)
+         then
+            return False;
+         end if;
+
+         case LC.Ada_Op'(B.F_Op) is
+            when Ada_Op_Plus | Ada_Op_Minus =>
+               if Value /= 0 then
+                  return False;
+               end if;
+            when Ada_Op_Mult | Ada_Op_Div =>
+               if Value /= 1 then
+                  return False;
+               end if;
+            when others =>
+               return False;
+         end case;
+
+         if not Known_Integer (B)
+           or else not Known_Integer (B.F_Left)
+           or else not Predefined (B.F_Op)
+         then
+            return False;
+         end if;
+
+         declare
+            Operator_First : constant Positive := First (T, B.F_Op.Token_Start);
+            Operator_Last  : constant Natural := Last (T, B.F_Op.Token_Start);
+            Candidate_Source : constant String :=
+              Source (Source'First .. Operator_First - 1) & Replacement
+              & Source (Operator_Last + 1 .. Source'Last);
+            Candidate_Tree : constant Syntax_Tree :=
+              Parse_Tree (Candidate_Source, Tolerant => False,
+                          Whole_Units => Options.Whole_Units,
+                          Resolve => True, Files => Options.Project_Files);
+            Candidate_Node : constant LAL.Ada_Node :=
+              Bin_Op_At (Candidate_Tree, Candidate_Tree.Root, Operator_First);
+         begin
+            if Candidate_Node.Is_Null then
+               return False;
+            end if;
+            declare
+               Candidate : constant LAL.Bin_Op := Candidate_Node.As_Bin_Op;
+               Candidate_Type : constant LAL.Base_Type_Decl :=
+                 Candidate.P_Expression_Type;
+            begin
+               return Predefined (Candidate.F_Op)
+                 and then Known_Integer (Candidate)
+                 and then Same_Type (B.P_Expression_Type, Candidate_Type)
+                 and then Same_Type
+                   (B.F_Left.P_Expression_Type, Candidate.F_Left.P_Expression_Type)
+                 and then Same_Type
+                   (B.F_Right.P_Expression_Type, Candidate.F_Right.P_Expression_Type);
+            end;
+         end;
+      exception
+         when others =>
+            return False;
+      end Proven_Equivalent_Arithmetic;
+
       procedure Mutate_Binary (B : LAL.Bin_Op; C : Context) is
          Op   : constant LAL.Op := B.F_Op;
          Word : constant String := Text (T, Op.Token_Start);
 
          procedure Swap (Kind : Mutator_Kind; Replacement : String) is
          begin
-            Replace (Kind, C, Op, Replacement);
+            if Kind = Arithmetic_Operator
+              and then Options.Enabled (Arithmetic_Operator)
+              and then not Skipped (C)
+              and then Proven_Equivalent_Arithmetic (B, Replacement)
+            then
+               Statistics.Proven_Equivalent_Arithmetic_Skips :=
+                 Statistics.Proven_Equivalent_Arithmetic_Skips + 1;
+            else
+               Replace (Kind, C, Op, Replacement);
+            end if;
          end Swap;
       begin
          case LC.Ada_Op'(B.F_Op) is

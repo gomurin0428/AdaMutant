@@ -124,6 +124,7 @@ package AdaMutant.Results is
       Settings : AdaMutant.Config.Configuration;
       Elapsed  : Duration := 0.0;
       Proven_Equivalent_Comparison_Skips : Natural := 0;
+      Proven_Equivalent_Arithmetic_Skips : Natural := 0;
       Proof_Warnings : AdaMutant.Config.String_Vector;
       --  What the proof of the unmodified project (with --proof-warnings)
       --  says is always False or never reached, as "file:line:col:

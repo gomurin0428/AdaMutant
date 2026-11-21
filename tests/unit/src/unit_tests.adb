@@ -254,7 +254,7 @@ procedure Unit_Tests is
               & "|NumericLiteral 2#1010#->2#1011#|ArithmeticOperator +->-"
               & "|NumericLiteral 16#fe#->16#ff#"
               & "|NumericLiteral 1E6->1000001|ArithmeticOperator +->-"
-              & "|NumericLiteral 8#7#E1->8#71#|ArithmeticOperator +->-"
+              & "|NumericLiteral 8#7#E1->8#71#"
               & "|NumericLiteral 16#0#->16#1#"
               & "|NumericLiteral 9223372036854775806->9223372036854775807",
               "based and exponent integer literals");
@@ -894,7 +894,8 @@ procedure Unit_Tests is
 
       declare
          Statistics : Scan_Statistics :=
-           (Proven_Equivalent_Comparison_Skips => 99);
+           (Proven_Equivalent_Comparison_Skips => 99,
+            Proven_Equivalent_Arithmetic_Skips => 99);
          First : constant Mutation_Vectors.Vector := Find
            ("procedure P (N : Natural; B : out Boolean) is begin"
             & " B := N > 0; end P;", O, Statistics);
@@ -916,7 +917,8 @@ procedure Unit_Tests is
 
       declare
          Statistics : Scan_Statistics :=
-           (Proven_Equivalent_Comparison_Skips => 99);
+           (Proven_Equivalent_Comparison_Skips => 99,
+            Proven_Equivalent_Arithmetic_Skips => 99);
       begin
          begin
             declare
@@ -981,6 +983,242 @@ procedure Unit_Tests is
          end;
       end;
    end Test_Comparison_Skip_Statistics;
+
+   procedure Test_Arithmetic_Skip_Statistics is
+      use AdaMutant.Files;
+
+      O : Scan_Options := (Enabled => [others => False], others => <>);
+
+      function Arithmetic_Count
+        (Mutations : Mutation_Vectors.Vector) return Natural
+      is
+         Result : Natural := 0;
+      begin
+         for M of Mutations loop
+            if M.Kind = Arithmetic_Operator then
+               Result := Result + 1;
+            end if;
+         end loop;
+         return Result;
+      end Arithmetic_Count;
+
+      procedure Check_Scan
+        (Source : String; Skips, Mutants : Natural; Name : String;
+         Options : Scan_Options := O)
+      is
+         Statistics : Scan_Statistics;
+         Found : constant Mutation_Vectors.Vector :=
+           Find (Source, Options, Statistics);
+      begin
+         Check
+           (Statistics.Proven_Equivalent_Arithmetic_Skips = Skips
+            and then Statistics.Proven_Equivalent_Comparison_Skips = 0
+            and then Arithmetic_Count (Found) = Mutants,
+            Name,
+            "arithmetic skips:" & Statistics.Proven_Equivalent_Arithmetic_Skips'Image
+            & ", arithmetic mutants:" & Arithmetic_Count (Found)'Image);
+      end Check_Scan;
+
+   begin
+      O.Enabled (Arithmetic_Operator) := True;
+      Check_Scan
+        ("procedure P (X : Integer; A, B, C, D : out Integer) is begin"
+         & " A := X + 0; B := X - 0; C := X * 1; D := X / 1; end P;",
+         4, 0, "arithmetic skips: all four signed integer identities");
+      Check_Scan
+        ("procedure P is type M is mod 256; X : M := 255;"
+         & " A, B, C, D : M; begin A := X + 0; B := X - 0;"
+         & " C := X * 1; D := X / 1; end P;",
+         4, 0, "arithmetic skips: all four modular integer identities");
+      Check_Scan
+        ("procedure P (X : Integer; A, B, C, D : out Integer) is"
+         & " Zero : constant Integer := 0; One : constant Integer := 1;"
+         & " begin A := X + (Zero); B := X - Zero; C := X * One;"
+         & " D := X / (One); end P;",
+         4, 0, "arithmetic skips: named static constants and parentheses");
+      Check_Scan
+        ("procedure P (X, N : Integer; A, B, C, D : out Integer) is begin"
+         & " A := 0 + X; B := X * 0; C := X / 0; D := X + N; end P;",
+         0, 4, "arithmetic skips: left zero, zero multiply/divide and dynamic RHS");
+      Check_Scan
+        ("procedure P (X : Float; A, B : out Float) is begin"
+         & " A := X + 0.0; B := X * 1.0; end P;",
+         0, 2, "arithmetic skips: real operands are retained");
+      Check_Scan
+        ("procedure P is type F is delta 0.1 range -100.0 .. 100.0;"
+         & " X : F := 1.0; Y : F; begin Y := X * 1.0; end P;",
+         0, 1, "arithmetic skips: fixed-point operands are retained");
+      Check_Scan
+        ("procedure P (Y : out Integer) is begin Y := Unknown + 0; end P;",
+         0, 1, "arithmetic skips: unknown operand type is retained");
+      Check_Scan
+        ("procedure P (X : Integer; Y : out Integer) is begin"
+         & " Y := X ** 1; Y := X mod 1; Y := X rem 1; end P;",
+         0, 3, "arithmetic skips: power, mod and rem are out of scope");
+      Check_Scan
+        ("procedure P is type T is new Integer;"
+         & " function ""+"" (L, R : T) return T is (T'Succ (L));"
+         & " X : T := 5; Y : T; begin Y := X + 0; end P;",
+         0, 1, "arithmetic skips: user-defined original operator is retained");
+      Check_Scan
+        ("procedure P is type T is new Integer;"
+         & " function ""-"" (L, R : T) return T is (T'Succ (L));"
+         & " X : T := 5; Y : T; begin Y := X + 0; end P;",
+         0, 1, "arithmetic skips: user-defined replacement operator is retained");
+
+      declare
+         Tmp : constant String :=
+           Ada.Directories.Current_Directory & "/obj/arithmetic-operators";
+         With_Files : Scan_Options := O;
+         Source : constant String :=
+           "with Units; use Units; procedure P"
+           & " (B : Built_In; O : Custom_Original; R : Custom_Replacement;"
+           & " BO : out Built_In; OO : out Custom_Original;"
+           & " RO : out Custom_Replacement) is begin"
+           & " BO := B + 0; OO := O + 0; RO := R + 0; end P;";
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp);
+         Write
+           (Tmp & "/units.ads",
+            "package Units is type Built_In is new Integer;"
+            & " type Custom_Original is new Integer;"
+            & " function ""+"" (L, R : Custom_Original)"
+            & " return Custom_Original is (Custom_Original'Succ (L));"
+            & " type Custom_Replacement is new Integer;"
+            & " function ""-"" (L, R : Custom_Replacement)"
+            & " return Custom_Replacement is (Custom_Replacement'Succ (L));"
+            & " end Units;" & LF);
+         With_Files.Project_Files.Include (Tmp & "/units.ads");
+         Check_Scan
+           (Source, 1, 2,
+            "arithmetic skips: project files resolve built-in and custom operators",
+            With_Files);
+      end;
+
+      declare
+         Disabled : Scan_Options := O;
+         Contract : constant String :=
+           "procedure P (X : Integer) with Pre => X + 0 = 0 is"
+           & " begin null; end P;";
+         Contract_Enabled : Scan_Options := O;
+      begin
+         Disabled.Enabled (Arithmetic_Operator) := False;
+         Check_Scan
+           ("procedure P (X : Integer; Y : out Integer) is begin"
+            & " Y := X + 0; end P;",
+            0, 0, "arithmetic skips: disabled mutator", Disabled);
+         Check_Scan
+           (Contract, 0, 0, "arithmetic skips: ignored contract", O);
+         Contract_Enabled.Mutate_Contracts := True;
+         Check_Scan
+           (Contract, 1, 0, "arithmetic skips: enabled contract",
+            Contract_Enabled);
+      end;
+
+      declare
+         Statistics : Scan_Statistics :=
+           (Proven_Equivalent_Comparison_Skips => 99,
+            Proven_Equivalent_Arithmetic_Skips => 99);
+         Identity : constant Mutation_Vectors.Vector := Find
+           ("procedure P (X : Integer; Y : out Integer) is begin"
+            & " Y := X + 0; end P;", O, Statistics);
+      begin
+         Check
+           (Statistics.Proven_Equivalent_Arithmetic_Skips = 1
+            and then Statistics.Proven_Equivalent_Comparison_Skips = 0
+            and then Identity.Is_Empty,
+            "arithmetic skips: first scan count resets");
+         declare
+            Dynamic : constant Mutation_Vectors.Vector := Find
+              ("procedure P (X, Y : Integer; Z : out Integer) is begin"
+               & " Z := X + Y; end P;", O, Statistics);
+         begin
+            Check
+              (Statistics.Proven_Equivalent_Arithmetic_Skips = 0
+               and then Statistics.Proven_Equivalent_Comparison_Skips = 0
+               and then Arithmetic_Count (Dynamic) = 1,
+               "arithmetic skips: statistics reset between scans");
+         end;
+      end;
+
+      declare
+         Statistics : Scan_Statistics :=
+           (Proven_Equivalent_Comparison_Skips => 99,
+            Proven_Equivalent_Arithmetic_Skips => 99);
+      begin
+         begin
+            declare
+               Bad : constant Mutation_Vectors.Vector :=
+                 Find ("procedure P is begin", O, Statistics);
+            begin
+               Check (Bad.Is_Empty and then False,
+                      "arithmetic skips: invalid source is rejected");
+            end;
+         exception
+            when AdaMutant.Lexer.Lexical_Error =>
+               Check
+                 (Statistics.Proven_Equivalent_Arithmetic_Skips = 0
+                  and then Statistics.Proven_Equivalent_Comparison_Skips = 0,
+                  "arithmetic skips: error scan resets statistics");
+         end;
+      end;
+
+      declare
+         Tmp : constant String :=
+           Ada.Directories.Current_Directory & "/obj/arithmetic-skips";
+         Settings : AdaMutant.Config.Configuration;
+      begin
+         if Ada.Directories.Exists (Tmp) then
+            Ada.Directories.Delete_Tree (Tmp);
+         end if;
+         Ada.Directories.Create_Path (Tmp);
+         Write
+           (Tmp & "/p.adb",
+            "procedure P (X : Integer; Y : out Integer) is begin"
+            & " Y := X + 0; Y := X + 1; end P;" & LF);
+         Write
+           (Tmp & "/q.adb",
+            "procedure Q (X : Integer; Y : out Integer) is begin"
+            & " Y := X + 0; Y := X + 1; end Q;" & LF);
+         Settings.Root := To_Unbounded_String (Tmp);
+         Settings.Mutate.Append ("*.adb");
+         Settings.Scan.Enabled := [others => False];
+         Settings.Scan.Enabled (Arithmetic_Operator) := True;
+         declare
+            R : constant AdaMutant.Results.Report :=
+              AdaMutant.Runner.Discover
+                (Settings, String_Vectors.Empty_Vector);
+            Counts : constant AdaMutant.Results.Status_Counts :=
+              AdaMutant.Results.Count (R);
+            Json : constant String := AdaMutant.Reports.Json (R);
+            Html : constant String := AdaMutant.Reports.Html (R);
+         begin
+            Check
+              (R.Proven_Equivalent_Comparison_Skips = 0
+               and then R.Proven_Equivalent_Arithmetic_Skips = 2
+               and then Natural (R.Mutants.Length) = 2
+               and then R.Mutants (1).Id = 1
+               and then R.Mutants (2).Id = 2
+               and then Counts (AdaMutant.Results.Pending) = 2,
+               "arithmetic skips: runner aggregation excludes scores and IDs");
+            Check
+              (Ada.Strings.Fixed.Index
+                 (Json, """provenEquivalentComparisonSkips"":0") > 0
+               and then Ada.Strings.Fixed.Index
+                 (Json, """provenEquivalentArithmeticSkips"":2") > 0
+               and then Ada.Strings.Fixed.Index
+                 (Html, "Proven-equivalent comparison skips: ") > 0
+               and then Ada.Strings.Fixed.Index
+                 (Html, "Proven-equivalent arithmetic skips: ") > 0
+               and then Ada.Strings.Fixed.Index
+                 (Html, "r.provenEquivalentArithmeticSkips") > 0,
+               "arithmetic skips: separate JSON metadata and HTML summary");
+         end;
+      end;
+   end Test_Arithmetic_Skip_Statistics;
 
    procedure Test_Skipped is
    begin
@@ -4128,6 +4366,7 @@ begin
    Test_Conditions;
    Test_Operand_Types;
    Test_Comparison_Skip_Statistics;
+   Test_Arithmetic_Skip_Statistics;
    Test_Skipped;
    Test_Comments;
    Test_Syntax_Tree;
