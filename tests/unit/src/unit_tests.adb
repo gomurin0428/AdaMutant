@@ -6,6 +6,7 @@ with AdaMutant.Baselines;
 with AdaMutant.Changes;
 with AdaMutant.Config;
 with AdaMutant.Files;
+with AdaMutant.Finite_Domain_Equivalence;
 with AdaMutant.Json;
 with AdaMutant.Lexer;
 with AdaMutant.Mutators; use AdaMutant.Mutators;
@@ -3995,6 +3996,129 @@ procedure Unit_Tests is
              "ali: not a main subprogram");
    end Test_Schemata;
 
+   procedure Test_Finite_Domain_Equivalence is
+      Spec_Path : constant String :=
+        Ada.Directories.Full_Name ("tests/unit/fixtures/finite_domain.ads");
+      Body_Path : constant String :=
+        Ada.Directories.Full_Name ("tests/unit/fixtures/finite_domain.adb");
+      Source : constant String := AdaMutant.Files.Read (Body_Path);
+      Project_Files : Name_Sets.Set;
+
+      procedure Expect
+        (Needle, Replacement : String;
+         Equivalent : Boolean;
+         Combinations : Natural;
+         Name : String)
+      is
+         First : constant Natural := Ada.Strings.Fixed.Index (Source, Needle);
+         Mutation : AdaMutant.Mutators.Mutation;
+         Actual_Combinations : Natural := 0;
+         Actual : Boolean := False;
+      begin
+         if First > 0 then
+            Mutation :=
+              (Kind        => Logical_Operator,
+               First       => First,
+               Last        => First + Needle'Length - 1,
+               Replacement => To_Unbounded_String (Replacement),
+               Contract    => False);
+            Actual := AdaMutant.Finite_Domain_Equivalence.Proves_Equivalent
+              (Source        => Source,
+               File_Name     => Body_Path,
+               Mutation      => Mutation,
+               Project_Files => Project_Files,
+               Combinations  => Actual_Combinations);
+         end if;
+         Check (First > 0 and then Actual = Equivalent
+                and then Actual_Combinations = Combinations,
+                Name,
+                "equivalent=" & Boolean'Image (Actual)
+                & ", combinations=" & Actual_Combinations'Image);
+      end Expect;
+   begin
+      Project_Files.Include (Spec_Path);
+      Project_Files.Include (Body_Path);
+
+      Expect ("B or not B", "True", True, 4,
+              "finite equivalence: nonlocal Boolean identity");
+      Expect ("or else", "xor", False, 0,
+              "finite equivalence: differing last tuple");
+      Expect ("B xor not B", "B or not B", True, 4,
+              "finite equivalence: single-return body");
+      Expect ("Identity", "Identity", False, 0,
+              "finite equivalence: mutation outside return expression");
+      Expect ("Global_State", "Global_State", False, 0,
+              "finite equivalence: external state rejected");
+      Expect ("False and then Read_Global", "False and then Read_Global",
+              False, 0, "finite equivalence: dead-branch call rejected");
+      Expect ("A or B", "A or B", False, 0,
+              "finite equivalence: user-defined operator rejected");
+      Expect ("True xor False", "False xor False", False, 0,
+              "finite equivalence: shadowed literal is an input");
+      Expect ("A xor A", "A xor A", False, 0,
+              "finite equivalence: default parameter rejected");
+      Expect ("A and then True", "A and then True", False, 0,
+              "finite equivalence: spec contract rejected");
+      Expect ("Local;", "Local;", False, 0,
+              "finite equivalence: declarations rejected");
+      Expect ("not A", "not A", False, 0,
+              "finite equivalence: exception handlers rejected");
+      Expect ("Program_Error", "Program_Error", False, 0,
+              "finite equivalence: raising expression rejected");
+      Expect ("A xor False", "A xor False", False, 0,
+              "finite equivalence: derived Boolean rejected");
+      Expect ("A xor not A", "A xor not A", False, 0,
+              "finite equivalence: overload rejected");
+      Expect ("A xor True", "A xor True",
+              False, 0, "finite equivalence: missing previous declaration");
+      Expect ("A xor (not False)", "A xor (not False)", False, 0,
+              "finite equivalence: aliased Boolean parameter rejected");
+      Expect ("A xor (A and then False)", "A xor (A and then False)",
+              False, 0, "finite equivalence: predicate subtype rejected");
+      Expect
+        ("A7 and then A8",
+         "A7 and then (A8 and then (A8 or else not A8))",
+         True, 256, "finite equivalence: complete eight-parameter domain");
+      Expect ("A8 and then A9", "A8 and then A9", False, 0,
+              "finite equivalence: nine-parameter cutoff");
+
+      declare
+         Pragma_Spec_Path : constant String :=
+           Ada.Directories.Full_Name
+             ("tests/unit/fixtures/finite_pragma.ads");
+         Pragma_Body_Path : constant String :=
+           Ada.Directories.Full_Name
+             ("tests/unit/fixtures/finite_pragma.adb");
+         Pragma_Source : constant String :=
+           AdaMutant.Files.Read (Pragma_Body_Path);
+         Pragma_Files : Name_Sets.Set;
+         First : constant Natural :=
+           Ada.Strings.Fixed.Index (Pragma_Source, "A xor False");
+         Mutation : AdaMutant.Mutators.Mutation;
+         Combinations : Natural := 0;
+         Actual : Boolean := False;
+      begin
+         Pragma_Files.Include (Pragma_Spec_Path);
+         Pragma_Files.Include (Pragma_Body_Path);
+         if First > 0 then
+            Mutation :=
+              (Kind        => Logical_Operator,
+               First       => First,
+               Last        => First + String'("A xor False")'Length - 1,
+               Replacement => To_Unbounded_String ("A xor False"),
+               Contract    => False);
+            Actual := AdaMutant.Finite_Domain_Equivalence.Proves_Equivalent
+              (Source        => Pragma_Source,
+               File_Name     => Pragma_Body_Path,
+               Mutation      => Mutation,
+               Project_Files => Pragma_Files,
+               Combinations  => Combinations);
+         end if;
+         Check (First > 0 and then not Actual and then Combinations = 0,
+                "finite equivalence: contract pragma rejected");
+      end;
+   end Test_Finite_Domain_Equivalence;
+
 begin
    Test_Lexer;
    Test_Operators;
@@ -4027,6 +4151,7 @@ begin
    Test_Json_Reader;
    Test_Baselines;
    Test_Schemata;
+   Test_Finite_Domain_Equivalence;
    Put_Line (Passed'Image & " passed," & Failed'Image & " failed");
    if Failed > 0 then
       Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);

@@ -10,7 +10,7 @@ A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.
 - **Mutants in code that no test executes skip the tests and go straight to the proof.** AdaMutant records which places the tests of the unchanged project execute
 - **Results per test.** When several test commands are given with names, the report says which tests execute and detect each mutant, and a mutant is only tested with the tests that execute its place (`[tests]`)
 - **The results of an earlier run are reused.** A mutant on lines that have not changed takes its result from an earlier report (`--baseline`)
-- **Equivalent mutants are recognized automatically.** AdaMutant compiles the survivors with optimization and marks a mutant as Ignored when its object code is the same as before the change (`equivalence_build`)
+- **Equivalent mutants are recognized automatically.** A conservative exhaustive check handles supported Boolean functions; the optional `equivalence_build` also recognizes survivors whose optimized object code matches the original.
 - Runs in parallel in several sandboxes. A test that times out is terminated together with its process group (its job object on Windows)
 - `test_memory_limit_mb` limits the memory of each test process (`RLIMIT_AS` on POSIX, a job object on Windows. macOS does not accept `RLIMIT_AS`, so AdaMutant checks the physical memory (phys_footprint) of the test processes every 10 milliseconds). When a mutant that changes, for example, a loop count allocates several GB, the whole machine can run out of memory during a parallel run and the whole run can crash. An allocation beyond the limit fails (`Storage_Error` in Ada) and the mutant is Killed. On macOS the test processes are terminated together as soon as the limit is exceeded, and the mutant is also Killed (the log contains `adamutant: killed, a process exceeded test_memory_limit_mb`). The tests of the unchanged project run under the same limit, so a limit that is too small is reported as an error at that point
 - Reports: a console table, a self-contained HTML file, and JSON in [mutation-testing-report-schema](https://github.com/stryker-mutator/mutation-testing-elements) v2 (the Stryker dashboard can read it)
@@ -30,7 +30,7 @@ AdaMutant is made for projects that use both tests and the GNATprove proof. This
 
    - If the tests cannot observe it, as with a branch that cannot be reached, leave it to the proof. Nothing needs to be excluded.
    - The second group holds mutants that do not change what the program does (equivalent ones) as well as real bugs, because GNATprove only checks the one counterexample that it picked. Once the contract is stronger, an equivalent mutant proves, and a real bug moves to `Confirmed`.
-3. Handle the mutants that neither the tests nor the proof detect (Survived) as before: add a test or make a contract stronger. Equivalent mutants (those whose object code is the same as before the change) are recognized and excluded automatically when `equivalence_build` is set (Ignored). The others stay Survived.
+3. Handle the mutants that neither the tests nor the proof detect (Survived) as before: add a test or make a contract stronger. Mutants proved equivalent are excluded automatically (Ignored); the others stay Survived.
 4. A mutant whose proof runs out of time is not counted as detected. It counts as Survived and is marked `(the proof timed out)` in the list. Treat it as in 2 or 3. Under the list, the console then gives their number and what to try: on a goal that a mutant makes fail, the provers often run up to their time limit, and a steps limit for the provers (`--steps`) usually lets such a proof end within the time limit of the mutant (see [Speeding up the proof of the mutants](#speeding-up-the-proof-of-the-mutants)).
 
 This is part of the output for [examples/spark_counter](examples/spark_counter). The test only calls `Counters.Increment`, so only the proof detects the other mutants.
@@ -346,7 +346,7 @@ A mutant of a contract that the proof detects is not listed among the candidates
 - A mutant of a contract can be equivalent, when it says the same thing in another way. `equivalence_build` does not examine mutants of contracts, so such a mutant stays Survived
 - Without a proof (`prove = "exit 0"`), only the tests built with assertions examine contracts: a weaker postcondition then always survives, and so does a deleted assertion pragma (an assertion that holds never makes a test fail), and the score is lower. Leave them out with `exclude_mutators = ["ConjunctDeletion", "AssertionDeletion"]`
 
-There is no comment that disables a mutant. A mutant that the tests cannot observe is left to the proof (see [Intended workflow](#intended-workflow)), and an equivalent mutant is recognized by `equivalence_build`.
+There is no comment that disables a mutant. A mutant that the tests cannot observe is left to the proof (see [Intended workflow](#intended-workflow)); equivalent mutants are recognized by the checks described below.
 
 ## Statuses and score
 
@@ -489,7 +489,11 @@ There is one difference from building the mutants one at a time. The style check
 
 ### Equivalent mutants
 
-No test can detect a mutant that behaves exactly like the original program (an equivalent mutant). When `equivalence_build` holds a command, AdaMutant builds each survivor with that command and compares the object files with those of the unchanged project. When all of them are the same, the mutant is the same program as the unchanged project, so it becomes Ignored (with the reason `equivalent mutant: ...`) and leaves the score. The mutants found to be equivalent are listed on the console under `Equivalent mutants`.
+No test can detect a mutant that behaves exactly like the original program (an equivalent mutant). AdaMutant always applies a conservative exhaustive check to eligible Boolean functions. It supports functions with 1–8 `in Standard.Boolean` parameters and a `Standard.Boolean` result, expressed as an expression function or a body with no declarations or exception handlers and exactly one return expression. A resolvable, unambiguous separate function declaration in a package specification is required; standalone bodies and functions without that declaration are not supported. The expression must use only formal parameters, standard Boolean literals, parentheses, predefined Boolean `not`, `and`, `or`, `xor`, `and then`, `or else`, and Boolean equality or inequality. `if` expressions are not supported. The check validates the complete syntax and resolution of both versions, then evaluates all 2^N input combinations (at most 256); it marks a mutant Ignored only if both versions return normally and agree for every combination.
+
+This check rejects subtypes and derived types, aliased or non-`in` parameters, defaults, contracts/aspects, pragmas in the containing package spec or body, declarations, handlers, calls, attributes, external state, user-defined operators, unresolved or ambiguous references, unsupported syntax, and functions without an unambiguous previous declaration. It does not infer purity from annotations or short-circuit behavior. Unsupported or invalid cases remain unchanged; they are never treated as equivalent based on a partial search.
+
+Independently, when `equivalence_build` holds a command, AdaMutant builds survivors with that command and compares their object files with those of the unchanged project. When all of them are the same, the mutant becomes Ignored (with the reason `equivalent mutant: ...`) and leaves the score. Equivalent mutants found by either check are listed on the console under `Equivalent mutants`.
 
 ```toml
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -gnata -O2 -g0"

@@ -741,8 +741,7 @@ package body AdaMutant.Reports is
       if (for some M of R.Mutants => M.Equivalent) then
          Ada.Text_IO.New_Line;
          Ada.Text_IO.Put_Line
-           ("Equivalent mutants (same object code as the unmodified"
-            & " project, ignored):");
+           ("Equivalent mutants (ignored):");
          for M of R.Mutants loop
             if M.Equivalent then
                Put_Mutant (M, "");

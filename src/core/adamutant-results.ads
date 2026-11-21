@@ -99,8 +99,7 @@ package AdaMutant.Results is
       Tests_Run     : Natural := 0;
       --  The number of tests that were run with the mutant.
       Equivalent    : Boolean := False;
-      --  Ignored because its object code is that of the unmodified
-      --  project.
+      --  Ignored because it is equivalent to the unmodified project.
       Unchanged     : Boolean := False;
       --  Ignored because its lines are unchanged since the revision of
       --  "--since".
