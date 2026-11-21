@@ -49,6 +49,107 @@ SPARE = {
         "   if Add (2, 3) /= 5 or else Spare.Double (4) /= 8 then\n"
         "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
         "   end if;\n"
+    "end Test_Calculator;\n",
+}
+
+ARITHMETIC_IDENTITIES = {
+    "src/arithmetic_custom.ads":
+        "package Arithmetic_Custom is\n"
+        "   type T is new Integer;\n"
+        "   function \"+\" (Left, Right : T) return T;\n"
+        "end Arithmetic_Custom;\n",
+    "src/arithmetic_custom.adb":
+        "package body Arithmetic_Custom is\n"
+        "   function \"+\" (Left, Right : T) return T is\n"
+        "   begin\n"
+        "      return T'Succ (Left);\n"
+        "   end \"+\";\n"
+        "end Arithmetic_Custom;\n",
+    "src/arithmetic_cases.ads":
+        "with Arithmetic_Custom;\n"
+        "package Arithmetic_Cases is\n"
+        "   use type Arithmetic_Custom.T;\n"
+        "   Zero : constant Integer := 0;\n"
+        "   One : constant Integer := 1;\n"
+        "   type Mod_256 is mod 256;\n"
+        "   Mod_Zero : constant Mod_256 := 0;\n"
+        "   Mod_One : constant Mod_256 := 1;\n"
+        "   function Add_Zero (X : Integer) return Integer is (X + (Zero));\n"
+        "   function Subtract_Zero (X : Integer) return Integer is (X - Zero);\n"
+        "   function Multiply_One (X : Integer) return Integer is (X * One);\n"
+        "   function Divide_One (X : Integer) return Integer is (X / (One));\n"
+        "   function Modular_Add_Zero (X : Mod_256) return Mod_256 is\n"
+        "     (X + Mod_Zero);\n"
+        "   function Modular_Subtract_Zero (X : Mod_256) return Mod_256 is\n"
+        "     (X - 0);\n"
+        "   function Modular_Multiply_One (X : Mod_256) return Mod_256 is\n"
+        "     (X * Mod_One);\n"
+        "   function Modular_Divide_One (X : Mod_256) return Mod_256 is\n"
+        "     (X / 1);\n"
+        "   function Left_Zero (X : Integer) return Integer is (0 + X);\n"
+        "   function Add_One (X : Integer) return Integer is (X + 1);\n"
+        "   function Multiply_Two (X : Integer) return Integer is (X * 2);\n"
+        "   function Divide_Two (X : Integer) return Integer is (X / 2);\n"
+        "   function Custom_Add_Zero\n"
+        "     (X : Arithmetic_Custom.T) return Arithmetic_Custom.T is (X + 0);\n"
+        "end Arithmetic_Cases;\n",
+    "tests/test_calculator.adb":
+        "with Ada.Command_Line;\n"
+        "with Ada.Text_IO;\n"
+        "with Arithmetic_Cases;\n"
+        "with Arithmetic_Custom;\n"
+        "procedure Test_Calculator is\n"
+        "   use type Arithmetic_Cases.Mod_256;\n"
+        "   use type Arithmetic_Custom.T;\n"
+        "   Failures : Natural := 0;\n"
+        "   procedure Check (Condition : Boolean; Name : String) is\n"
+        "   begin\n"
+        "      if not Condition then\n"
+        "         Ada.Text_IO.Put_Line (\"FAIL: \" & Name);\n"
+        "         Failures := Failures + 1;\n"
+        "      end if;\n"
+        "   end Check;\n"
+        "begin\n"
+        "   Check (Arithmetic_Cases.Add_Zero (Integer'First) = Integer'First,\n"
+        "          \"signed add zero at first\");\n"
+        "   Check (Arithmetic_Cases.Add_Zero (Integer'Last) = Integer'Last,\n"
+        "          \"signed add zero at last\");\n"
+        "   Check (Arithmetic_Cases.Subtract_Zero (Integer'First) = Integer'First,\n"
+        "          \"signed subtract zero at first\");\n"
+        "   Check (Arithmetic_Cases.Subtract_Zero (Integer'Last) = Integer'Last,\n"
+        "          \"signed subtract zero at last\");\n"
+        "   Check (Arithmetic_Cases.Multiply_One (Integer'First) = Integer'First,\n"
+        "          \"signed multiply one at first\");\n"
+        "   Check (Arithmetic_Cases.Multiply_One (Integer'Last) = Integer'Last,\n"
+        "          \"signed multiply one at last\");\n"
+        "   Check (Arithmetic_Cases.Divide_One (Integer'First) = Integer'First,\n"
+        "          \"signed divide one at first\");\n"
+        "   Check (Arithmetic_Cases.Divide_One (Integer'Last) = Integer'Last,\n"
+        "          \"signed divide one at last\");\n"
+        "   Check (Arithmetic_Cases.Modular_Add_Zero (0) = 0,\n"
+        "          \"modular add zero\");\n"
+        "   Check (Arithmetic_Cases.Modular_Add_Zero (Arithmetic_Cases.Mod_256'Last)\n"
+        "          = Arithmetic_Cases.Mod_256'Last, \"modular add zero at last\");\n"
+        "   Check (Arithmetic_Cases.Modular_Subtract_Zero\n"
+        "          (Arithmetic_Cases.Mod_256'Last) = Arithmetic_Cases.Mod_256'Last,\n"
+        "          \"modular subtract zero at last\");\n"
+        "   Check (Arithmetic_Cases.Modular_Multiply_One\n"
+        "          (Arithmetic_Cases.Mod_256'Last) = Arithmetic_Cases.Mod_256'Last,\n"
+        "          \"modular multiply one at last\");\n"
+        "   Check (Arithmetic_Cases.Modular_Divide_One\n"
+        "          (Arithmetic_Cases.Mod_256'Last) = Arithmetic_Cases.Mod_256'Last,\n"
+        "          \"modular divide one at last\");\n"
+        "   Check (Arithmetic_Cases.Left_Zero (5) = 5, \"left zero control\");\n"
+        "   Check (Arithmetic_Cases.Add_One (5) = 6, \"add one control\");\n"
+        "   Check (Arithmetic_Cases.Multiply_Two (6) = 12, \"multiply two control\");\n"
+        "   Check (Arithmetic_Cases.Divide_Two (6) = 3, \"divide two control\");\n"
+        "   Check (Arithmetic_Cases.Custom_Add_Zero (Arithmetic_Custom.T (5))\n"
+        "          = Arithmetic_Custom.T (6), \"custom operator control\");\n"
+        "   if Failures > 0 then\n"
+        "      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);\n"
+        "   else\n"
+        "      Ada.Text_IO.Put_Line (\"all arithmetic identity tests passed\");\n"
+        "   end if;\n"
         "end Test_Calculator;\n",
 }
 
@@ -206,6 +307,17 @@ EXAMPLES = {
         # only a few are built on their own.
         "max_single_builds": 10,
         "output": "Lines that no test executes:",
+    },
+    "arithmetic_identities": {
+        "exit": 0, "example": "calculator", "extra": ARITHMETIC_IDENTITIES,
+        "config": 'mutate = ["src/arithmetic_cases.ads"]\n'
+                  'mutators = ["ArithmeticOperator"]\n',
+        "drop_keys": ["equivalence_build", "break"],
+        "config_tail": "break = 30\n",
+        "mutant_count": 5,
+        "comparison_skips": 0,
+        "arithmetic_skips": 8,
+        "output": "8 proven-equivalent arithmetic skips",
     },
     # The report says which checks the proof failed on.
     "spark_counter": {"exit": 0, "killed_by": "proof",
@@ -775,6 +887,19 @@ def run_example(name, spec, update):
             errors.append("schemaVersion is not 2")
         actual = statuses(report)
         mutants = [m for f in report["files"].values() for m in f["mutants"]]
+        if "mutant_count" in spec and len(mutants) != spec["mutant_count"]:
+            errors.append(f"{len(mutants)} mutants, expected {spec['mutant_count']}")
+        for setting, field in (
+                ("comparison_skips", "provenEquivalentComparisonSkips"),
+                ("arithmetic_skips", "provenEquivalentArithmeticSkips")):
+            if setting in spec and report.get(field) != spec[setting]:
+                errors.append(
+                    f"{field}: expected {spec[setting]}, got {report.get(field)}")
+        if "arithmetic_skips" in spec:
+            html = report_path.with_suffix(".html").read_text(encoding="utf-8")
+            if ("Proven-equivalent arithmetic skips:" not in html
+                    or "r.provenEquivalentArithmeticSkips" not in html):
+                errors.append("HTML report lacks the arithmetic skip summary")
         killers = {k for m in mutants for k in m.get("killedBy", [])}
         if "killed_by" in spec and not any(
                 k.split(":")[0] == spec["killed_by"] for k in killers):
@@ -1511,12 +1636,10 @@ def check_library():
         # by one, the first right before the second.
         expected = {"vendor/src/vend.adb:2:25 NumericLiteral 1": "Killed",
                     "vendor/src/vend.adb:3:25 NumericLiteral 1": "Survived",
-                    "vendor/src/vend.adb:4:55 ArithmeticOperator -": "Survived",
                     "vendor/src/vend.adb:7:10 ConditionalExpression True": "Killed",
                     "vendor/src/vend.adb:7:10 ConditionalExpression False": "Killed",
                     "vendor/src/vend.adb:7:12 EqualityOperator >=": "Survived",
-                    "vendor/src/vend.adb:7:12 EqualityOperator /=": "Killed",
-                    "vendor/src/vend.adb:7:16 ArithmeticOperator -": "Survived"}
+                    "vendor/src/vend.adb:7:12 EqualityOperator /=": "Killed"}
         errors = []
         # The objects of a mutant are compiled within a second of the build
         # before.  A library that is then not made again would leave its

@@ -130,6 +130,8 @@ package body AdaMutant.Reports is
            & "},""projectRoot"":" & Json_String (To_String (S.Root))
            & ",""provenEquivalentComparisonSkips"":"
            & Image (R.Proven_Equivalent_Comparison_Skips)
+           & ",""provenEquivalentArithmeticSkips"":"
+           & Image (R.Proven_Equivalent_Arithmetic_Skips)
            & ",""framework"":{""name"":""AdaMutant"",""version"":"
            & Json_String (AdaMutant.Version) & "}");
       if S.Named_Tests then
@@ -320,7 +322,8 @@ package body AdaMutant.Reports is
      & "'</td>'+st.map(x=>'<td>'+ms.filter(m=>m.status==x).length+'</td>')"
      & ".join('')+'</tr>'}"
      & "h='<p>Proven-equivalent comparison skips: '+"
-     & "r.provenEquivalentComparisonSkips+'</p>'+h;"
+     & "r.provenEquivalentComparisonSkips+'</p><p>Proven-equivalent "
+     & "arithmetic skips: '+r.provenEquivalentArithmeticSkips+'</p>'+h;"
      & "h+=row('All files',all,false);"
      & "for(const f in r.files)h+=row(f,r.files[f].mutants,true);h+='</table>';"
      & "for(const f in r.files){const src=r.files[f].source,"

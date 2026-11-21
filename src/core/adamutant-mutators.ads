@@ -60,8 +60,8 @@ package AdaMutant.Mutators is
       Whole_Units      : Boolean := False;
       --  The absolute paths of the Ada sources of the project.  Find
       --  resolves the names of Source over them, as far as Libadalang can,
-      --  to know the types and ranges of the operands of relations, of
-      --  logical operators and of "abs".  Without them, only the
+      --  to know the types and ranges of the operands of relations,
+      --  arithmetic and logical operators and of "abs".  Without them, only the
       --  declarations of Source and of Standard are known.
       Project_Files    : Name_Sets.Set;
    end record;
@@ -89,21 +89,22 @@ package AdaMutant.Mutators is
 
    type Scan_Statistics is tagged record
       Proven_Equivalent_Comparison_Skips : Natural := 0;
+      Proven_Equivalent_Arithmetic_Skips : Natural := 0;
    end record;
-   --  Comparison-operator replacements omitted only after a built-in range
-   --  proof.  Excludes whole-expression constants and deduplication.
+   --  Comparison replacements omitted only after a built-in range proof;
+   --  arithmetic replacements omitted only after a predefined-integer
+   --  identity proof.  Both exclude unrelated exclusions and deduplication.
 
    function Find
      (Source : String; Options : Scan_Options) return Mutation_Vectors.Vector;
    function Find
      (Source : String; Options : Scan_Options; Statistics : out Scan_Statistics)
       return Mutation_Vectors.Vector;
-   --  Like Find above, and reports comparison candidates omitted by proof;
-   --  Statistics is reset on every scan.
-   --  Works on the syntax tree of Libadalang.  Name resolution only gives
-   --  the types of the operands of relations, logical operators and "abs"
-   --  (see Project_Files), and where it fails, the mutants are those of
-   --  names of unknown types.
+   --  Like Find above, and reports comparison and arithmetic candidates
+   --  omitted by proof.  Statistics is reset on every scan.
+   --  Works on the syntax tree of Libadalang.  Name resolution gives the
+   --  types of arithmetic and relational operands, logical operators and
+   --  "abs" (see Project_Files); where it fails, mutants are retained.
    --  Propagates AdaMutant.Lexer.Lexical_Error ("line N: ...") when
    --  Source does not parse.  Not for two tasks at a time: the unit
    --  providers of the last Project_Files are kept for the next call.

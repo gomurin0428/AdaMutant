@@ -225,7 +225,9 @@ procedure AdaMutant_Main is
                    & Image (C (Compile_Error)) & " compile errors, "
                    & Image (C (Ignored)) & " ignored, "
                    & Image (R.Proven_Equivalent_Comparison_Skips)
-                   & " proven-equivalent comparison skips) in"
+                   & " proven-equivalent comparison skips, "
+                   & Image (R.Proven_Equivalent_Arithmetic_Skips)
+                   & " proven-equivalent arithmetic skips) in"
                    & Integer (R.Elapsed)'Image & " s");
          if R.Settings.Json_Report or else R.Settings.Html_Report then
             Put_Line ("Reports: " & Report_Dir);

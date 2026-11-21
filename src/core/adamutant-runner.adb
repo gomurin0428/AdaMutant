@@ -165,6 +165,9 @@ package body AdaMutant.Runner is
                   R.Proven_Equivalent_Comparison_Skips :=
                     R.Proven_Equivalent_Comparison_Skips
                     + Statistics.Proven_Equivalent_Comparison_Skips;
+                  R.Proven_Equivalent_Arithmetic_Skips :=
+                    R.Proven_Equivalent_Arithmetic_Skips
+                    + Statistics.Proven_Equivalent_Arithmetic_Skips;
                exception
                   when E : AdaMutant.Lexer.Lexical_Error =>
                      Fail (Path & ": " & Ada.Exceptions.Exception_Message (E));
