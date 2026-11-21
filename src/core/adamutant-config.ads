@@ -39,6 +39,7 @@ package AdaMutant.Config is
       --  come out the same as those of the unmodified project is an
       --  equivalent mutant.  Not looked for when "".
       Concurrency      : Positive := 1;
+      Build_Batch_Size : Natural := 0;
       Timeout_Factor   : Float := 1.5;
       Timeout_Ms       : Natural := 5_000;
       Build_Timeout_Ms : Natural := 600_000;

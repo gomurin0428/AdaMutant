@@ -6,7 +6,7 @@ A mutation testing tool for Ada and SPARK. It follows the same idea as [Stryker.
 
 - Finds the places to mutate on the syntax tree of [Libadalang](https://github.com/AdaCore/libadalang), for Ada up to Ada 2022. Its name resolution gives the types of the operands of relations, logical operators and `abs`, which decide some of their mutants
 - **The mutants that the tests do not detect go to the GNATprove proof** (for SPARK). The mutants that only the proof detects are listed as candidates for a missing test
-- **All the mutants are built once**, and the tests run while switching which mutant is active (mutant schemata). It is fast because it does not rebuild for every mutant
+- **By default, all the mutants are built once**, and the tests run while switching which mutant is active (mutant schemata). It is fast because it does not rebuild for every mutant
 - **Mutants in code that no test executes skip the tests and go straight to the proof.** AdaMutant records which places the tests of the unchanged project execute
 - **Results per test.** When several test commands are given with names, the report says which tests execute and detect each mutant, and a mutant is only tested with the tests that execute its place (`[tests]`)
 - **The results of an earlier run are reused.** A mutant on lines that have not changed takes its result from an earlier report (`--baseline`)
@@ -127,6 +127,9 @@ build = "gprbuild -p -q -P tests.gpr -cargs -gnata"  # required. A mutant that f
 test = "bin/run_tests"                      # required (or [tests]); Killed when the exit status is not 0
 prove = 'gnatprove -P prove.gpr --level=1 --steps=2000 --checks-as-errors=on --counterexamples=on $ADAMUTANT_PROVE_SWITCHES "--memcached-server=file:$ADAMUTANT_PROVE_CACHE"'  # required; runs only for mutants that pass the tests; Killed (by proof) when not 0
 equivalence_build = "gprbuild -p -q -c -P tests.gpr -cargs -gnata -O2 -g0"  # optional. The build used to recognize equivalent mutants
+# 0 (default) builds all mutants together.
+# A positive value caps contiguous windows in original mutant-ID order.
+build_batch_size = 0
 concurrency = 4                             # default: half the number of CPUs
 timeout_factor = 1.5                        # time limit of the tests = original time * factor + timeout_ms
 timeout_ms = 5000
@@ -390,7 +393,7 @@ lexer = "bin/test_lexer"
 - `killedBy` names the tests that detected the mutant (the tests that failed or did not finish in time). `testsCompleted` is the number of tests that were run with the mutant. `testFiles` lists the tests
 - By default the run of a mutant ends with the first test that detects it. With `bail = false`, every test that executes the place runs. This takes longer, but it shows the tests that detect no mutant at all. A mutant that loops forever waits for the time limit of every test that executes its place
 - The log of each test is `mutant-<number>-test-<name>.log`
-- A mutant that is not in the build that contains all the mutants (one in a declaration, for example) is tested with every test, because the tests that execute it are not known
+- A mutant that cannot be included in a combined schema build (one in a declaration, for example) is tested with every test, because the tests that execute it are not known
 
 Tests are left out for a mutant, so two things are needed. Where they do not hold, set `coverage_analysis = false` (every mutant is then tested with every test).
 
@@ -437,15 +440,20 @@ Mutants killed by the proof, by the check that fails (alone: no other kind of ch
 
 1. Copy the original project to `.adamutant/sandbox/1`, then build it and run the tests and the proof once to measure how long they take. If any of them fails, stop with an error
 2. Copy that state into one sandbox for each worker
-3. Make **sources that contain all the mutants**, build them once, and run only the tests for each mutant (see below). Before that, run the tests with no mutant active and record the places that they execute. The mutants in the places that they do not execute skip the tests and go to the proof (see below)
+3. Make **sources that contain the current schema candidates** and run only the tests for each mutant (see below). By default, one build contains all mutants; a positive `build_batch_size` builds contiguous windows in original mutant-ID order. For each build, run the tests with no mutant active first and record the places that they execute. The mutants in the places that they do not execute skip the tests and go to the proof (see below)
 4. For the mutants that could not be put together, each worker repeats: rewrite one file → `build` → `test` → restore. The time stamps in GNAT's ALI files have a resolution of one second, and on Windows they are rounded up to an even second, so the mtime is moved forward by two seconds or more at every rewrite to make sure that the file is recompiled
-5. The mutants that the tests did not detect go to the proof one at a time (rewrite one file → `prove` → restore). The proof is not run on the sources that contain all the mutants, because it could not tell which mutant caused a failure
+5. The mutants that the tests did not detect go to the proof one at a time (rewrite one file → `prove` → restore). The proof is not run on the combined schema sources, because it could not tell which mutant caused a failure
 6. When `equivalence_build` is set, the survivors are built with that command one at a time, and a survivor whose object files are the same as before the change becomes Ignored as an equivalent mutant (see below)
 7. The logs are written to `.adamutant/logs` and the reports to `report_dir`
 
 Where a sandbox holds libraries after the unchanged project is built and tested (`.a`, `.lib`, `.so`, `.so.<version>`, `.dll`, `.dylib`), every later build in it, in steps 3 and 4, starts two seconds or more after the newest of them was written. gprbuild does not make a library again unless its time stamp is older than that of an object, so a mutant compiled within the same second would not get into the library, and the tests would run the code of the build before. A library that no build writes again causes no wait. AdaMutant only sees the libraries inside the sandbox: a build that writes a library to a directory outside the project is not covered, and such a directory would be shared by all the sandboxes anyway. The wait compares the time stamps of the files with the clock of this machine, so on a network file system the clock of the file server must not be two seconds or more behind.
 
-### Building the mutants once
+### Combined schema builds
+
+By default, `build_batch_size = 0` puts all schema candidates in one build.
+A positive value N builds contiguous windows of at most N mutants in original
+global-ID order. Each build handles only its window; IDs and result order stay
+global.
 
 The sources that contain the mutants look like this, for example (`ADAMUTANT_ACTIVE_1` is a function that returns the value of the environment variable `ADAMUTANT_MUTANT_ID` when the tests run. When it is 0, no mutant is active. The argument is the number of the place: the number of the first mutant there).
 
@@ -471,11 +479,11 @@ The mutants that are put together are those in the following places, whose exten
 The following are not put together, and are built one at a time as before.
 
 - Mutants in declarations (constants, named numbers, the ranges of types and so on), in the ranges of `for`, in the choices of `case`, and in aspects. These may need a static expression, so they cannot be switched at run time
-- StatementDeletion. When the deleted statement was the first assignment to a variable, the variable is uninitialized in the mutant. An optimizing compiler may give an uninitialized variable "the value assigned in the other branch", so in the build that contains all the mutants the mutant would behave like the original program, and a mutant that should have been detected would be missed. The build that contains all the mutants still records whether the statement is executed (see below)
+- StatementDeletion. When the deleted statement was the first assignment to a variable, the variable is uninitialized in the mutant. An optimizing compiler may give an uninitialized variable "the value assigned in the other branch", so in a combined schema build the mutant would behave like the original program, and a mutant that should have been detected would be missed. The build still records whether the statement is executed (see below)
 - Files that contain tasks, protected types, `accept` or `select`; statements that have a name; the object declaration of an extended return
 - Expression functions with the aspect `Static`, whose expression must stay potentially static, which a `case` expression on the active mutant is not
 
-When the build that contains all the mutants has a compile error, AdaMutant finds which mutant the line of the error belongs to, marks that mutant as CompileError, and builds again with the rest. A warning (`warning:`, `(style)`) does not stop a build, so a mutant with a warning on its line stays in the build. Only when no line of a mutant has an error are the lines of warnings taken instead, for a project that treats warnings as errors (`-gnatwe`). A note (`info:`, `note:`, a line of context of the compiler's back end) is never taken. When the build fails at a place that is not a line of any mutant, AdaMutant exits with an error.
+When a combined schema build has a compile error, AdaMutant finds which mutant the line of the error belongs to, marks that mutant as CompileError, and builds again with the rest of the current window. A warning (`warning:`, `(style)`) does not stop a build, so a mutant with a warning on its line stays in the build. Only when no line of a mutant has an error are the lines of warnings taken instead, for a project that treats warnings as errors (`-gnatwe`). A note (`info:`, `note:`, a line of context of the compiler's back end) is never taken. When the build fails at a place that is not a line of any mutant, AdaMutant exits with an error.
 
 What it needs:
 
@@ -488,9 +496,9 @@ What it needs:
 
 The tests cannot detect a mutant in a place that no test executes. AdaMutant skips the tests of such a mutant and sends it to the proof at once. If the proof passes too, it is Survived, with the `statusReason` `no test executes this code, and the proof passed`. The tests that are not run save time.
 
-It works as follows. In the build that contains all the mutants, the function that switches the mutants records the number of the place that it is called from. It records only while no mutant is active (`ADAMUTANT_MUTANT_ID` is 0 or not set). Before it runs the mutants, AdaMutant runs the tests once with no mutant active. Each process of the test program then writes the numbers of the places that it executes to `.adamutant/logs/coverage/<process id>.txt`. The directory is built into the generated unit. The merged result stays in `.adamutant/logs/coverage.txt` (with `[tests]`, in `coverage-<name>.txt` for each test).
+It works as follows. In each combined schema build, the function that switches the mutants records the number of the place that it is called from. It records only while no mutant is active (`ADAMUTANT_MUTANT_ID` is 0 or not set). Before it tests each batch, AdaMutant runs the tests once with no mutant active. Each process of the test program then writes the numbers of the places that it executes to `.adamutant/logs/coverage/<process id>.txt`. The directory is built into the generated unit. The merged result stays in `.adamutant/logs/coverage.txt` (with `[tests]`, in `coverage-<name>.txt` for each test). With batching, the log names have `-batch-<number>` before `.txt`.
 
-- This covers the mutants that are in the build that contains all the mutants, and StatementDeletion. A StatementDeletion mutant is not in that build, but the build records whether the statement is executed. The StatementDeletion of a statement that is not executed is built, skips the tests and goes to the proof
+- This covers the mutants included in a combined schema build, and StatementDeletion. A StatementDeletion mutant is not in that build, but the build records whether the statement is executed. The StatementDeletion of a statement that is not executed is built, skips the tests and goes to the proof
 - Mutants that cannot be put together, such as those in declarations, are not covered by this, and their tests run as before
 - When the test programs record nothing, AdaMutant prints a warning and runs every mutant (they cannot write to the directory, for example). A test program writes a first line when it starts, so executing no place is told apart from not being able to record
 - The run that records has to execute everything that the runs of the mutants execute. In the following cases the tests of a mutant that they would detect are skipped, so set `coverage_analysis = false`
@@ -498,7 +506,7 @@ It works as follows. In the build that contains all the mutants, the function th
   - A test command that chooses the tests to run by `ADAMUTANT_MUTANT_ID` or `ADAMUTANT_MUTANT_FILE` (they are 0 and empty in the run that records)
 - The console lists the lines that no test executes under `Lines that no test executes:`. The JSON report has `coveredBy` for each mutant (`["tests"]` when the place is executed, `[]` when it is not, absent when it was not examined; with `[tests]`, the names of the tests that execute the place)
 
-There is one difference from building the mutants one at a time. The style checks are turned off in the sources that contain all the mutants, and the warnings that come from looking at the whole file (a variable is no longer used because a statement was deleted, for example) do not appear. So, in a project that treats warnings as errors (`-gnatwe`, `-gnaty`), a mutant that did not compile only because of a warning is now run instead of becoming CompileError.
+There is one difference from building the mutants one at a time. The style checks are turned off in the combined schema sources, and the warnings that come from looking at the whole file (a variable is no longer used because a statement was deleted, for example) do not appear. So, in a project that treats warnings as errors (`-gnatwe`, `-gnaty`), a mutant that did not compile only because of a warning is now run instead of becoming CompileError.
 
 ### Equivalent mutants
 

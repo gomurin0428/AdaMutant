@@ -236,6 +236,7 @@ package body AdaMutant.Config is
             if Key in "mutate" | "exclude" | "build" | "test" | "prove"
                  | "equivalence_build" | "concurrency" | "timeout_factor"
                  | "timeout_ms" | "build_timeout_ms" | "prove_timeout_ms"
+                 | "build_batch_size"
                  | "test_memory_limit_mb"
                  | "bail" | "coverage_analysis" | "mutators"
                  | "exclude_mutators" | "include_mutators" | "mutate_contracts"
@@ -291,6 +292,8 @@ package body AdaMutant.Config is
             C.Timeout_Ms := Integer_Value;
          elsif Full = "build_timeout_ms" then
             C.Build_Timeout_Ms := Integer_Value;
+         elsif Full = "build_batch_size" then
+            C.Build_Batch_Size := Integer_Value;
          elsif Full = "prove_timeout_ms" then
             C.Prove_Timeout_Ms := Integer_Value;
          elsif Full = "test_memory_limit_mb" then
@@ -519,6 +522,9 @@ package body AdaMutant.Config is
       & " -cargs -gnata -O2 -g0""" & LF
       & LF
       & "# concurrency = 4" & LF
+      & "# 0 builds all mutants together; a positive value caps ID-ordered" & LF
+      & "# contiguous windows." & LF
+      & "# build_batch_size = 200" & LF
       & "timeout_factor = 1.5" & LF
       & "timeout_ms = 5000" & LF
       & "# The time limit, in ms, of the proof of a mutant.  By default it" & LF
